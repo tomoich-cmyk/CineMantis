@@ -4,6 +4,7 @@ import type { NavSection, SortField, SortOrder, WorkType } from "@cinemantis/sha
 interface LibraryFilters {
   workType: WorkType | null;
   watchStatus: string | null;
+  matchStatus: string | null;
   tagIds: number[];
   sourceId: number | null;
   query: string;
@@ -37,6 +38,7 @@ interface LibraryStore {
 const defaultFilters: LibraryFilters = {
   workType: null,
   watchStatus: null,
+  matchStatus: null,
   tagIds: [],
   sourceId: null,
   query: "",

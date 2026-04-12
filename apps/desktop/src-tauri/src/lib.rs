@@ -51,6 +51,7 @@ pub fn run() {
             commands::tmdb::apply_tmdb_match,
             commands::tmdb::refresh_tmdb_metadata,
             commands::tmdb::clear_tmdb_match,
+            commands::tmdb::unlock_tmdb_match,
             // Settings
             commands::settings::get_setting,
             commands::settings::set_setting,

@@ -1,13 +1,16 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { clsx } from "clsx";
-import { useTmdbCandidates, useApplyTmdbMatch } from "@/hooks/useTmdb";
+import { useTmdbCandidates, useApplyTmdbMatch, type CandidateSearchParams } from "@/hooks/useTmdb";
 import { tmdbPosterUrl, type TmdbCandidate } from "@/api/tmdb";
 
 interface Props {
   workId: number;
   workTitle: string;
+  isLocked?: boolean;
   onClose: () => void;
 }
+
+// ─── 候補カード ───────────────────────────────────────────────────────────────
 
 function CandidateCard({
   c,
@@ -31,13 +34,13 @@ function CandidateCard({
       )}
     >
       {/* Poster */}
-      <div className="w-12 h-18 flex-shrink-0 rounded overflow-hidden bg-surface-hover flex items-center justify-center">
+      <div className="w-12 flex-shrink-0 rounded overflow-hidden bg-surface-hover flex items-center justify-center" style={{ minHeight: 72 }}>
         {posterUrl ? (
           <img
             src={posterUrl}
             alt={c.title}
-            className="w-full h-full object-cover"
-            style={{ minHeight: "72px" }}
+            className="w-full object-cover"
+            style={{ minHeight: 72 }}
           />
         ) : (
           <span className="text-xl opacity-20">🎬</span>
@@ -47,12 +50,12 @@ function CandidateCard({
       {/* Info */}
       <div className="flex-1 min-w-0 flex flex-col gap-1">
         <div className="flex items-start justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium text-gray-100 leading-tight">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-100 leading-tight truncate">
               {c.title}
             </p>
             {c.original_title && c.original_title !== c.title && (
-              <p className="text-xs text-gray-500 italic">{c.original_title}</p>
+              <p className="text-xs text-gray-500 italic truncate">{c.original_title}</p>
             )}
           </div>
           {/* Confidence badge */}
@@ -74,12 +77,23 @@ function CandidateCard({
           <span
             className={clsx(
               "px-1 rounded",
-              c.media_type === "movie" ? "bg-blue-900/40 text-blue-400" : "bg-purple-900/40 text-purple-400"
+              c.media_type === "movie"
+                ? "bg-blue-900/40 text-blue-400"
+                : "bg-purple-900/40 text-purple-400"
             )}
           >
             {c.media_type === "movie" ? "映画" : "TV"}
           </span>
           {c.year && <span>{c.year}</span>}
+          <a
+            href={`https://www.themoviedb.org/${c.media_type}/${c.tmdb_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-gray-600 hover:text-blue-400 transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            #{c.tmdb_id}
+          </a>
         </div>
 
         {c.overview && (
@@ -104,35 +118,80 @@ function CandidateCard({
   );
 }
 
-export function CandidateDialog({ workId, workTitle, onClose }: Props) {
-  const { data: candidates = [], isLoading, isError } = useTmdbCandidates(workId);
+// ─── メインダイアログ ──────────────────────────────────────────────────────────
+
+export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }: Props) {
+  // 検索パラメータ（入力中の値）
+  const [draftQuery, setDraftQuery] = useState(workTitle);
+  const [draftMediaType, setDraftMediaType] = useState<"" | "movie" | "tv">("");
+
+  // 確定済みの検索パラメータ（検索ボタン押下で更新）
+  const [searchParams, setSearchParams] = useState<CandidateSearchParams>({
+    queryOverride: null,
+    mediaTypeHint: null,
+  });
+
+  // 候補選択
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedMediaType, setSelectedMediaType] = useState<string>("");
+  const [lock, setLock] = useState(isLocked);
+
+  // 直接 TMDb ID 指定
+  const [showDirectId, setShowDirectId] = useState(false);
+  const [directIdInput, setDirectIdInput] = useState("");
+  const [directMediaType, setDirectMediaType] = useState<"movie" | "tv">("movie");
+
+  const { data: candidates = [], isLoading, isError, isFetching } =
+    useTmdbCandidates(workId, searchParams);
   const { mutate: applyMatch, isPending: applying } = useApplyTmdbMatch();
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [lock, setLock] = useState(false);
+  const selected = candidates.find(
+    (c) => c.tmdb_id === selectedId && c.media_type === selectedMediaType
+  ) ?? null;
 
-  const selected = candidates.find((c) => c.tmdb_id === selectedId) ?? null;
+  function handleSearch() {
+    setSelectedId(null);
+    setSearchParams({
+      queryOverride: draftQuery.trim() || null,
+      mediaTypeHint: draftMediaType || null,
+    });
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") handleSearch();
+  }
 
   function handleApply() {
     if (!selected) return;
     applyMatch(
-      {
-        workId,
-        tmdbId: selected.tmdb_id,
-        mediaType: selected.media_type,
-        lock,
-      },
+      { workId, tmdbId: selected.tmdb_id, mediaType: selected.media_type, lock },
       { onSuccess: onClose }
     );
   }
 
+  function handleApplyDirectId() {
+    const id = parseInt(directIdInput, 10);
+    if (isNaN(id) || id <= 0) return;
+    applyMatch(
+      { workId, tmdbId: id, mediaType: directMediaType, lock },
+      { onSuccess: onClose }
+    );
+  }
+
+  const mediaTypeTabs: { value: "" | "movie" | "tv"; label: string }[] = [
+    { value: "", label: "全て" },
+    { value: "movie", label: "映画" },
+    { value: "tv", label: "TV" },
+  ];
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-surface-elevated border border-subtle rounded-lg w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl">
-        {/* Header */}
+      <div className="bg-surface-elevated border border-subtle rounded-lg w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl">
+
+        {/* ── Header ── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-subtle flex-shrink-0">
           <div>
-            <h2 className="text-sm font-semibold text-gray-100">TMDb 候補</h2>
+            <h2 className="text-sm font-semibold text-gray-100">TMDb 候補を選択</h2>
             <p className="text-xs text-gray-500 mt-0.5 truncate max-w-[320px]">
               {workTitle}
             </p>
@@ -145,7 +204,53 @@ export function CandidateDialog({ workId, workTitle, onClose }: Props) {
           </button>
         </div>
 
-        {/* Content */}
+        {/* ── locked バナー ── */}
+        {isLocked && (
+          <div className="mx-4 mt-3 px-3 py-2 bg-yellow-900/30 border border-yellow-700/50 rounded text-xs text-yellow-400 flex-shrink-0">
+            🔒 固定済みです。候補を適用すると固定が解除され「手動照合」になります。
+          </div>
+        )}
+
+        {/* ── Search bar ── */}
+        <div className="px-4 pt-3 pb-2 border-b border-subtle flex-shrink-0 flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={draftQuery}
+              onChange={(e) => setDraftQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="検索語…"
+              className="flex-1 bg-surface border border-subtle rounded px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-mantis-600 transition-colors"
+            />
+            <button
+              onClick={handleSearch}
+              disabled={isFetching}
+              className="px-3 py-1.5 text-xs bg-mantis-700 hover:bg-mantis-600 text-white rounded transition-colors disabled:opacity-50"
+            >
+              {isFetching ? "…" : "検索"}
+            </button>
+          </div>
+
+          {/* Media type tabs */}
+          <div className="flex gap-1">
+            {mediaTypeTabs.map((tab) => (
+              <button
+                key={tab.value}
+                onClick={() => setDraftMediaType(tab.value)}
+                className={clsx(
+                  "px-3 py-1 text-xs rounded transition-colors",
+                  draftMediaType === tab.value
+                    ? "bg-mantis-700/60 text-mantis-300 border border-mantis-600"
+                    : "text-gray-500 hover:text-gray-300 border border-transparent"
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Candidate list ── */}
         <div className="flex-1 overflow-y-auto p-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-12 text-gray-600 text-sm animate-pulse">
@@ -158,6 +263,7 @@ export function CandidateDialog({ workId, workTitle, onClose }: Props) {
           ) : candidates.length === 0 ? (
             <div className="text-gray-600 text-sm py-6 text-center">
               候補が見つかりませんでした
+              <p className="text-xs mt-1 text-gray-700">検索語を変更して再検索してください</p>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -165,17 +271,62 @@ export function CandidateDialog({ workId, workTitle, onClose }: Props) {
                 <CandidateCard
                   key={`${c.tmdb_id}-${c.media_type}`}
                   c={c}
-                  selected={selectedId === c.tmdb_id}
-                  onClick={() =>
-                    setSelectedId(selectedId === c.tmdb_id ? null : c.tmdb_id)
-                  }
+                  selected={selectedId === c.tmdb_id && selectedMediaType === c.media_type}
+                  onClick={() => {
+                    if (selectedId === c.tmdb_id && selectedMediaType === c.media_type) {
+                      setSelectedId(null);
+                      setSelectedMediaType("");
+                    } else {
+                      setSelectedId(c.tmdb_id);
+                      setSelectedMediaType(c.media_type);
+                    }
+                  }}
                 />
               ))}
             </div>
           )}
         </div>
 
-        {/* Footer */}
+        {/* ── 直接 ID 入力 ── */}
+        <div className="flex-shrink-0 border-t border-subtle">
+          <button
+            onClick={() => setShowDirectId((v) => !v)}
+            className="w-full px-5 py-2 text-xs text-gray-600 hover:text-gray-400 text-left transition-colors flex items-center gap-1"
+          >
+            <span>{showDirectId ? "▾" : "▸"}</span>
+            TMDb ID で直接指定
+          </button>
+
+          {showDirectId && (
+            <div className="px-5 pb-3 flex items-center gap-2">
+              <input
+                type="number"
+                value={directIdInput}
+                onChange={(e) => setDirectIdInput(e.target.value)}
+                placeholder="TMDb ID"
+                min={1}
+                className="w-28 bg-surface border border-subtle rounded px-2 py-1 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-mantis-600"
+              />
+              <select
+                value={directMediaType}
+                onChange={(e) => setDirectMediaType(e.target.value as "movie" | "tv")}
+                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+              >
+                <option value="movie">映画</option>
+                <option value="tv">TV</option>
+              </select>
+              <button
+                onClick={handleApplyDirectId}
+                disabled={!directIdInput || applying}
+                className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-40"
+              >
+                適用
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── Footer ── */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-subtle flex-shrink-0">
           <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
             <input

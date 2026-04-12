@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats } from "@/hooks/useWorks";
-import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata } from "@/hooks/useTmdb";
+import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
 import { StarRating } from "@/components/common/StarRating";
 import { TagBadge } from "@/components/common/TagBadge";
 import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
@@ -65,6 +65,7 @@ export function DetailPane() {
   const { mutate: autoMatch, isPending: autoMatching } = useAutoMatchWork();
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
+  const { mutate: unlockMatch, isPending: unlocking } = useUnlockTmdbMatch();
   const [showCandidates, setShowCandidates] = useState(false);
 
   if (!selectedWorkId) return null;
@@ -245,27 +246,26 @@ export function DetailPane() {
 
           {/* アクションボタン */}
           <div className="flex flex-col gap-1.5">
-            {/* 候補を探す */}
+            {/* 候補を探す（locked でも使用可） */}
             <button
               onClick={() => setShowCandidates(true)}
-              disabled={isLocked}
-              className="w-full py-1.5 text-xs border border-subtle rounded text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-full py-1.5 text-xs border border-subtle rounded text-gray-400 hover:text-gray-200 hover:border-gray-500 transition-colors"
             >
               候補を探す
             </button>
 
-            {/* 自動照合 */}
-            {!isMatched && (
+            {/* 自動照合（未照合時のみ・locked 時は非表示） */}
+            {!isMatched && !isLocked && (
               <button
                 onClick={() => autoMatch(work.id)}
-                disabled={autoMatching || isLocked}
+                disabled={autoMatching}
                 className="w-full py-1.5 text-xs border border-mantis-800 rounded text-mantis-400 hover:bg-mantis-900/30 transition-colors disabled:opacity-30"
               >
                 {autoMatching ? "照合中…" : "自動照合"}
               </button>
             )}
 
-            {/* 再取得 */}
+            {/* 再取得（照合済・locked 以外） */}
             {isMatched && !isLocked && (
               <button
                 onClick={() => refreshMeta(work.id)}
@@ -276,7 +276,18 @@ export function DetailPane() {
               </button>
             )}
 
-            {/* 照合解除 */}
+            {/* 固定解除（locked のみ） */}
+            {isLocked && (
+              <button
+                onClick={() => unlockMatch(work.id)}
+                disabled={unlocking}
+                className="w-full py-1.5 text-xs border border-yellow-800/60 rounded text-yellow-600 hover:text-yellow-400 hover:border-yellow-600 transition-colors disabled:opacity-30"
+              >
+                {unlocking ? "解除中…" : "🔓 固定を解除"}
+              </button>
+            )}
+
+            {/* 照合解除（照合済・locked 以外） */}
             {isMatched && !isLocked && (
               <button
                 onClick={() => clearMatch(work.id)}
@@ -294,6 +305,7 @@ export function DetailPane() {
         <CandidateDialog
           workId={work.id}
           workTitle={work.title}
+          isLocked={isLocked}
           onClose={() => setShowCandidates(false)}
         />
       )}

@@ -32,6 +32,7 @@ export function useWorkList() {
   const params = {
     workType: workType ?? filters.workType,
     watchStatus,
+    matchStatus: filters.matchStatus,
     query: filters.query || null,
     sortField,
     sortOrder,

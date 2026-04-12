@@ -55,6 +55,7 @@ pub fn list_works(
     work_type: Option<String>,
     watch_status: Option<String>,
     query: Option<String>,
+    match_status: Option<String>,
     sort_field: Option<String>,
     sort_order: Option<String>,
 ) -> Result<Vec<WorkSummaryRow>, String> {
@@ -89,13 +90,18 @@ pub fn list_works(
            AND (?2 IS NULL OR us.watch_status = ?2)
            AND (?3 IS NULL OR w.title LIKE '%' || ?3 || '%'
                            OR w.original_title LIKE '%' || ?3 || '%')
+           AND (
+               ?4 IS NULL
+               OR w.match_status = ?4
+               OR (?4 = 'unmatched' AND w.match_status IS NULL)
+           )
          ORDER BY {order_col} {order_dir} NULLS LAST"
     );
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
-            rusqlite::params![work_type, watch_status, query],
+            rusqlite::params![work_type, watch_status, query, match_status],
             |row| {
                 Ok(WorkSummaryRow {
                     id: row.get(0)?,

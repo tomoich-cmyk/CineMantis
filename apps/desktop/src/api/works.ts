@@ -68,6 +68,7 @@ function toSummary(r: WorkSummaryRow): WorkSummary {
 export interface ListWorksParams {
   workType?: string | null;
   watchStatus?: string | null;
+  matchStatus?: string | null;
   query?: string | null;
   sortField?: SortField;
   sortOrder?: SortOrder;
@@ -77,6 +78,7 @@ export async function listWorks(params: ListWorksParams): Promise<WorkSummary[]>
   const rows = await invoke<WorkSummaryRow[]>("list_works", {
     work_type: params.workType ?? null,
     watch_status: params.watchStatus ?? null,
+    match_status: params.matchStatus ?? null,
     query: params.query || null,
     sort_field: params.sortField ?? "title",
     sort_order: params.sortOrder ?? "asc",

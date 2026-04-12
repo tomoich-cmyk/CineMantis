@@ -7,6 +7,7 @@ import {
   applyTmdbMatch,
   refreshTmdbMetadata,
   clearTmdbMatch,
+  unlockTmdbMatch,
   type MetadataUpdatedEvent,
 } from "@/api/tmdb";
 import { workKeys } from "./useWorks";
@@ -19,10 +20,19 @@ export const tmdbKeys = {
 
 // ─── Candidates ──────────────────────────────────────────────────────────────
 
-export function useTmdbCandidates(workId: number | null) {
+export interface CandidateSearchParams {
+  queryOverride?: string | null;
+  mediaTypeHint?: "movie" | "tv" | null;
+}
+
+export function useTmdbCandidates(
+  workId: number | null,
+  params?: CandidateSearchParams,
+) {
   return useQuery({
-    queryKey: tmdbKeys.candidates(workId ?? -1),
-    queryFn: () => searchTmdbCandidates(workId!),
+    queryKey: [...tmdbKeys.candidates(workId ?? -1), params?.queryOverride ?? "", params?.mediaTypeHint ?? ""],
+    queryFn: () =>
+      searchTmdbCandidates(workId!, params?.queryOverride, params?.mediaTypeHint),
     enabled: workId !== null,
     staleTime: 1000 * 60 * 10, // 10 分キャッシュ
   });
@@ -78,6 +88,17 @@ export function useClearTmdbMatch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: clearTmdbMatch,
+    onSuccess: (_data, workId) => {
+      qc.invalidateQueries({ queryKey: workKeys.detail(workId) });
+      qc.invalidateQueries({ queryKey: workKeys.all });
+    },
+  });
+}
+
+export function useUnlockTmdbMatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: unlockTmdbMatch,
     onSuccess: (_data, workId) => {
       qc.invalidateQueries({ queryKey: workKeys.detail(workId) });
       qc.invalidateQueries({ queryKey: workKeys.all });

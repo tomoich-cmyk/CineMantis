@@ -44,9 +44,15 @@ export function tmdbPosterUrl(path: string): string {
 }
 
 export async function searchTmdbCandidates(
-  workId: number
+  workId: number,
+  queryOverride?: string | null,
+  mediaTypeHint?: string | null,
 ): Promise<TmdbCandidate[]> {
-  return invoke<TmdbCandidate[]>("search_tmdb_candidates", { work_id: workId });
+  return invoke<TmdbCandidate[]>("search_tmdb_candidates", {
+    work_id: workId,
+    query_override: queryOverride ?? null,
+    media_type_hint: mediaTypeHint ?? null,
+  });
 }
 
 export async function autoMatchWork(workId: number): Promise<AutoMatchResult> {
@@ -83,4 +89,8 @@ export async function refreshTmdbMetadata(
 
 export async function clearTmdbMatch(workId: number): Promise<void> {
   return invoke("clear_tmdb_match", { work_id: workId });
+}
+
+export async function unlockTmdbMatch(workId: number): Promise<void> {
+  return invoke("unlock_tmdb_match", { work_id: workId });
 }

@@ -209,19 +209,53 @@ async fn apply_match_internal(
 // ─── Tauri コマンド ──────────────────────────────────────────────────────────
 
 /// 1作品の TMDb 候補一覧を返す
+/// `query_override`: 検索語を明示指定（省略時はタイトルから推定）
+/// `media_type_hint`: "movie" / "tv" / null（省略時は media_kind から推定）
 #[tauri::command]
 pub async fn search_tmdb_candidates(
     app: AppHandle,
     state: State<'_, DbState>,
     work_id: i64,
+    query_override: Option<String>,
+    media_type_hint: Option<String>,
 ) -> Result<Vec<TmdbCandidate>, String> {
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
 
-    let work = get_work_for_match(&state, work_id)?
+    let mut work = get_work_for_match(&state, work_id)?
         .ok_or_else(|| format!("work {work_id} not found"))?;
 
+    // ユーザーによるオーバーライドを反映
+    if let Some(q) = query_override {
+        if !q.trim().is_empty() {
+            work.title_guess = Some(q.trim().to_string());
+        }
+    }
+    if let Some(mt) = media_type_hint {
+        if mt == "movie" || mt == "tv" {
+            work.media_kind = mt;
+        }
+    }
+
     Ok(fetch_candidates(&client, &work).await)
+}
+
+/// locked → manual に変更（固定解除）
+/// メタデータはそのまま保持し、locked フラグだけ外す
+#[tauri::command]
+pub fn unlock_tmdb_match(
+    state: State<'_, DbState>,
+    work_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE works SET match_status = 'manual',
+            metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = ?1 AND match_status = 'locked'",
+        rusqlite::params![work_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// 1作品を自動照合して高信頼なら反映
