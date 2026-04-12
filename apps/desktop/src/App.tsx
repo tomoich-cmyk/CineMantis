@@ -6,11 +6,15 @@ import { WorkList } from "@/components/works/WorkList";
 import { DetailPane } from "@/components/detail/DetailPane";
 import { SourcesScreen } from "@/components/sources/SourcesScreen";
 import { ScanProgressBar } from "@/components/common/ScanProgressBar";
+import { useThumbnailEvents } from "@/hooks/useThumbnails";
 
 const SOURCES_SECTION = "sources";
 
 export default function App() {
   const { activeSection, selectedWorkId } = useLibraryStore();
+
+  // グローバルイベントリスナー（サムネ生成完了 → キャッシュ更新）
+  useThumbnailEvents();
   const isSourcesView = activeSection === SOURCES_SECTION;
   const detailOpen = !isSourcesView && selectedWorkId !== null;
 

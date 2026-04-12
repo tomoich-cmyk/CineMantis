@@ -3,7 +3,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
-use tauri::{Emitter, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 // Video file extensions to scan
 const VIDEO_EXTENSIONS: &[&str] = &[
@@ -98,10 +98,12 @@ fn walk_recursive(dir: &Path, results: &mut Vec<std::path::PathBuf>) {
 
 #[tauri::command]
 pub async fn scan_source(
-    window: Window,
+    app: AppHandle,
     state: State<'_, DbState>,
     source_id: i64,
 ) -> Result<ScanResult, String> {
+    let window = app.get_webview_window("main")
+        .ok_or("main window not found")?;
     // 1. Get source root path
     let root_path = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -356,13 +358,30 @@ pub async fn scan_source(
         },
     );
 
-    Ok(ScanResult {
+    let result = ScanResult {
         source_id,
         scanned: total,
         new_files,
         updated_files,
         missing_files,
-    })
+    };
+
+    // 6. 新規ファイルがあった場合、サムネイルバッチ生成をバックグラウンドで起動
+    if new_files > 0 {
+        let app_clone = app.clone();
+        // DbState は Arc<Mutex> なので Clone 可能
+        let db_clone: crate::db::DbState = state.inner().clone();
+        tauri::async_runtime::spawn(async move {
+            super::thumbnail::generate_thumbnails_batch_inner(
+                &app_clone,
+                &db_clone,
+                Some(source_id),
+            )
+            .await;
+        });
+    }
+
+    Ok(result)
 }
 
 /// Simple title estimation from filename:

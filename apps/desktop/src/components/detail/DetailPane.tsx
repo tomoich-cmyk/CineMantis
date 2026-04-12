@@ -1,7 +1,32 @@
+import { useState } from "react";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats } from "@/hooks/useWorks";
 import { StarRating } from "@/components/common/StarRating";
 import { TagBadge } from "@/components/common/TagBadge";
+
+function toAssetUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return `asset://localhost/${normalized.replace(/^\//, "")}`;
+}
+
+function WorkImage({ src, alt }: { src: string | null; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-surface">
+        <span className="text-5xl opacity-20">🎬</span>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={toAssetUrl(src)}
+      alt={alt}
+      className="w-full h-full object-cover rounded"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 function formatRuntime(sec: number | null) {
   if (!sec) return null;
@@ -48,17 +73,13 @@ export function DetailPane() {
         </button>
       </div>
 
-      {/* Poster */}
-      <div className="mx-4 mt-4 aspect-[2/3] bg-surface rounded flex items-center justify-center flex-shrink-0">
-        {work.poster_path ? (
-          <img
-            src={work.poster_path}
-            alt={work.title}
-            className="w-full h-full object-cover rounded"
-          />
-        ) : (
-          <span className="text-5xl opacity-20">🎬</span>
-        )}
+      {/* Poster / Thumbnail */}
+      <div className="mx-4 mt-4 aspect-[2/3] bg-surface rounded overflow-hidden flex-shrink-0">
+        {/* ポスター優先、なければサムネイル、なければプレースホルダー */}
+        <WorkImage
+          src={work.poster_path ?? work.thumb_path}
+          alt={work.title}
+        />
       </div>
 
       {/* Title / year / runtime */}

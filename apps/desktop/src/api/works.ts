@@ -26,6 +26,7 @@ interface WorkDetailRow {
   runtime_sec: number | null;
   genres_json: string | null;
   poster_path: string | null;
+  thumb_path: string | null;
   external_rating: number | null;
   external_rating_source: string | null;
   tmdb_id: number | null;

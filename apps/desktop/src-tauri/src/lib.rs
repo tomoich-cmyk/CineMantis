@@ -1,3 +1,4 @@
+mod cache;
 mod db;
 mod commands;
 
@@ -37,6 +38,10 @@ pub fn run() {
             commands::tag::list_work_tags,
             // Scan
             commands::scan::scan_source,
+            // Thumbnails
+            commands::thumbnail::generate_thumbnail,
+            commands::thumbnail::generate_thumbnails_batch,
+            commands::thumbnail::set_custom_thumb,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineMantis");
