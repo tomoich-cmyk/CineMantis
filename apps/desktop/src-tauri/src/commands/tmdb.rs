@@ -102,10 +102,24 @@ async fn apply_match_internal(
     media_type: &str,
     new_match_status: &str,  // "auto" | "manual" | "locked"
 ) -> Result<AutoMatchResult, String> {
+    // シリーズ解析用に照合前のオリジナルタイトルを先取り
+    let orig_work_title: String = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT COALESCE(title_guess, title) FROM works WHERE id = ?1",
+            rusqlite::params![work_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_default()
+    };
+
     // 詳細取得
+    let mut movie_collection: Option<crate::models::tmdb::TmdbCollection> = None;
+
     let (title, overview, release_date, genres_json, country_json, poster_remote, runtime_sec, imdb_id) =
         if media_type == "movie" {
             let d = client.get_movie_detail(tmdb_id).await?;
+            movie_collection = d.belongs_to_collection.clone();
             let genres = genres_to_json(d.genres.as_deref());
             let countries = countries_to_json(d.production_countries.as_deref());
             (
@@ -181,6 +195,31 @@ async fn apply_match_internal(
             ],
         )
         .map_err(|e| e.to_string())?;
+    }
+
+    // ── シリーズ自動リンク ────────────────────────────────────────────────────
+    if let Some(ref coll) = movie_collection {
+        // 映画コレクション（例: MCU、007 など）
+        let sort_order = year.unwrap_or(0);
+        let _ = crate::commands::series::ensure_movie_collection(
+            db,
+            coll.id,
+            &coll.name,
+            work_id,
+            sort_order,
+        );
+    } else if media_type == "tv" {
+        // TVシリーズ: オリジナルタイトルから season/episode を解析
+        let parsed = parse_title(&orig_work_title);
+        let _ = crate::commands::series::ensure_tv_series(
+            db,
+            tmdb_id,
+            &title,
+            overview.as_deref(),
+            work_id,
+            parsed.season_no,
+            parsed.episode_no,
+        );
     }
 
     // イベント emit

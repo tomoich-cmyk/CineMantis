@@ -52,6 +52,14 @@ pub fn run() {
             commands::tmdb::refresh_tmdb_metadata,
             commands::tmdb::clear_tmdb_match,
             commands::tmdb::unlock_tmdb_match,
+            // Series
+            commands::series::list_series,
+            commands::series::get_series,
+            commands::series::get_series_works,
+            commands::series::create_series,
+            commands::series::add_to_series,
+            commands::series::remove_from_series,
+            commands::series::delete_series,
             // Settings
             commands::settings::get_setting,
             commands::settings::set_setting,

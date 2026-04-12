@@ -18,18 +18,20 @@ impl DbState {
 
 const MIGRATION_001: &str = include_str!("../../../../packages/db/migrations/001_initial.sql");
 const MIGRATION_002: &str = include_str!("../../../../packages/db/migrations/002_tmdb_fields.sql");
+const MIGRATION_003: &str = include_str!("../../../../packages/db/migrations/003_series.sql");
 
 /// マイグレーション適用（起動時に一度だけ呼ぶ）
 pub fn init(path: &Path) -> Result<()> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
     conn.execute_batch(MIGRATION_001)?;
-    // 002: ALTER TABLE は "already exists" で失敗するため個別に試行
-    for stmt in MIGRATION_002.split(';') {
-        let trimmed = stmt.trim();
-        if !trimmed.is_empty() {
-            // duplicate column / table already exists は無視
-            let _ = conn.execute_batch(trimmed);
+    // 002, 003: ALTER TABLE / CREATE TABLE が既存の場合はエラーを無視
+    for migration in [MIGRATION_002, MIGRATION_003] {
+        for stmt in migration.split(';') {
+            let trimmed = stmt.trim();
+            if !trimmed.is_empty() {
+                let _ = conn.execute_batch(trimmed);
+            }
         }
     }
     Ok(())

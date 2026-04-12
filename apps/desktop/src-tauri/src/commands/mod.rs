@@ -6,3 +6,4 @@ pub mod scan;
 pub mod thumbnail;
 pub mod tmdb;
 pub mod settings;
+pub mod series;
