@@ -23,6 +23,10 @@ interface LibraryStore {
   selectedSeriesId: number | null;
   setSelectedSeriesId: (id: number | null) => void;
 
+  // Persons
+  selectedPersonId: number | null;
+  setSelectedPersonId: (id: number | null) => void;
+
   // Sort
   sortField: SortField;
   sortOrder: SortOrder;
@@ -50,13 +54,16 @@ const defaultFilters: LibraryFilters = {
 
 export const useLibraryStore = create<LibraryStore>((set) => ({
   activeSection: "all-movies",
-  setActiveSection: (activeSection) => set({ activeSection, selectedWorkId: null, selectedSeriesId: null }),
+  setActiveSection: (activeSection) => set({ activeSection, selectedWorkId: null, selectedSeriesId: null, selectedPersonId: null }),
 
   selectedWorkId: null,
   setSelectedWorkId: (selectedWorkId) => set({ selectedWorkId }),
 
   selectedSeriesId: null,
   setSelectedSeriesId: (selectedSeriesId) => set({ selectedSeriesId }),
+
+  selectedPersonId: null,
+  setSelectedPersonId: (selectedPersonId) => set({ selectedPersonId }),
 
   sortField: "title",
   sortOrder: "asc",

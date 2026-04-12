@@ -87,6 +87,31 @@ pub struct TmdbCollection {
     pub poster_path: Option<String>,
 }
 
+/// Credits（映画・TV共通）
+#[derive(Debug, Deserialize, Clone)]
+pub struct TmdbCredits {
+    pub cast: Vec<TmdbCastMember>,
+    pub crew: Vec<TmdbCrewMember>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TmdbCastMember {
+    pub id: i64,
+    pub name: String,
+    pub character: Option<String>,
+    pub order: Option<i32>,
+    pub profile_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TmdbCrewMember {
+    pub id: i64,
+    pub name: String,
+    pub job: String,
+    pub department: Option<String>,
+    pub profile_path: Option<String>,
+}
+
 // ─── アプリ内ビュー型（Tauri command が返す） ──────────────────────────────────
 
 /// 候補1件。スコアリング済み

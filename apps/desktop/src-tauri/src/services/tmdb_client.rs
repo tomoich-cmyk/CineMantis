@@ -84,21 +84,26 @@ impl TmdbClient {
 
     // ─── 詳細取得 ─────────────────────────────────────────────────────────
 
+    /// 汎用 JSON GET ヘルパー
+    async fn fetch_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, String> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("TMDb HTTP {}", resp.status()));
+        }
+        resp.json::<T>().await.map_err(|e| e.to_string())
+    }
+
     pub async fn get_movie_detail(&self, tmdb_id: i64) -> Result<TmdbMovieDetail, String> {
         let url = format!(
             "{TMDB_API_BASE}/movie/{tmdb_id}?api_key={}&language=ja-JP",
             self.api_key
         );
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("TMDb detail HTTP {}", resp.status()));
-        }
-        resp.json::<TmdbMovieDetail>().await.map_err(|e| e.to_string())
+        self.fetch_json(&url).await
     }
 
     pub async fn get_tv_detail(&self, tmdb_id: i64) -> Result<TmdbTvDetail, String> {
@@ -106,16 +111,25 @@ impl TmdbClient {
             "{TMDB_API_BASE}/tv/{tmdb_id}?api_key={}&language=ja-JP",
             self.api_key
         );
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("TMDb TV detail HTTP {}", resp.status()));
-        }
-        resp.json::<TmdbTvDetail>().await.map_err(|e| e.to_string())
+        self.fetch_json(&url).await
+    }
+
+    // ─── Credits ──────────────────────────────────────────────────────────
+
+    pub async fn get_movie_credits(&self, tmdb_id: i64) -> Result<TmdbCredits, String> {
+        let url = format!(
+            "{TMDB_API_BASE}/movie/{tmdb_id}/credits?api_key={}&language=ja-JP",
+            self.api_key
+        );
+        self.fetch_json(&url).await
+    }
+
+    pub async fn get_tv_credits(&self, tmdb_id: i64) -> Result<TmdbCredits, String> {
+        let url = format!(
+            "{TMDB_API_BASE}/tv/{tmdb_id}/credits?api_key={}&language=ja-JP",
+            self.api_key
+        );
+        self.fetch_json(&url).await
     }
 
     // ─── 画像ダウンロード ──────────────────────────────────────────────────

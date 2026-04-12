@@ -2,9 +2,16 @@ import { useState } from "react";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats } from "@/hooks/useWorks";
 import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
+import { useWorkPersons } from "@/hooks/usePersons";
 import { StarRating } from "@/components/common/StarRating";
 import { TagBadge } from "@/components/common/TagBadge";
 import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
+
+const ROLE_LABELS: Record<string, string> = {
+  director: "監督",
+  writer:   "脚本",
+  cast:     "出演",
+};
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
@@ -58,15 +65,21 @@ const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
 // ─── コンポーネント ───────────────────────────────────────────────────────────
 
 export function DetailPane() {
-  const { selectedWorkId, setSelectedWorkId } = useLibraryStore();
+  const { selectedWorkId, setSelectedWorkId, setActiveSection, setSelectedPersonId } = useLibraryStore();
   const { data: work, isLoading } = useWorkDetail(selectedWorkId);
   const { data: tags = [] } = useWorkTags(selectedWorkId);
+  const { data: persons = [] } = useWorkPersons(selectedWorkId);
   const { mutate: updateStats } = useUpdateStats();
   const { mutate: autoMatch, isPending: autoMatching } = useAutoMatchWork();
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
   const { mutate: unlockMatch, isPending: unlocking } = useUnlockTmdbMatch();
   const [showCandidates, setShowCandidates] = useState(false);
+
+  function navigateToPerson(personId: number) {
+    setSelectedPersonId(personId);
+    setActiveSection("persons");
+  }
 
   if (!selectedWorkId) return null;
 
@@ -201,6 +214,38 @@ export function DetailPane() {
             <div className="flex flex-wrap gap-1">
               {tags.map((tag) => <TagBadge key={tag.id} tag={tag} />)}
             </div>
+          </div>
+        )}
+
+        {/* ── 人物（監督・脚本・出演） ── */}
+        {persons.length > 0 && (
+          <div className="px-4 py-2 border-t border-subtle">
+            {(["director", "writer", "cast"] as const).map((role) => {
+              const group = persons.filter((p) => p.role === role);
+              if (group.length === 0) return null;
+              return (
+                <div key={role} className="flex items-start gap-2 mb-1.5">
+                  <span className="text-[10px] text-gray-600 w-8 pt-0.5 flex-shrink-0">
+                    {ROLE_LABELS[role]}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {group.slice(0, role === "cast" ? 8 : 5).map((p) => (
+                      <button
+                        key={p.person_id}
+                        onClick={() => navigateToPerson(p.person_id)}
+                        className="text-[11px] text-gray-400 hover:text-mantis-400 transition-colors underline-offset-2 hover:underline"
+                        title={p.character_name ?? p.name}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                    {role === "cast" && group.length > 8 && (
+                      <span className="text-[11px] text-gray-700">+{group.length - 8}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 

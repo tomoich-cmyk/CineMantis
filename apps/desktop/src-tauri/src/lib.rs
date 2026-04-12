@@ -52,6 +52,11 @@ pub fn run() {
             commands::tmdb::refresh_tmdb_metadata,
             commands::tmdb::clear_tmdb_match,
             commands::tmdb::unlock_tmdb_match,
+            // Persons
+            commands::persons::list_persons,
+            commands::persons::get_person,
+            commands::persons::get_work_persons,
+            commands::persons::get_person_works,
             // Series
             commands::series::list_series,
             commands::series::get_series,

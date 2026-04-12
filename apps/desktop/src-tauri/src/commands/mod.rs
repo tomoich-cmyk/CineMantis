@@ -7,3 +7,4 @@ pub mod thumbnail;
 pub mod tmdb;
 pub mod settings;
 pub mod series;
+pub mod persons;

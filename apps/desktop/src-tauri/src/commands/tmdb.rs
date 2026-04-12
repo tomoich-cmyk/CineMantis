@@ -197,6 +197,16 @@ async fn apply_match_internal(
         .map_err(|e| e.to_string())?;
     }
 
+    // ── 人物情報（credits）取得・保存 ─────────────────────────────────────────
+    let credits = if media_type == "movie" {
+        client.get_movie_credits(tmdb_id).await.ok()
+    } else {
+        client.get_tv_credits(tmdb_id).await.ok()
+    };
+    if let Some(ref c) = credits {
+        let _ = crate::commands::persons::store_credits(db, work_id, c);
+    }
+
     // ── シリーズ自動リンク ────────────────────────────────────────────────────
     if let Some(ref coll) = movie_collection {
         // 映画コレクション（例: MCU、007 など）

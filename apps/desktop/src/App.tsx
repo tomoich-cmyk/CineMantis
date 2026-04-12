@@ -8,6 +8,8 @@ import { SourcesScreen } from "@/components/sources/SourcesScreen";
 import { SettingsScreen } from "@/components/settings/SettingsScreen";
 import { SeriesScreen } from "@/components/series/SeriesScreen";
 import { SeriesDetailScreen } from "@/components/series/SeriesDetailScreen";
+import { PersonsScreen } from "@/components/persons/PersonsScreen";
+import { PersonDetailScreen } from "@/components/persons/PersonDetailScreen";
 import { ScanProgressBar } from "@/components/common/ScanProgressBar";
 import { useThumbnailEvents } from "@/hooks/useThumbnails";
 import { useMetadataEvents } from "@/hooks/useTmdb";
@@ -16,7 +18,7 @@ import { useMetadataEvents } from "@/hooks/useTmdb";
 const UTILITY_SECTIONS = new Set(["sources", "settings"]);
 
 export default function App() {
-  const { activeSection, selectedWorkId, selectedSeriesId } = useLibraryStore();
+  const { activeSection, selectedWorkId, selectedSeriesId, selectedPersonId } = useLibraryStore();
 
   // グローバルイベントリスナー（App ライフサイクル全体で1つだけ）
   useThumbnailEvents();   // thumb:generated → TanStack Query 無効化
@@ -24,6 +26,7 @@ export default function App() {
 
   const isUtility = UTILITY_SECTIONS.has(activeSection);
   const isSeries  = activeSection === "series";
+  const isPersons = activeSection === "persons";
   const detailOpen = !isUtility && selectedWorkId !== null;
 
   return (
@@ -31,8 +34,11 @@ export default function App() {
       <SideNav />
 
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* TopBar: ユーティリティ画面とシリーズ一覧では非表示 */}
-        {!isUtility && !(isSeries && !selectedSeriesId) && <TopBar />}
+        {/* TopBar: ユーティリティ・シリーズ一覧・人物一覧では非表示 */}
+        {!isUtility
+          && !(isSeries && !selectedSeriesId)
+          && !(isPersons && !selectedPersonId)
+          && <TopBar />}
 
         <div className="flex flex-1 min-h-0 overflow-hidden">
           {/* ユーティリティ画面 */}
@@ -50,8 +56,19 @@ export default function App() {
             </>
           )}
 
+          {/* 人物一覧 */}
+          {isPersons && !selectedPersonId && <PersonsScreen />}
+
+          {/* 人物詳細 */}
+          {isPersons && selectedPersonId !== null && (
+            <>
+              <PersonDetailScreen personId={selectedPersonId} />
+              {detailOpen && <DetailPane />}
+            </>
+          )}
+
           {/* 通常のライブラリ */}
-          {!isUtility && !isSeries && (
+          {!isUtility && !isSeries && !isPersons && (
             <>
               <WorkList />
               {detailOpen && <DetailPane />}
