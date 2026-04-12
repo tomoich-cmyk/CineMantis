@@ -63,18 +63,26 @@ export function SideNav() {
 
       {/* Sources / Settings footer */}
       <div className="border-t border-subtle py-2">
-        <button
-          onClick={() => setActiveSection("sources")}
-          className={clsx(
-            "w-full flex items-center gap-2.5 px-4 py-1.5 text-sm transition-colors",
-            activeSection === "sources"
-              ? "text-mantis-400"
-              : "text-gray-500 hover:text-gray-300"
-          )}
-        >
-          <span className="text-base">💾</span>
-          <span>ソース管理</span>
-        </button>
+        {(
+          [
+            { id: "sources", icon: "💾", label: "ソース管理" },
+            { id: "settings", icon: "⚙️", label: "設定" },
+          ] as const
+        ).map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setActiveSection(item.id)}
+            className={clsx(
+              "w-full flex items-center gap-2.5 px-4 py-1.5 text-sm transition-colors",
+              activeSection === item.id
+                ? "text-mantis-400"
+                : "text-gray-500 hover:text-gray-300"
+            )}
+          >
+            <span className="text-base">{item.icon}</span>
+            <span>{item.label}</span>
+          </button>
+        ))}
       </div>
     </nav>
   );

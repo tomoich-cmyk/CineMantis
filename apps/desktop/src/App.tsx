@@ -5,30 +5,34 @@ import { TopBar } from "@/components/layout/TopBar";
 import { WorkList } from "@/components/works/WorkList";
 import { DetailPane } from "@/components/detail/DetailPane";
 import { SourcesScreen } from "@/components/sources/SourcesScreen";
+import { SettingsScreen } from "@/components/settings/SettingsScreen";
 import { ScanProgressBar } from "@/components/common/ScanProgressBar";
 import { useThumbnailEvents } from "@/hooks/useThumbnails";
+import { useMetadataEvents } from "@/hooks/useTmdb";
 
-const SOURCES_SECTION = "sources";
+const UTILITY_SECTIONS = new Set(["sources", "settings"]);
 
 export default function App() {
   const { activeSection, selectedWorkId } = useLibraryStore();
 
-  // グローバルイベントリスナー（サムネ生成完了 → キャッシュ更新）
-  useThumbnailEvents();
-  const isSourcesView = activeSection === SOURCES_SECTION;
-  const detailOpen = !isSourcesView && selectedWorkId !== null;
+  // グローバルイベントリスナー（App ライフサイクル全体で1つだけ）
+  useThumbnailEvents();   // thumb:generated → TanStack Query 無効化
+  useMetadataEvents();    // metadata:updated → TanStack Query 無効化
+
+  const isUtility = UTILITY_SECTIONS.has(activeSection);
+  const detailOpen = !isUtility && selectedWorkId !== null;
 
   return (
     <AppShell>
       <SideNav />
 
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {!isSourcesView && <TopBar />}
+        {!isUtility && <TopBar />}
 
         <div className="flex flex-1 min-h-0 overflow-hidden">
-          {isSourcesView ? (
-            <SourcesScreen />
-          ) : (
+          {activeSection === "sources"  && <SourcesScreen />}
+          {activeSection === "settings" && <SettingsScreen />}
+          {!isUtility && (
             <>
               <WorkList />
               {detailOpen && <DetailPane />}
@@ -37,7 +41,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Global scan progress overlay */}
+      {/* グローバル進捗バー（スキャン・サムネ・メタデータバッチ） */}
       <ScanProgressBar />
     </AppShell>
   );

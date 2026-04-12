@@ -17,6 +17,15 @@ export interface ThumbBatchProgress {
   failed: number;
 }
 
+export interface MetadataBatchProgress {
+  source_id: number | null;
+  processed: number;
+  total: number;
+  matched: number;
+  skipped: number;
+  failed: number;
+}
+
 export function useScanProgress() {
   const [progress, setProgress] = useState<ScanProgress | null>(null);
 
@@ -50,6 +59,31 @@ export function useThumbBatchProgress() {
       if (
         event.payload.total > 0 &&
         event.payload.done + event.payload.failed >= event.payload.total
+      ) {
+        setTimeout(() => setProgress(null), 3000);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => unlisten?.();
+  }, []);
+
+  return progress;
+}
+
+export function useMetadataBatchProgress() {
+  const [progress, setProgress] = useState<MetadataBatchProgress | null>(null);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    listen<MetadataBatchProgress>("metadata:batch_progress", (event) => {
+      setProgress(event.payload);
+      // 全完了なら3秒後にクリア
+      if (
+        event.payload.total > 0 &&
+        event.payload.processed >= event.payload.total
       ) {
         setTimeout(() => setProgress(null), 3000);
       }

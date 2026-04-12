@@ -1,4 +1,4 @@
-import { useScanProgress, useThumbBatchProgress } from "@/hooks/useScanProgress";
+import { useScanProgress, useThumbBatchProgress, useMetadataBatchProgress } from "@/hooks/useScanProgress";
 import { clsx } from "clsx";
 
 function ProgressToast({
@@ -12,14 +12,21 @@ function ProgressToast({
   sub: string;
   pct: number;
   isDone: boolean;
-  accent: "mantis" | "blue";
+  accent: "mantis" | "blue" | "purple";
 }) {
-  const barColor = accent === "mantis" ? "bg-mantis-500" : "bg-blue-500";
+  const barColor =
+    accent === "mantis" ? "bg-mantis-500"
+    : accent === "purple" ? "bg-purple-500"
+    : "bg-blue-500";
   const borderColor = isDone
-    ? accent === "mantis" ? "border-mantis-700" : "border-blue-700"
+    ? accent === "mantis" ? "border-mantis-700"
+      : accent === "purple" ? "border-purple-700"
+      : "border-blue-700"
     : "border-surface-border";
   const bgColor = isDone
-    ? accent === "mantis" ? "bg-mantis-950/90" : "bg-blue-950/90"
+    ? accent === "mantis" ? "bg-mantis-950/90"
+      : accent === "purple" ? "bg-purple-950/90"
+      : "bg-blue-950/90"
     : "bg-surface-elevated/95";
 
   return (
@@ -34,7 +41,7 @@ function ProgressToast({
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-gray-300">{label}</span>
           {isDone && (
-            <span className={accent === "mantis" ? "text-mantis-400 text-xs" : "text-blue-400 text-xs"}>
+            <span className={accent === "mantis" ? "text-mantis-400 text-xs" : accent === "purple" ? "text-purple-400 text-xs" : "text-blue-400 text-xs"}>
               ✓
             </span>
           )}
@@ -57,8 +64,9 @@ function ProgressToast({
 export function ScanProgressBar() {
   const scan = useScanProgress();
   const thumb = useThumbBatchProgress();
+  const meta = useMetadataBatchProgress();
 
-  if (!scan && !thumb) return null;
+  if (!scan && !thumb && !meta) return null;
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 items-end">
@@ -103,6 +111,28 @@ export function ScanProgressBar() {
           }
           isDone={thumb.done + thumb.failed >= thumb.total}
           accent="blue"
+        />
+      )}
+
+      {meta && meta.total > 0 && (
+        <ProgressToast
+          label={
+            meta.processed >= meta.total
+              ? "メタデータ照合完了"
+              : "メタデータを照合中…"
+          }
+          sub={
+            meta.processed >= meta.total
+              ? `照合成功 ${meta.matched} 件 / スキップ ${meta.skipped} 件 / 失敗 ${meta.failed} 件`
+              : `${meta.processed} / ${meta.total}`
+          }
+          pct={
+            meta.total > 0
+              ? Math.round((meta.processed / meta.total) * 100)
+              : 0
+          }
+          isDone={meta.processed >= meta.total}
+          accent="purple"
         />
       )}
     </div>

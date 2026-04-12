@@ -30,8 +30,10 @@ interface WorkDetailRow {
   external_rating: number | null;
   external_rating_source: string | null;
   tmdb_id: number | null;
+  tmdb_media_type: string | null;
   imdb_id: string | null;
   match_status: string;
+  match_confidence: number | null;
   release_date: string | null;
   user_rating: number | null;
   play_count: number;

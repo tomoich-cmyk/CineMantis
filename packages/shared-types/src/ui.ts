@@ -12,7 +12,8 @@ export type NavSection =
   | "watching"
   | "recently-added"
   | "high-rated"
-  | "sources";
+  | "sources"
+  | "settings";
 
 // ─── Sort ────────────────────────────────────────────────────────────────────
 

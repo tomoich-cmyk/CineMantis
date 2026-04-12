@@ -4,3 +4,5 @@ pub mod stats;
 pub mod tag;
 pub mod scan;
 pub mod thumbnail;
+pub mod tmdb;
+pub mod settings;

@@ -150,7 +150,23 @@ pub async fn generate_thumbnails_batch_inner(
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
 
-    ThumbBatchProgress { total, done, failed }
+    let progress = ThumbBatchProgress { total, done, failed };
+
+    // サムネ完了後、メタデータバッチを自動起動（APIキーが設定済みの場合のみ）
+    let app_clone = app.clone();
+    let db_clone = db.clone();
+    tauri::async_runtime::spawn(async move {
+        // サムネとメタデータを同時に叩かないよう少し待つ
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let _ = crate::commands::tmdb::auto_match_source_inner(
+            &app_clone,
+            &db_clone,
+            source_id,
+        )
+        .await;
+    });
+
+    progress
 }
 
 // ─── Tauri コマンド ──────────────────────────────────────────────────────────

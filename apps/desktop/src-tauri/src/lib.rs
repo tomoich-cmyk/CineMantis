@@ -1,5 +1,7 @@
 mod cache;
 mod db;
+mod models;
+mod services;
 mod commands;
 
 use tauri::Manager;
@@ -42,6 +44,17 @@ pub fn run() {
             commands::thumbnail::generate_thumbnail,
             commands::thumbnail::generate_thumbnails_batch,
             commands::thumbnail::set_custom_thumb,
+            // TMDb
+            commands::tmdb::search_tmdb_candidates,
+            commands::tmdb::auto_match_work,
+            commands::tmdb::auto_match_source,
+            commands::tmdb::apply_tmdb_match,
+            commands::tmdb::refresh_tmdb_metadata,
+            commands::tmdb::clear_tmdb_match,
+            // Settings
+            commands::settings::get_setting,
+            commands::settings::set_setting,
+            commands::settings::get_tmdb_api_key_masked,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineMantis");
