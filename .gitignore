@@ -1,0 +1,37 @@
+# Node
+node_modules/
+dist/
+.cache/
+
+# pnpm
+.pnpm-store/
+
+# Rust / Cargo
+target/
+Cargo.lock
+
+# Tauri
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/WixTools/
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Env
+.env
+.env.local
+
+# Build outputs
+apps/desktop/dist/
+apps/*/dist/

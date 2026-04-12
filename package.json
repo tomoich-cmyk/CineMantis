@@ -1,0 +1,14 @@
+{
+  "name": "cinemantis-root",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm --filter desktop dev",
+    "build": "pnpm --filter desktop build",
+    "tauri": "pnpm --filter desktop tauri"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
