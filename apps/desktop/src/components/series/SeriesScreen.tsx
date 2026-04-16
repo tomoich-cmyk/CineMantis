@@ -76,7 +76,7 @@ export function SeriesScreen() {
   const { setSelectedSeriesId } = useLibraryStore();
   const { data: seriesList = [], isLoading, isError } = useSeriesList();
   const { mutate: createSeries, isPending: creating } = useCreateSeries();
-  const { mutate: deleteSeries } = useDeleteSeries();
+  useDeleteSeries();
 
   const [newTitle, setNewTitle] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);

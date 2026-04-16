@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { NavSection } from "@cinemantis/shared-types";
 import { clsx } from "clsx";
@@ -17,16 +19,24 @@ const NAV_ITEMS: NavItem[] = [
   { id: "persons", label: "人物", icon: "👤", group: "ライブラリ" },
   { id: "tags", label: "タグ", icon: "🏷", group: "ライブラリ" },
   // Smart lists
-  { id: "unwatched", label: "未視聴", icon: "⬜", group: "スマート" },
-  { id: "watching", label: "視聴中", icon: "▶", group: "スマート" },
-  { id: "recently-added", label: "最近追加", icon: "🆕", group: "スマート" },
-  { id: "high-rated", label: "高評価", icon: "⭐", group: "スマート" },
+  { id: "continue-watching", label: "視聴途中",   icon: "⏸",  group: "スマート" },
+  { id: "stalled",           label: "止まった視聴", icon: "💤", group: "スマート" },
+  { id: "unwatched",         label: "未視聴",     icon: "⬜", group: "スマート" },
+  { id: "watching",          label: "視聴中",     icon: "▶",  group: "スマート" },
+  { id: "completed",         label: "視聴済",     icon: "✓",  group: "スマート" },
+  { id: "favorites",         label: "お気に入り", icon: "★",  group: "スマート" },
+  { id: "recently-added",    label: "最近追加",   icon: "🆕", group: "スマート" },
+  { id: "recently-played",   label: "最近視聴",   icon: "⏱",  group: "スマート" },
+  { id: "high-rated",        label: "高評価",     icon: "⭐", group: "スマート" },
+  { id: "needs-attention",   label: "要確認",     icon: "⚠",  group: "スマート" },
 ];
 
 const GROUPS = ["ライブラリ", "スマート"];
 
 export function SideNav() {
   const { activeSection, setActiveSection } = useLibraryStore();
+  const [version, setVersion] = useState("");
+  useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
 
   return (
     <nav className="w-48 flex-shrink-0 flex flex-col bg-surface-elevated border-r border-subtle overflow-y-auto">
@@ -61,12 +71,15 @@ export function SideNav() {
         ))}
       </div>
 
-      {/* Sources / Settings footer */}
+      {/* Sources / Backup / Audit / Settings footer */}
       <div className="border-t border-subtle py-2">
         {(
           [
-            { id: "sources", icon: "💾", label: "ソース管理" },
+            { id: "sources",  icon: "💾",  label: "ソース管理" },
+            { id: "backup",   icon: "🛡",  label: "バックアップ" },
+            { id: "audit",    icon: "🔬",  label: "監査レポート" },
             { id: "settings", icon: "⚙️", label: "設定" },
+            { id: "about",    icon: "🪲",  label: "About" },
           ] as const
         ).map((item) => (
           <button
@@ -83,6 +96,12 @@ export function SideNav() {
             <span>{item.label}</span>
           </button>
         ))}
+        {/* バージョン表示 */}
+        {version && (
+          <p className="px-4 pt-1 pb-2 text-[10px] text-gray-700 font-mono select-none">
+            v{version}
+          </p>
+        )}
       </div>
     </nav>
   );

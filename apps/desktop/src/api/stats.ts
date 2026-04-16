@@ -21,7 +21,7 @@ export interface UpdateStatsPayload {
 }
 
 export async function getUserStats(workId: number): Promise<UserStatsRow | null> {
-  return invoke<UserStatsRow | null>("get_user_stats", { work_id: workId });
+  return invoke<UserStatsRow | null>("get_user_stats", { workId });
 }
 
 export async function updateUserStats(payload: UpdateStatsPayload): Promise<void> {
@@ -30,5 +30,5 @@ export async function updateUserStats(payload: UpdateStatsPayload): Promise<void
 
 /** Record a play event: increments play_count, sets last_played_at */
 export async function recordPlay(workId: number): Promise<void> {
-  return invoke("record_play", { work_id: workId });
+  return invoke("record_play", { workId });
 }

@@ -27,14 +27,14 @@ export async function addTag(name: string, color?: string): Promise<number> {
 }
 
 export async function tagWork(workId: number, tagId: number): Promise<void> {
-  return invoke("tag_work", { work_id: workId, tag_id: tagId });
+  return invoke("tag_work", { workId, tagId });
 }
 
 export async function untagWork(workId: number, tagId: number): Promise<void> {
-  return invoke("untag_work", { work_id: workId, tag_id: tagId });
+  return invoke("untag_work", { workId, tagId });
 }
 
 export async function listWorkTags(workId: number): Promise<Tag[]> {
-  const rows = await invoke<TagRow[]>("list_work_tags", { work_id: workId });
+  const rows = await invoke<TagRow[]>("list_work_tags", { workId });
   return rows.map(toTag);
 }

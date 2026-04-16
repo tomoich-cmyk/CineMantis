@@ -49,22 +49,20 @@ export async function searchTmdbCandidates(
   mediaTypeHint?: string | null,
 ): Promise<TmdbCandidate[]> {
   return invoke<TmdbCandidate[]>("search_tmdb_candidates", {
-    work_id: workId,
-    query_override: queryOverride ?? null,
-    media_type_hint: mediaTypeHint ?? null,
+    workId,
+    queryOverride: queryOverride ?? null,
+    mediaTypeHint: mediaTypeHint ?? null,
   });
 }
 
 export async function autoMatchWork(workId: number): Promise<AutoMatchResult> {
-  return invoke<AutoMatchResult>("auto_match_work", { work_id: workId });
+  return invoke<AutoMatchResult>("auto_match_work", { workId });
 }
 
 export async function autoMatchSource(
   sourceId: number | null = null
 ): Promise<MetadataBatchProgress> {
-  return invoke<MetadataBatchProgress>("auto_match_source", {
-    source_id: sourceId,
-  });
+  return invoke<MetadataBatchProgress>("auto_match_source", { sourceId });
 }
 
 export async function applyTmdbMatch(
@@ -74,9 +72,9 @@ export async function applyTmdbMatch(
   lock: boolean
 ): Promise<AutoMatchResult> {
   return invoke<AutoMatchResult>("apply_tmdb_match", {
-    work_id: workId,
-    tmdb_id: tmdbId,
-    media_type: mediaType,
+    workId,
+    tmdbId,
+    mediaType,
     lock,
   });
 }
@@ -84,13 +82,13 @@ export async function applyTmdbMatch(
 export async function refreshTmdbMetadata(
   workId: number
 ): Promise<AutoMatchResult> {
-  return invoke<AutoMatchResult>("refresh_tmdb_metadata", { work_id: workId });
+  return invoke<AutoMatchResult>("refresh_tmdb_metadata", { workId });
 }
 
 export async function clearTmdbMatch(workId: number): Promise<void> {
-  return invoke("clear_tmdb_match", { work_id: workId });
+  return invoke("clear_tmdb_match", { workId });
 }
 
 export async function unlockTmdbMatch(workId: number): Promise<void> {
-  return invoke("unlock_tmdb_match", { work_id: workId });
+  return invoke("unlock_tmdb_match", { workId });
 }

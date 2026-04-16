@@ -23,11 +23,9 @@ const ROLE_LABELS: Record<string, string> = {
 
 function PersonCard({
   person,
-  roleFilter,
   onClick,
 }: {
   person: PersonSummary;
-  roleFilter: string | null;
   onClick: () => void;
 }) {
   const roleList = person.roles
@@ -139,7 +137,6 @@ export function PersonsScreen() {
               <PersonCard
                 key={person.id}
                 person={person}
-                roleFilter={roleFilter}
                 onClick={() => setSelectedPersonId(person.id)}
               />
             ))}

@@ -10,10 +10,19 @@ export type NavSection =
   | "tags"
   | "unwatched"
   | "watching"
+  | "continue-watching"
+  | "favorites"
   | "recently-added"
+  | "recently-played"
   | "high-rated"
+  | "completed"
+  | "stalled"
+  | "needs-attention"
   | "sources"
-  | "settings";
+  | "settings"
+  | "backup"
+  | "audit"
+  | "about";
 
 // ─── Sort ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +54,7 @@ export interface WorkSummary {
   watchStatus: WatchStatus;
   isFavorite: boolean;
   runtimeSec: number | null;
+  resumePositionSec: number | null;
   externalRating: number | null;
   matchStatus: MatchStatus;
 }

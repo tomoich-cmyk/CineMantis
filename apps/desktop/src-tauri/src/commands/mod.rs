@@ -8,3 +8,8 @@ pub mod tmdb;
 pub mod settings;
 pub mod series;
 pub mod persons;
+pub mod watch;
+pub mod bulk;
+pub mod backup;
+pub mod audit;
+pub mod platform;

@@ -3,6 +3,7 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats } from "@/hooks/useWorks";
 import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
 import { useWorkPersons } from "@/hooks/usePersons";
+import { useOpenWorkFile, useSetWatchStatus, useUpdateResumePosition } from "@/hooks/useWatch";
 import { StarRating } from "@/components/common/StarRating";
 import { TagBadge } from "@/components/common/TagBadge";
 import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
@@ -46,12 +47,13 @@ function formatRuntime(sec: number | null) {
   return h > 0 ? `${h}時間${m}分` : `${m}分`;
 }
 
-const WATCH_STATUS_OPTIONS = [
-  { value: "unwatched", label: "未視聴" },
-  { value: "watching",  label: "視聴中" },
-  { value: "watched",   label: "視聴済" },
-  { value: "skipped",   label: "スキップ" },
-];
+function formatPosition(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
   matched:  { label: "照合済",   cls: "text-mantis-500" },
@@ -61,6 +63,15 @@ const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
   pending:  { label: "照合中",   cls: "text-yellow-500" },
   unmatched:{ label: "未照合",   cls: "text-gray-600"   },
 };
+
+type WatchStatus = "unwatched" | "watching" | "watched" | "skipped";
+
+const WATCH_PILLS: { value: WatchStatus; label: string; cls: string }[] = [
+  { value: "unwatched", label: "未視聴", cls: "border-gray-700 text-gray-500 hover:text-gray-300" },
+  { value: "watching",  label: "視聴中", cls: "border-blue-800/60 text-blue-400 hover:bg-blue-900/20" },
+  { value: "watched",   label: "視聴済", cls: "border-mantis-700/60 text-mantis-400 hover:bg-mantis-900/20" },
+  { value: "skipped",   label: "スキップ", cls: "border-gray-700 text-gray-600 hover:text-gray-400" },
+];
 
 // ─── コンポーネント ───────────────────────────────────────────────────────────
 
@@ -74,7 +85,11 @@ export function DetailPane() {
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
   const { mutate: unlockMatch, isPending: unlocking } = useUnlockTmdbMatch();
+  const { mutate: openFile, isPending: opening } = useOpenWorkFile();
+  const { mutate: setStatus } = useSetWatchStatus();
+  const { mutate: savePosition } = useUpdateResumePosition();
   const [showCandidates, setShowCandidates] = useState(false);
+  const [positionInput, setPositionInput] = useState("");
 
   function navigateToPerson(personId: number) {
     setSelectedPersonId(personId);
@@ -97,6 +112,12 @@ export function DetailPane() {
   const isMatched = ["auto", "manual", "locked", "matched"].includes(work.match_status);
   const isLocked  = work.match_status === "locked";
 
+  // 再生進捗
+  const progress =
+    work.resume_position_sec !== null && work.runtime_sec !== null && work.runtime_sec > 0
+      ? Math.min(work.resume_position_sec / work.runtime_sec, 1)
+      : null;
+
   return (
     <>
       <aside className="w-72 flex-shrink-0 flex flex-col border-l border-subtle bg-surface-elevated overflow-y-auto">
@@ -113,12 +134,75 @@ export function DetailPane() {
         </div>
 
         {/* ── ポスター / サムネイル ── */}
-        <div className="mx-4 mt-4 aspect-[2/3] bg-surface rounded overflow-hidden flex-shrink-0">
+        <div className="mx-4 mt-4 aspect-[2/3] bg-surface rounded overflow-hidden flex-shrink-0 relative group/poster">
           <WorkImage
             src={work.poster_path ?? work.thumb_path}
             alt={work.title}
           />
+          {/* ポスター上の ▶ オーバーレイ */}
+          <button
+            onClick={() => openFile(work.id)}
+            disabled={opening}
+            className="absolute inset-0 flex items-center justify-center
+                       opacity-0 group-hover/poster:opacity-100 transition-opacity bg-black/30"
+          >
+            <span className="w-12 h-12 flex items-center justify-center rounded-full bg-black/70 text-white text-2xl hover:scale-110 transition-transform">
+              {opening ? "…" : "▶"}
+            </span>
+          </button>
         </div>
+
+        {/* ── 再生ボタン ── */}
+        <div className="px-4 pt-3">
+          <button
+            onClick={() => openFile(work.id)}
+            disabled={opening}
+            className="w-full py-2 flex items-center justify-center gap-2 text-sm font-medium
+                       bg-mantis-700/30 border border-mantis-700/60 text-mantis-300 rounded
+                       hover:bg-mantis-700/50 transition-colors disabled:opacity-40"
+          >
+            <span>{opening ? "…" : "▶"}</span>
+            <span>{opening ? "起動中…" : work.resume_position_sec ? "続きから再生" : "再生"}</span>
+          </button>
+        </div>
+
+        {/* ── 再生進捗 / 再開位置インジケータ ── */}
+        {progress !== null && work.resume_position_sec !== null && (
+          <div className="px-4 pt-2">
+            <div className="w-full h-1 bg-surface rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-500 rounded-full transition-all"
+                style={{ width: `${(progress * 100).toFixed(1)}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between mt-1 text-[11px] text-gray-600">
+              <span>{formatPosition(work.resume_position_sec)}</span>
+              <span>{formatRuntime(work.runtime_sec)}</span>
+            </div>
+            {/* 再開位置を手動で更新するフォーム */}
+            <div className="flex items-center gap-1 mt-1.5">
+              <input
+                type="text"
+                value={positionInput}
+                onChange={(e) => setPositionInput(e.target.value)}
+                placeholder="位置(秒)を入力"
+                className="flex-1 bg-surface border border-subtle rounded px-2 py-0.5 text-[11px] text-gray-400 placeholder-gray-700 outline-none focus:border-mantis-600"
+              />
+              <button
+                onClick={() => {
+                  const sec = parseFloat(positionInput);
+                  if (!isNaN(sec) && sec >= 0) {
+                    savePosition({ workId: work.id, positionSec: sec });
+                    setPositionInput("");
+                  }
+                }}
+                className="text-[11px] px-2 py-0.5 border border-subtle rounded text-gray-600 hover:text-gray-300 transition-colors"
+              >
+                更新
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ── タイトル / 年 / 尺 ── */}
         <div className="px-4 py-3 flex flex-col gap-1">
@@ -169,19 +253,27 @@ export function DetailPane() {
                 onChange={(v) => updateStats({ work_id: work.id, user_rating: v })}
               />
             </div>
-            {/* 視聴状態 */}
-            <div className="flex items-center justify-between">
+
+            {/* 視聴状態 — クイックピル */}
+            <div className="flex flex-col gap-1">
               <span className="text-xs text-gray-500">視聴状態</span>
-              <select
-                value={work.watch_status}
-                onChange={(e) => updateStats({ work_id: work.id, watch_status: e.target.value })}
-                className="bg-surface border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600"
-              >
-                {WATCH_STATUS_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+              <div className="flex gap-1 flex-wrap">
+                {WATCH_PILLS.map((pill) => (
+                  <button
+                    key={pill.value}
+                    onClick={() => setStatus({ workId: work.id, status: pill.value })}
+                    className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${
+                      work.watch_status === pill.value
+                        ? pill.cls + " opacity-100 ring-1 ring-current/30"
+                        : "border-transparent text-gray-700 hover:border-gray-700 hover:text-gray-500"
+                    }`}
+                  >
+                    {pill.label}
+                  </button>
                 ))}
-              </select>
+              </div>
             </div>
+
             {/* お気に入り */}
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-500">お気に入り</span>
@@ -192,6 +284,7 @@ export function DetailPane() {
                 ★
               </button>
             </div>
+
             {/* 視聴回数 */}
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-500">視聴回数</span>
