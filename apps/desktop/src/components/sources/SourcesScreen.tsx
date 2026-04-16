@@ -190,7 +190,15 @@ function AddSourceDialog({ onClose }: { onClose: () => void }) {
 
 export function SourcesScreen() {
   const { data: sources = [], isLoading } = useSourceList();
-  const { mutate: scanSource, variables: scanningId, isPending: scanning } = useScanSource();
+  const {
+    mutate: scanSource,
+    variables: scanningId,
+    isPending: scanning,
+    error: scanError,
+    isError: isScanError,
+    data: scanResult,
+    isSuccess: isScanSuccess,
+  } = useScanSource();
   const [showAdd, setShowAdd] = useState(false);
 
   return (
@@ -211,6 +219,18 @@ export function SourcesScreen() {
             <span>＋</span> ソースを追加
           </button>
         </div>
+
+        {/* Scan result / error banner */}
+        {isScanError && (
+          <div className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded px-3 py-2">
+            スキャン失敗: {String(scanError)}
+          </div>
+        )}
+        {isScanSuccess && scanResult && (
+          <div className="text-xs text-mantis-400 bg-mantis-900/20 border border-mantis-800 rounded px-3 py-2">
+            スキャン完了 — 新規: {scanResult.new_files} 件 / 更新: {scanResult.updated_files} 件 / 不明: {scanResult.missing_files} 件
+          </div>
+        )}
 
         {/* Source list */}
         {isLoading ? (

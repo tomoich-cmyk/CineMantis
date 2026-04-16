@@ -42,10 +42,18 @@ export async function updateSourceStatus(
   sourceId: number,
   status: string
 ): Promise<void> {
-  return invoke("update_source_status", { source_id: sourceId, status });
+  return invoke("update_source_status", { sourceId, status });
+}
+
+export interface ScanResult {
+  source_id: number;
+  scanned: number;
+  new_files: number;
+  updated_files: number;
+  missing_files: number;
 }
 
 /** Trigger a full folder scan for a source */
-export async function scanSource(sourceId: number): Promise<void> {
-  return invoke("scan_source", { source_id: sourceId });
+export async function scanSource(sourceId: number): Promise<ScanResult> {
+  return invoke<ScanResult>("scan_source", { sourceId });
 }

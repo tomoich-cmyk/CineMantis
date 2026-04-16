@@ -39,15 +39,15 @@ interface WorkSummaryRow {
 // ─── Tauri invoke ラッパー ────────────────────────────────────────────────────
 
 export async function listPersons(roleFilter?: string | null): Promise<PersonSummary[]> {
-  return invoke<PersonSummary[]>("list_persons", { role_filter: roleFilter ?? null });
+  return invoke<PersonSummary[]>("list_persons", { roleFilter: roleFilter ?? null });
 }
 
 export async function getPerson(personId: number): Promise<PersonSummary | null> {
-  return invoke<PersonSummary | null>("get_person", { person_id: personId });
+  return invoke<PersonSummary | null>("get_person", { personId });
 }
 
 export async function getWorkPersons(workId: number): Promise<WorkPerson[]> {
-  return invoke<WorkPerson[]>("get_work_persons", { work_id: workId });
+  return invoke<WorkPerson[]>("get_work_persons", { workId });
 }
 
 export async function getPersonWorks(
@@ -55,8 +55,8 @@ export async function getPersonWorks(
   roleFilter?: string | null,
 ): Promise<WorkSummary[]> {
   const rows = await invoke<WorkSummaryRow[]>("get_person_works", {
-    person_id: personId,
-    role_filter: roleFilter ?? null,
+    personId,
+    roleFilter: roleFilter ?? null,
   });
   return rows.map((r) => ({
     id: r.id,
@@ -71,5 +71,6 @@ export async function getPersonWorks(
     runtimeSec: r.runtime_sec,
     externalRating: r.external_rating,
     matchStatus: r.match_status as WorkSummary["matchStatus"],
+    resumePositionSec: null,
   }));
 }

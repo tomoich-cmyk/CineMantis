@@ -29,7 +29,7 @@ pub struct SeriesDetailRow {
 
 /// シリーズ一覧（作品数付き、先頭作品のポスターをフォールバック）
 #[tauri::command]
-pub fn list_series(state: State<DbState>) -> Result<Vec<SeriesSummaryRow>, String> {
+pub fn list_series(state: State<'_, DbState>) -> Result<Vec<SeriesSummaryRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -71,7 +71,7 @@ pub fn list_series(state: State<DbState>) -> Result<Vec<SeriesSummaryRow>, Strin
 /// シリーズ詳細1件
 #[tauri::command]
 pub fn get_series(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     series_id: i64,
 ) -> Result<Option<SeriesDetailRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -96,7 +96,7 @@ pub fn get_series(
 /// シリーズに含まれる作品一覧（sort_order → season_no → episode_no → year 順）
 #[tauri::command]
 pub fn get_series_works(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     series_id: i64,
 ) -> Result<Vec<crate::commands::work::WorkSummaryRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -107,7 +107,7 @@ pub fn get_series_works(
                     us.user_rating, COALESCE(us.play_count, 0),
                     COALESCE(us.watch_status, 'unwatched'),
                     COALESCE(us.is_favorite, 0),
-                    w.runtime_sec, w.external_rating, w.match_status
+                    w.runtime_sec, us.resume_position_sec, w.external_rating, w.match_status
              FROM series_items si
              JOIN works w ON w.id = si.work_id
              LEFT JOIN user_stats us ON us.work_id = w.id
@@ -133,8 +133,9 @@ pub fn get_series_works(
                 watch_status: row.get(7)?,
                 is_favorite: row.get::<_, i64>(8)? != 0,
                 runtime_sec: row.get(9)?,
-                external_rating: row.get(10)?,
-                match_status: row.get(11)?,
+                resume_position_sec: row.get(10)?,
+                external_rating: row.get(11)?,
+                match_status: row.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -147,7 +148,7 @@ pub fn get_series_works(
 /// 手動シリーズを作成して id を返す
 #[tauri::command]
 pub fn create_series(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     title: String,
     series_type: Option<String>,
 ) -> Result<i64, String> {
@@ -163,7 +164,7 @@ pub fn create_series(
 /// 作品をシリーズに追加
 #[tauri::command]
 pub fn add_to_series(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     series_id: i64,
     work_id: i64,
     sort_order: Option<i64>,
@@ -181,7 +182,7 @@ pub fn add_to_series(
 /// 作品をシリーズから削除
 #[tauri::command]
 pub fn remove_from_series(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     series_id: i64,
     work_id: i64,
 ) -> Result<(), String> {
@@ -196,7 +197,7 @@ pub fn remove_from_series(
 
 /// シリーズを削除（items は ON DELETE CASCADE で連動削除）
 #[tauri::command]
-pub fn delete_series(state: State<DbState>, series_id: i64) -> Result<(), String> {
+pub fn delete_series(state: State<'_, DbState>, series_id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM series WHERE id = ?1",

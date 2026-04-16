@@ -52,17 +52,58 @@ struct FfprobeOutput {
     format: Option<FfprobeFormat>,
 }
 
+/// FfprobeOutput から (duration, width, height, video_codec, audio_codec) を抽出
+fn extract_probe_info(
+    probe: Option<FfprobeOutput>,
+) -> (Option<f64>, Option<i64>, Option<i64>, Option<String>, Option<String>) {
+    if let Some(p) = probe {
+        let dur = p
+            .format
+            .as_ref()
+            .and_then(|f| f.duration.as_ref())
+            .and_then(|d| d.parse::<f64>().ok());
+        let (mut w, mut h, mut vc, mut ac) = (None, None, None, None);
+        if let Some(streams) = &p.streams {
+            for s in streams {
+                match s.codec_type.as_deref() {
+                    Some("video") if vc.is_none() => {
+                        w = s.width;
+                        h = s.height;
+                        vc = s.codec_name.clone();
+                    }
+                    Some("audio") if ac.is_none() => {
+                        ac = s.codec_name.clone();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (dur, w, h, vc, ac)
+    } else {
+        (None, None, None, None, None)
+    }
+}
+
 fn probe_file(path: &str) -> Option<FfprobeOutput> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_streams",
-            "-show_format",
-            path,
-        ])
-        .output()
-        .ok()?;
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let ffprobe = crate::ffmpeg_path::find_ffprobe();
+    let mut cmd = Command::new(&ffprobe);
+    cmd.args([
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_streams",
+        "-show_format",
+        path,
+    ])
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -150,6 +191,7 @@ pub async fn scan_source(
     // 3. Probe and upsert each file
     let mut new_files = 0usize;
     let mut updated_files = 0usize;
+    let mut skipped_files = 0usize;
 
     for (i, file_path) in files.iter().enumerate() {
         let path_str = file_path.to_string_lossy().to_string();
@@ -188,110 +230,106 @@ pub async fn scan_source(
             })
         });
 
-        // ffprobe
-        let probe = probe_file(&path_str);
-        let (duration_sec, width, height, video_codec, audio_codec) =
-            if let Some(ref p) = probe {
-                let dur = p
-                    .format
-                    .as_ref()
-                    .and_then(|f| f.duration.as_ref())
-                    .and_then(|d| d.parse::<f64>().ok());
-
-                let (mut w, mut h, mut vc, mut ac) = (None, None, None, None);
-                if let Some(streams) = &p.streams {
-                    for s in streams {
-                        match s.codec_type.as_deref() {
-                            Some("video") if vc.is_none() => {
-                                w = s.width;
-                                h = s.height;
-                                vc = s.codec_name.clone();
-                            }
-                            Some("audio") if ac.is_none() => {
-                                ac = s.codec_name.clone();
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                (dur, w, h, vc, ac)
-            } else {
-                (None, None, None, None, None)
-            };
-
         let container = extension.to_string();
 
-        // Upsert into files table
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let existing: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM files WHERE source_id = ?1 AND file_path = ?2",
+        // Check existing DB record (size + mtime で変更有無を判断)
+        let existing: Option<(i64, Option<i64>, Option<String>)> = {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            conn.query_row(
+                "SELECT id, file_size, mtime FROM files WHERE source_id = ?1 AND file_path = ?2",
                 rusqlite::params![source_id, path_str],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+        };
 
-        if let Some(_file_id) = existing {
-            // Update
-            conn.execute(
-                "UPDATE files SET
-                   file_size = ?1, mtime = ?2, duration_sec = ?3,
-                   width = ?4, height = ?5, video_codec = ?6,
-                   audio_codec = ?7, container = ?8,
-                   availability_status = 'available'
-                 WHERE source_id = ?9 AND file_path = ?10",
-                rusqlite::params![
-                    file_size, mtime, duration_sec, width, height,
-                    video_codec, audio_codec, container, source_id, path_str
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            updated_files += 1;
-        } else {
-            // Insert new file
-            conn.execute(
-                "INSERT INTO files
-                   (source_id, file_path, file_name, extension, file_size, mtime,
-                    duration_sec, width, height, video_codec, audio_codec, container)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                rusqlite::params![
-                    source_id, path_str, file_name, extension,
-                    file_size, mtime, duration_sec, width, height,
-                    video_codec, audio_codec, container
-                ],
-            )
-            .map_err(|e| e.to_string())?;
+        match existing {
+            Some((file_id, db_size, db_mtime)) => {
+                // ファイルが変化していなければ ffprobe をスキップ
+                let unchanged = db_size == file_size && db_mtime == mtime;
+                if unchanged {
+                    // availability_status だけ更新（オフライン→オンライン復帰対応）
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE files SET availability_status = 'available' WHERE id = ?1",
+                        rusqlite::params![file_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    skipped_files += 1;
+                } else {
+                    // サイズか更新日時が変わった → 再プローブ
+                    let probe = probe_file(&path_str);
+                    let (duration_sec, width, height, video_codec, audio_codec) =
+                        extract_probe_info(probe);
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE files SET
+                           file_size = ?1, mtime = ?2, duration_sec = ?3,
+                           width = ?4, height = ?5, video_codec = ?6,
+                           audio_codec = ?7, container = ?8,
+                           availability_status = 'available'
+                         WHERE id = ?9",
+                        rusqlite::params![
+                            file_size, mtime, duration_sec, width, height,
+                            video_codec, audio_codec, container, file_id
+                        ],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    updated_files += 1;
+                }
+            }
+            None => {
+                // 新規ファイル → プローブしてINSERT
+                let probe = probe_file(&path_str);
+                let (duration_sec, width, height, video_codec, audio_codec) =
+                    extract_probe_info(probe);
 
-            let file_id = conn.last_insert_rowid();
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                conn.execute(
+                    "INSERT INTO files
+                       (source_id, file_path, file_name, extension, file_size, mtime,
+                        duration_sec, width, height, video_codec, audio_codec, container)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    rusqlite::params![
+                        source_id, path_str, file_name, extension,
+                        file_size, mtime, duration_sec, width, height,
+                        video_codec, audio_codec, container
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
 
-            // Auto-create a Work from filename (title estimation)
-            let title = estimate_title(&file_name);
-            conn.execute(
-                "INSERT INTO works (work_type, title, sort_title) VALUES ('movie', ?1, ?2)",
-                rusqlite::params![title, title.to_lowercase()],
-            )
-            .map_err(|e| e.to_string())?;
+                let file_id = conn.last_insert_rowid();
 
-            let work_id = conn.last_insert_rowid();
+                // Auto-create a Work from filename (title estimation)
+                let title = estimate_title(&file_name);
+                conn.execute(
+                    "INSERT INTO works (work_type, title, sort_title) VALUES ('movie', ?1, ?2)",
+                    rusqlite::params![title, title.to_lowercase()],
+                )
+                .map_err(|e| e.to_string())?;
 
-            // Link via work_parts
-            conn.execute(
-                "INSERT INTO work_parts (work_id, file_id) VALUES (?1, ?2)",
-                rusqlite::params![work_id, file_id],
-            )
-            .map_err(|e| e.to_string())?;
+                let work_id = conn.last_insert_rowid();
 
-            // Create empty user_stats row
-            conn.execute(
-                "INSERT OR IGNORE INTO user_stats (work_id) VALUES (?1)",
-                rusqlite::params![work_id],
-            )
-            .map_err(|e| e.to_string())?;
+                // Link via work_parts
+                conn.execute(
+                    "INSERT INTO work_parts (work_id, file_id) VALUES (?1, ?2)",
+                    rusqlite::params![work_id, file_id],
+                )
+                .map_err(|e| e.to_string())?;
 
-            new_files += 1;
+                // Create empty user_stats row
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_stats (work_id) VALUES (?1)",
+                    rusqlite::params![work_id],
+                )
+                .map_err(|e| e.to_string())?;
+
+                new_files += 1;
+            }
         }
     }
+    let _ = skipped_files; // suppress unused warning
 
     // 4. Detect missing files (files in DB not found on disk this scan)
     let missing_files = {
@@ -366,10 +404,25 @@ pub async fn scan_source(
         missing_files,
     };
 
-    // 6. 新規ファイルがあった場合、サムネイルバッチ生成をバックグラウンドで起動
-    if new_files > 0 {
+    // 6. サムネイル未生成の作品があればバックグラウンドでバッチ生成
+    //    （新規ファイルがなくても、thumb_path が NULL の作品がある場合は実行）
+    let has_unthumbed = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM works w
+             INNER JOIN work_parts wp ON wp.work_id = w.id
+             INNER JOIN files f ON f.id = wp.file_id
+             WHERE (w.thumb_path IS NULL OR w.thumb_path = '')
+               AND f.source_id = ?1
+               AND f.availability_status = 'available'",
+            rusqlite::params![source_id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        count > 0
+    };
+
+    if has_unthumbed {
         let app_clone = app.clone();
-        // DbState は Arc<Mutex> なので Clone 可能
         let db_clone: crate::db::DbState = state.inner().clone();
         tauri::async_runtime::spawn(async move {
             super::thumbnail::generate_thumbnails_batch_inner(

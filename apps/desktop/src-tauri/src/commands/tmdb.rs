@@ -461,8 +461,6 @@ pub async fn auto_match_source_inner(
 
     // 照合対象を取得
     let targets: Vec<(i64, String, Option<String>, String, Option<i32>)> = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-
         let base_filter = if source_id.is_some() {
             "AND EXISTS (SELECT 1 FROM work_parts wp INNER JOIN files f ON f.id = wp.file_id WHERE wp.work_id = w.id AND f.source_id = ?1)"
         } else {
@@ -481,14 +479,17 @@ pub async fn auto_match_source_inner(
              LIMIT 500"
         );
 
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        stmt.query_map(
-            rusqlite::params![source_id.unwrap_or(0)],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-        )
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .collect()
+        let result: Vec<_> = stmt
+            .query_map(
+                rusqlite::params![source_id.unwrap_or(0)],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .collect();
+        result
     };
 
     let total = targets.len();
@@ -537,6 +538,44 @@ pub async fn auto_match_source_inner(
     }
 
     Ok(MetadataBatchProgress { source_id, processed, total, matched, skipped, failed })
+}
+
+/// tmdb_id がある作品の人物情報（credits）だけ再取得して保存
+#[tauri::command]
+pub async fn repair_fetch_persons(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    work_id: i64,
+) -> Result<(), String> {
+    let api_key = get_api_key_internal(&state)?;
+    let client = TmdbClient::new(api_key);
+
+    let (tmdb_id, media_type) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT tmdb_id, COALESCE(tmdb_media_type, 'movie') FROM works WHERE id = ?1 AND tmdb_id IS NOT NULL",
+            rusqlite::params![work_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "tmdb_id not set for this work".to_string())?
+    };
+
+    let credits = if media_type == "movie" {
+        client.get_movie_credits(tmdb_id).await?
+    } else {
+        client.get_tv_credits(tmdb_id).await?
+    };
+
+    crate::commands::persons::store_credits(&state, work_id, &credits)?;
+
+    let _ = app.emit(
+        "metadata:updated",
+        serde_json::json!({ "work_id": work_id, "type": "persons" }),
+    );
+
+    Ok(())
 }
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────

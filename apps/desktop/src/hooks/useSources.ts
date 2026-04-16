@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listSources, addSource, scanSource } from "@/api/sources";
+import { listSources, addSource, scanSource, type ScanResult } from "@/api/sources";
 
 export const sourceKeys = {
   all: ["sources"] as const,
@@ -23,11 +23,14 @@ export function useAddSource() {
 
 export function useScanSource() {
   const qc = useQueryClient();
-  return useMutation({
+  return useMutation<ScanResult, Error, number>({
     mutationFn: scanSource,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: sourceKeys.all });
       qc.invalidateQueries({ queryKey: ["works"] });
+    },
+    onError: (err: unknown) => {
+      console.error("Scan failed:", err);
     },
   });
 }

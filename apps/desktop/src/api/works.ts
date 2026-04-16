@@ -12,6 +12,7 @@ interface WorkSummaryRow {
   watch_status: string;
   is_favorite: boolean;
   runtime_sec: number | null;
+  resume_position_sec: number | null;
   external_rating: number | null;
   match_status: string;
 }
@@ -48,6 +49,13 @@ export interface WorkDetail extends WorkDetailRow {
   genres: string[];
 }
 
+export interface FilterOptions {
+  genres: string[];
+  countries: string[];
+  year_min: number | null;
+  year_max: number | null;
+}
+
 function toSummary(r: WorkSummaryRow): WorkSummary {
   return {
     id: r.id,
@@ -60,6 +68,7 @@ function toSummary(r: WorkSummaryRow): WorkSummary {
     watchStatus: r.watch_status as WorkSummary["watchStatus"],
     isFavorite: r.is_favorite,
     runtimeSec: r.runtime_sec,
+    resumePositionSec: r.resume_position_sec,
     externalRating: r.external_rating,
     matchStatus: r.match_status as WorkSummary["matchStatus"],
   };
@@ -70,27 +79,59 @@ export interface ListWorksParams {
   watchStatus?: string | null;
   matchStatus?: string | null;
   query?: string | null;
+  // 拡張フィルタ
+  yearFrom?: number | null;
+  yearTo?: number | null;
+  genre?: string | null;
+  country?: string | null;
+  personId?: number | null;
+  minUserRating?: number | null;
+  isFavorite?: boolean | null;
+  tagIds?: number[];
+  minPlayCount?: number | null;
+  // ソート
   sortField?: SortField;
   sortOrder?: SortOrder;
+  // 要確認フィルタ (AttentionCenterScreen 専用)
+  attentionFilter?: string | null;
 }
 
 export async function listWorks(params: ListWorksParams): Promise<WorkSummary[]> {
+  const tagIdsJson =
+    params.tagIds && params.tagIds.length > 0
+      ? JSON.stringify(params.tagIds)
+      : null;
+
   const rows = await invoke<WorkSummaryRow[]>("list_works", {
-    work_type: params.workType ?? null,
-    watch_status: params.watchStatus ?? null,
-    match_status: params.matchStatus ?? null,
-    query: params.query || null,
-    sort_field: params.sortField ?? "title",
-    sort_order: params.sortOrder ?? "asc",
+    workType:       params.workType      ?? null,
+    watchStatus:    params.watchStatus   ?? null,
+    matchStatus:    params.matchStatus   ?? null,
+    query:          params.query         || null,
+    yearFrom:       params.yearFrom      ?? null,
+    yearTo:         params.yearTo        ?? null,
+    genre:          params.genre         ?? null,
+    country:        params.country       ?? null,
+    personId:       params.personId      ?? null,
+    minUserRating:  params.minUserRating ?? null,
+    isFavorite:     params.isFavorite    ?? null,
+    tagIdsJson:     tagIdsJson,
+    minPlayCount:   params.minPlayCount  ?? null,
+    sortField:      params.sortField     ?? "title",
+    sortOrder:      params.sortOrder     ?? "asc",
+    attentionFilter: params.attentionFilter ?? null,
   });
   return rows.map(toSummary);
 }
 
 export async function getWork(workId: number): Promise<WorkDetail | null> {
-  const row = await invoke<WorkDetailRow | null>("get_work", { work_id: workId });
+  const row = await invoke<WorkDetailRow | null>("get_work", { workId });
   if (!row) return null;
   return {
     ...row,
     genres: row.genres_json ? JSON.parse(row.genres_json) : [],
   };
+}
+
+export async function getFilterOptions(): Promise<FilterOptions> {
+  return invoke<FilterOptions>("get_filter_options");
 }

@@ -45,13 +45,11 @@ export async function listSeries(): Promise<SeriesSummary[]> {
 }
 
 export async function getSeriesDetail(seriesId: number): Promise<SeriesDetail | null> {
-  return invoke<SeriesDetail | null>("get_series", { series_id: seriesId });
+  return invoke<SeriesDetail | null>("get_series", { seriesId });
 }
 
 export async function getSeriesWorks(seriesId: number): Promise<WorkSummary[]> {
-  const rows = await invoke<WorkSummaryRow[]>("get_series_works", {
-    series_id: seriesId,
-  });
+  const rows = await invoke<WorkSummaryRow[]>("get_series_works", { seriesId });
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
@@ -65,13 +63,14 @@ export async function getSeriesWorks(seriesId: number): Promise<WorkSummary[]> {
     runtimeSec: r.runtime_sec,
     externalRating: r.external_rating,
     matchStatus: r.match_status as WorkSummary["matchStatus"],
+    resumePositionSec: null,
   }));
 }
 
 export async function createSeries(title: string, seriesType?: string): Promise<number> {
   return invoke<number>("create_series", {
     title,
-    series_type: seriesType ?? null,
+    seriesType: seriesType ?? null,
   });
 }
 
@@ -81,16 +80,16 @@ export async function addToSeries(
   sortOrder?: number,
 ): Promise<void> {
   return invoke("add_to_series", {
-    series_id: seriesId,
-    work_id: workId,
-    sort_order: sortOrder ?? null,
+    seriesId,
+    workId,
+    sortOrder: sortOrder ?? null,
   });
 }
 
 export async function removeFromSeries(seriesId: number, workId: number): Promise<void> {
-  return invoke("remove_from_series", { series_id: seriesId, work_id: workId });
+  return invoke("remove_from_series", { seriesId, workId });
 }
 
 export async function deleteSeries(seriesId: number): Promise<void> {
-  return invoke("delete_series", { series_id: seriesId });
+  return invoke("delete_series", { seriesId });
 }

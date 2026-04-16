@@ -1,5 +1,6 @@
 mod cache;
 mod db;
+mod ffmpeg_path;
 mod models;
 mod services;
 mod commands;
@@ -16,6 +17,14 @@ pub fn run() {
             let app_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_dir)?;
             let db_path = app_dir.join("cinemantis.db");
+
+            // pending restore があれば先にスワップ
+            let pending_restore = app_dir.join("cinemantis_restore_pending.db");
+            if pending_restore.exists() {
+                let _ = std::fs::copy(&pending_restore, &db_path);
+                let _ = std::fs::remove_file(&pending_restore);
+            }
+
             db::init(&db_path)?;
             app.manage(db::DbState::new(&db_path)?);
             Ok(())
@@ -28,6 +37,7 @@ pub fn run() {
             // Works
             commands::work::list_works,
             commands::work::get_work,
+            commands::work::get_filter_options,
             // User stats
             commands::stats::update_user_stats,
             commands::stats::get_user_stats,
@@ -65,10 +75,35 @@ pub fn run() {
             commands::series::add_to_series,
             commands::series::remove_from_series,
             commands::series::delete_series,
+            // Backup
+            commands::backup::backup_database,
+            commands::backup::list_backups,
+            commands::backup::restore_database,
+            commands::backup::delete_backup,
+            // Bulk
+            commands::bulk::get_attention_stats,
+            commands::bulk::bulk_set_watch_status,
+            commands::bulk::bulk_set_favorite,
+            commands::bulk::bulk_add_tag,
+            commands::bulk::bulk_remove_tag,
+            commands::bulk::bulk_set_match_status,
+            // Watch
+            commands::watch::open_work_file,
+            commands::watch::set_watch_status,
+            commands::watch::update_resume_position,
             // Settings
             commands::settings::get_setting,
             commands::settings::set_setting,
             commands::settings::get_tmdb_api_key_masked,
+            // Audit
+            commands::audit::get_duplicate_groups,
+            commands::audit::get_integrity_report,
+            // Work (delete)
+            commands::work::delete_work,
+            // TMDb repair
+            commands::tmdb::repair_fetch_persons,
+            // Platform
+            commands::platform::create_desktop_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineMantis");

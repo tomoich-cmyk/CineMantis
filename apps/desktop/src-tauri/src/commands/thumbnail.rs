@@ -5,6 +5,11 @@ use serde::Serialize;
 use std::process::Command;
 use tauri::{AppHandle, Emitter, State};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 // ─── 公開イベント型 ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone)]
@@ -24,19 +29,22 @@ pub struct ThumbBatchProgress {
 
 /// ffmpeg で動画の指定秒数からフレームを JPEG として書き出す
 fn run_ffmpeg(input_path: &str, offset_sec: f64, output_path: &str) -> bool {
-    Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-ss", &format!("{offset_sec:.3}"),
-            "-i", input_path,
-            "-vframes", "1",
-            "-vf", "scale=480:-2",
-            "-q:v", "3",
-            output_path,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+    let ffmpeg = crate::ffmpeg_path::find_ffmpeg();
+    let mut cmd = Command::new(&ffmpeg);
+    cmd.args([
+        "-y",
+        "-ss", &format!("{offset_sec:.3}"),
+        "-i", input_path,
+        "-vframes", "1",
+        "-vf", "scale=480:-2",
+        "-q:v", "3",
+        output_path,
+    ])
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.status()
         .map(|s| s.success())
         .unwrap_or(false)
 }

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { clsx } from "clsx";
 import { useTmdbCandidates, useApplyTmdbMatch, type CandidateSearchParams } from "@/hooks/useTmdb";
 import { tmdbPosterUrl, type TmdbCandidate } from "@/api/tmdb";

@@ -30,7 +30,7 @@ pub struct WorkPersonRow {
 /// role_filter: "director" | "writer" | "cast" | null（全ロール）
 #[tauri::command]
 pub fn list_persons(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     role_filter: Option<String>,
 ) -> Result<Vec<PersonSummaryRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -68,7 +68,7 @@ pub fn list_persons(
 /// 作品に紐付く人物一覧（DetailPane 表示用）
 #[tauri::command]
 pub fn get_work_persons(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     work_id: i64,
 ) -> Result<Vec<WorkPersonRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -108,7 +108,7 @@ pub fn get_work_persons(
 /// 特定人物が関わる作品一覧
 #[tauri::command]
 pub fn get_person_works(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     person_id: i64,
     role_filter: Option<String>,
 ) -> Result<Vec<crate::commands::work::WorkSummaryRow>, String> {
@@ -120,7 +120,7 @@ pub fn get_person_works(
                     us.user_rating, COALESCE(us.play_count, 0),
                     COALESCE(us.watch_status, 'unwatched'),
                     COALESCE(us.is_favorite, 0),
-                    w.runtime_sec, w.external_rating, w.match_status
+                    w.runtime_sec, us.resume_position_sec, w.external_rating, w.match_status
              FROM work_persons wp
              JOIN works w ON w.id = wp.work_id
              LEFT JOIN user_stats us ON us.work_id = w.id
@@ -143,8 +143,9 @@ pub fn get_person_works(
                 watch_status: row.get(7)?,
                 is_favorite: row.get::<_, i64>(8)? != 0,
                 runtime_sec: row.get(9)?,
-                external_rating: row.get(10)?,
-                match_status: row.get(11)?,
+                resume_position_sec: row.get(10)?,
+                external_rating: row.get(11)?,
+                match_status: row.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -157,7 +158,7 @@ pub fn get_person_works(
 /// 人物 1 件の詳細
 #[tauri::command]
 pub fn get_person(
-    state: State<DbState>,
+    state: State<'_, DbState>,
     person_id: i64,
 ) -> Result<Option<PersonSummaryRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;

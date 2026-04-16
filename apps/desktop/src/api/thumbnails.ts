@@ -8,7 +8,7 @@ export interface ThumbBatchProgress {
 
 /** 単体サムネイル生成。生成済みなら即パスを返す */
 export async function generateThumbnail(workId: number): Promise<string> {
-  return invoke<string>("generate_thumbnail", { work_id: workId });
+  return invoke<string>("generate_thumbnail", { workId });
 }
 
 /**
@@ -18,9 +18,7 @@ export async function generateThumbnail(workId: number): Promise<string> {
 export async function generateThumbnailsBatch(
   sourceId: number | null = null
 ): Promise<ThumbBatchProgress> {
-  return invoke<ThumbBatchProgress>("generate_thumbnails_batch", {
-    source_id: sourceId,
-  });
+  return invoke<ThumbBatchProgress>("generate_thumbnails_batch", { sourceId });
 }
 
 /** thumb_path を手動で上書き */
@@ -28,5 +26,5 @@ export async function setCustomThumb(
   workId: number,
   path: string
 ): Promise<void> {
-  return invoke("set_custom_thumb", { work_id: workId, path });
+  return invoke("set_custom_thumb", { workId, path });
 }

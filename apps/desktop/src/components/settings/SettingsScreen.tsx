@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getSetting, setSetting, getTmdbApiKeyMasked } from "@/api/settings";
+import { setSetting, getTmdbApiKeyMasked } from "@/api/settings";
 import { autoMatchSource } from "@/api/tmdb";
 
 export function SettingsScreen() {
