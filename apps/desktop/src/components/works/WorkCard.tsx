@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { clsx } from "clsx";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { WorkSummary } from "@cinemantis/shared-types";
 import { StarRating } from "@/components/common/StarRating";
 import { useOpenWorkFile } from "@/hooks/useWatch";
@@ -42,10 +43,9 @@ function Thumbnail({ src, alt }: { src: string | null; alt: string }) {
   );
 }
 
-/** ローカルパスを Tauri の asset:// URL に変換 */
+/** ローカルパスを Tauri の asset URL に変換（Tauri v2 公式 API 使用） */
 function toAssetUrl(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  return `asset://localhost/${normalized.replace(/^\//, "")}`;
+  return convertFileSrc(path);
 }
 
 /** 秒数を "h:mm:ss" 形式にフォーマット */

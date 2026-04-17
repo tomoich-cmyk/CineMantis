@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { clsx } from "clsx";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useSeriesList, useCreateSeries, useDeleteSeries } from "@/hooks/useSeries";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { SeriesSummary } from "@/api/series";
@@ -7,8 +8,7 @@ import type { SeriesSummary } from "@/api/series";
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
 function toAssetUrl(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  return `asset://localhost/${normalized.replace(/^\//, "")}`;
+  return convertFileSrc(path);
 }
 
 const SERIES_TYPE_LABELS: Record<string, { label: string; color: string }> = {

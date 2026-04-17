@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats } from "@/hooks/useWorks";
 import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
@@ -17,8 +18,7 @@ const ROLE_LABELS: Record<string, string> = {
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
 function toAssetUrl(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  return `asset://localhost/${normalized.replace(/^\//, "")}`;
+  return convertFileSrc(path);
 }
 
 function WorkImage({ src, alt }: { src: string | null; alt: string }) {
