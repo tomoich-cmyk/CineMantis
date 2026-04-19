@@ -67,6 +67,10 @@ export async function autoMatchSource(
   return invoke<MetadataBatchProgress>("auto_match_source", { sourceId });
 }
 
+export async function testTmdbApi(): Promise<string> {
+  return invoke<string>("test_tmdb_api");
+}
+
 export async function applyTmdbMatch(
   workId: number,
   tmdbId: number,

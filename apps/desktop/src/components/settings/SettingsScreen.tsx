@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { setSetting, getTmdbApiKeyMasked } from "@/api/settings";
-import { autoMatchSource } from "@/api/tmdb";
+import { autoMatchSource, testTmdbApi } from "@/api/tmdb";
 
 export function SettingsScreen() {
   const qc = useQueryClient();
@@ -25,6 +25,20 @@ export function SettingsScreen() {
   });
 
   // ── 全件一括照合 ──────────────────────────────────────────────────────────
+  const [apiTestResult, setApiTestResult] = useState<string | null>(null);
+  const [apiTestError, setApiTestError] = useState<string | null>(null);
+
+  async function handleApiTest() {
+    setApiTestResult(null);
+    setApiTestError(null);
+    try {
+      const r = await testTmdbApi();
+      setApiTestResult(r);
+    } catch (e) {
+      setApiTestError(String(e));
+    }
+  }
+
   const [matching, setMatching] = useState(false);
   const [matchResult, setMatchResult] = useState<{
     matched: number; total: number; failed: number; last_error?: string;
@@ -111,8 +125,25 @@ export function SettingsScreen() {
             <h2 className="text-sm font-medium text-gray-200">メタデータ一括照合</h2>
             <p className="text-xs text-gray-500 mt-0.5">
               未照合の作品すべてに対して TMDb 照合を実行します。
-              信頼度 90 以上の候補が自動適用されます。
+              信頼度 75 以上の候補が自動適用されます。（最大 10 件ずつ）
             </p>
+          </div>
+
+          {/* API 疎通テスト */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleApiTest}
+              disabled={!maskedKey}
+              className="self-start px-3 py-1.5 text-xs border border-gray-700 text-gray-400 hover:bg-gray-800 rounded transition-colors disabled:opacity-40"
+            >
+              API テスト
+            </button>
+            {apiTestResult && (
+              <span className="text-xs text-mantis-400 break-all">{apiTestResult}</span>
+            )}
+            {apiTestError && (
+              <span className="text-xs text-red-400 break-all">{apiTestError}</span>
+            )}
           </div>
 
           <button
