@@ -2,7 +2,7 @@ use crate::models::tmdb::*;
 use crate::services::title_parser::ParsedTitle;
 
 /// 自動適用しきい値
-pub const THRESHOLD_AUTO: i32 = 90;
+pub const THRESHOLD_AUTO: i32 = 75;
 /// 候補提示しきい値（これ以上なら candidate として返す）
 pub const THRESHOLD_CANDIDATE: i32 = 40;
 
@@ -23,20 +23,20 @@ pub fn score_movie(result: &TmdbSearchMovie, parsed: &ParsedTitle) -> TmdbCandid
 
     // タイトル一致
     if result_title == query_title {
-        score += 50;
+        score += 65;
         reasons.push("title exact match".to_string());
     } else if normalize_str(&result_title) == normalize_str(&query_title) {
-        score += 35;
+        score += 55;
         reasons.push("normalized title match".to_string());
     } else if result_title.contains(&query_title) || query_title.contains(&result_title) {
-        score += 20;
+        score += 25;
         reasons.push("title partial match".to_string());
     }
 
     // 原題一致
     if !result_orig.is_empty() {
         if normalize_str(&result_orig) == normalize_str(&query_title) {
-            score += 10;
+            score += 15;
             reasons.push("original title match".to_string());
         }
     }
@@ -93,18 +93,18 @@ pub fn score_tv(result: &TmdbSearchTv, parsed: &ParsedTitle) -> TmdbCandidate {
         .to_lowercase();
 
     if result_title == query_title {
-        score += 50;
+        score += 65;
         reasons.push("title exact match".to_string());
     } else if normalize_str(&result_title) == normalize_str(&query_title) {
-        score += 35;
+        score += 55;
         reasons.push("normalized title match".to_string());
     } else if result_title.contains(&query_title) || query_title.contains(&result_title) {
-        score += 20;
+        score += 25;
         reasons.push("title partial match".to_string());
     }
 
     if !result_orig.is_empty() && normalize_str(&result_orig) == normalize_str(&query_title) {
-        score += 10;
+        score += 15;
         reasons.push("original title match".to_string());
     }
 

@@ -62,30 +62,44 @@ async fn fetch_candidates(
 
     // 映画検索
     if search_movie {
-        if let Ok(results) = client.search_movie(&parsed.normalized_title, year).await {
-            for r in &results {
-                all.push(score_movie(r, &parsed));
-            }
-            // 年ヒントがある場合は年なし検索も追加
-            if year.is_some() {
-                if let Ok(results2) = client.search_movie(&parsed.normalized_title, None).await {
-                    for r in &results2 {
-                        let scored = score_movie(r, &parsed);
-                        if !all.iter().any(|c| c.tmdb_id == scored.tmdb_id) {
-                            all.push(scored);
+        eprintln!("[TMDb] search_movie: '{}' year={:?}", &parsed.normalized_title, year);
+        match client.search_movie(&parsed.normalized_title, year).await {
+            Ok(results) => {
+                eprintln!("[TMDb] got {} movie results", results.len());
+                for r in &results {
+                    let c = score_movie(r, &parsed);
+                    eprintln!("[TMDb]   -> '{}' confidence={}", r.title, c.confidence);
+                    all.push(c);
+                }
+                // 年ヒントがある場合は年なし検索も追加
+                if year.is_some() {
+                    if let Ok(results2) = client.search_movie(&parsed.normalized_title, None).await {
+                        for r in &results2 {
+                            let scored = score_movie(r, &parsed);
+                            if !all.iter().any(|c| c.tmdb_id == scored.tmdb_id) {
+                                all.push(scored);
+                            }
                         }
                     }
                 }
             }
+            Err(e) => eprintln!("[TMDb] movie search error: {}", e),
         }
     }
 
     // TV 検索
     if search_tv {
-        if let Ok(results) = client.search_tv(&parsed.normalized_title, year).await {
-            for r in &results {
-                all.push(score_tv(r, &parsed));
+        eprintln!("[TMDb] search_tv: '{}' year={:?}", &parsed.normalized_title, year);
+        match client.search_tv(&parsed.normalized_title, year).await {
+            Ok(results) => {
+                eprintln!("[TMDb] got {} tv results", results.len());
+                for r in &results {
+                    let c = score_tv(r, &parsed);
+                    eprintln!("[TMDb]   -> '{}' confidence={}", r.name, c.confidence);
+                    all.push(c);
+                }
             }
+            Err(e) => eprintln!("[TMDb] tv search error: {}", e),
         }
     }
 
@@ -373,7 +387,37 @@ pub async fn auto_match_source(
     state: State<'_, DbState>,
     source_id: Option<i64>,
 ) -> Result<MetadataBatchProgress, String> {
-    auto_match_source_inner(&app, &state, source_id).await
+    // Tauri の Tokio ランタイムとは独立したスレッド＋ランタイムで実行
+    // （rustls の TLS 初期化が Tauri ランタイム上でハングするのを回避）
+    let app2 = app.clone();
+    let db2 = state.inner().clone();
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                rt.block_on(auto_match_source_inner(&app2, &db2, source_id))
+            }));
+            match result {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    Err(format!("panic: {}", msg))
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?
+        .join()
+        .map_err(|e| format!("thread join failed: {:?}", e))?
 }
 
 /// 手動選択した候補を反映
@@ -476,19 +520,28 @@ pub async fn auto_match_source_inner(
                AND w.match_status != 'locked'
              {base_filter}
              ORDER BY w.id
-             LIMIT 500"
+             LIMIT 10"
         );
 
         let conn = db.0.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let result: Vec<_> = stmt
-            .query_map(
-                rusqlite::params![source_id.unwrap_or(0)],
+        let result: Vec<_> = if let Some(sid) = source_id {
+            stmt.query_map(
+                rusqlite::params![sid],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .map_err(|e| e.to_string())?
             .flatten()
-            .collect();
+            .collect()
+        } else {
+            stmt.query_map(
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .collect()
+        };
         result
     };
 

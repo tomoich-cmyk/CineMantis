@@ -29,13 +29,18 @@ export function SettingsScreen() {
   const [matchResult, setMatchResult] = useState<{
     matched: number; total: number; failed: number;
   } | null>(null);
+  const [matchError, setMatchError] = useState<string | null>(null);
 
   async function handleBulkMatch() {
     setMatching(true);
     setMatchResult(null);
+    setMatchError(null);
     try {
       const r = await autoMatchSource(null);
       setMatchResult({ matched: r.matched, total: r.total, failed: r.failed });
+    } catch (e) {
+      console.error("auto_match_source error:", e);
+      setMatchError(String(e));
     } finally {
       setMatching(false);
     }
@@ -122,6 +127,12 @@ export function SettingsScreen() {
             <p className="text-xs text-yellow-600">
               TMDb API キーを設定してください
             </p>
+          )}
+
+          {matchError && (
+            <div className="text-xs text-red-400 p-3 bg-surface rounded border border-red-900">
+              エラー: {matchError}
+            </div>
           )}
 
           {matchResult && (
