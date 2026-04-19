@@ -30,7 +30,7 @@ export interface MetadataBatchProgress {
   skipped: number;
   failed: number;
   /** デバッグ用: 最後に発生したエラーや候補なしの理由 */
-  lastError?: string;
+  last_error?: string;
 }
 
 export interface MetadataUpdatedEvent {
