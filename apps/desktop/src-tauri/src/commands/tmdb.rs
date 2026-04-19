@@ -387,37 +387,7 @@ pub async fn auto_match_source(
     state: State<'_, DbState>,
     source_id: Option<i64>,
 ) -> Result<MetadataBatchProgress, String> {
-    // Tauri の Tokio ランタイムとは独立したスレッド＋ランタイムで実行
-    // （rustls の TLS 初期化が Tauri ランタイム上でハングするのを回避）
-    let app2 = app.clone();
-    let db2 = state.inner().clone();
-    std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                rt.block_on(auto_match_source_inner(&app2, &db2, source_id))
-            }));
-            match result {
-                Ok(r) => r,
-                Err(e) => {
-                    let msg = if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else {
-                        "unknown panic".to_string()
-                    };
-                    Err(format!("panic: {}", msg))
-                }
-            }
-        })
-        .map_err(|e| e.to_string())?
-        .join()
-        .map_err(|e| format!("thread join failed: {:?}", e))?
+    auto_match_source_inner(&app, &state, source_id).await
 }
 
 /// 手動選択した候補を反映
@@ -498,6 +468,7 @@ pub async fn auto_match_source_inner(
             return Ok(MetadataBatchProgress {
                 source_id,
                 processed: 0, total: 0, matched: 0, skipped: 0, failed: 0,
+                last_error: Some("API key not set".to_string()),
             });
         }
     };
@@ -550,17 +521,29 @@ pub async fn auto_match_source_inner(
     let mut matched = 0usize;
     let mut skipped = 0usize;
     let mut failed = 0usize;
+    let mut last_error: Option<String> = None;
 
     let _ = app.emit("metadata:batch_progress", MetadataBatchProgress {
-        source_id, processed, total, matched, skipped, failed,
+        source_id, processed, total, matched, skipped, failed, last_error: None,
     });
 
     for (work_id, title, title_guess, media_kind, year) in targets {
-        let work = WorkForMatch { id: work_id, title, title_guess, media_kind, year, match_status: "unmatched".to_string() };
+        let work = WorkForMatch { id: work_id, title: title.clone(), title_guess, media_kind, year, match_status: "unmatched".to_string() };
         let candidates = fetch_candidates(&client, &work).await;
 
         match best_candidate(&candidates) {
             None => {
+                // 候補なし or スコア不足の診断情報を記録
+                if candidates.is_empty() {
+                    let msg = format!("\"{}\" → no TMDb results", title);
+                    eprintln!("[TMDb] FAIL: {}", msg);
+                    last_error = Some(msg);
+                } else {
+                    let top = &candidates[0];
+                    let msg = format!("\"{}\" → best={} score={} (< threshold)", title, top.title, top.confidence);
+                    eprintln!("[TMDb] FAIL: {}", msg);
+                    last_error = Some(msg);
+                }
                 let conn = db.0.lock().map_err(|e| e.to_string())?;
                 let _ = conn.execute(
                     "UPDATE works SET match_status = 'unmatched' WHERE id = ?1",
@@ -569,6 +552,7 @@ pub async fn auto_match_source_inner(
                 failed += 1;
             }
             Some(best) => {
+                eprintln!("[TMDb] MATCH: \"{}\" → \"{}\" ({})", title, best.title, best.confidence);
                 match apply_match_internal(
                     app, db, &client,
                     work_id, best.tmdb_id, &best.media_type, "auto",
@@ -576,7 +560,11 @@ pub async fn auto_match_source_inner(
                 .await
                 {
                     Ok(_) => matched += 1,
-                    Err(_) => failed += 1,
+                    Err(e) => {
+                        eprintln!("[TMDb] apply_match_internal error: {}", e);
+                        last_error = Some(e);
+                        failed += 1;
+                    }
                 }
             }
         }
@@ -584,13 +572,14 @@ pub async fn auto_match_source_inner(
         processed += 1;
         let _ = app.emit("metadata:batch_progress", MetadataBatchProgress {
             source_id, processed, total, matched, skipped, failed,
+            last_error: last_error.clone(),
         });
 
         // TMDb API レート制限対策（4 req/sec 以内に収める）
         tokio::time::sleep(std::time::Duration::from_millis(260)).await;
     }
 
-    Ok(MetadataBatchProgress { source_id, processed, total, matched, skipped, failed })
+    Ok(MetadataBatchProgress { source_id, processed, total, matched, skipped, failed, last_error })
 }
 
 /// tmdb_id がある作品の人物情報（credits）だけ再取得して保存

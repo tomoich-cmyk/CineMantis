@@ -29,6 +29,8 @@ export interface MetadataBatchProgress {
   matched: number;
   skipped: number;
   failed: number;
+  /** デバッグ用: 最後に発生したエラーや候補なしの理由 */
+  lastError?: string;
 }
 
 export interface MetadataUpdatedEvent {

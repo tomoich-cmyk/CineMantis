@@ -27,7 +27,7 @@ export function SettingsScreen() {
   // ── 全件一括照合 ──────────────────────────────────────────────────────────
   const [matching, setMatching] = useState(false);
   const [matchResult, setMatchResult] = useState<{
-    matched: number; total: number; failed: number;
+    matched: number; total: number; failed: number; lastError?: string;
   } | null>(null);
   const [matchError, setMatchError] = useState<string | null>(null);
 
@@ -37,7 +37,7 @@ export function SettingsScreen() {
     setMatchError(null);
     try {
       const r = await autoMatchSource(null);
-      setMatchResult({ matched: r.matched, total: r.total, failed: r.failed });
+      setMatchResult({ matched: r.matched, total: r.total, failed: r.failed, lastError: r.lastError });
     } catch (e) {
       console.error("auto_match_source error:", e);
       setMatchError(String(e));
@@ -136,11 +136,18 @@ export function SettingsScreen() {
           )}
 
           {matchResult && (
-            <div className="flex items-center gap-3 text-xs p-3 bg-surface rounded border border-subtle">
-              <span className="text-mantis-400">完了</span>
-              <span className="text-gray-400">
-                対象 {matchResult.total} 件 / 照合成功 {matchResult.matched} 件 / 失敗 {matchResult.failed} 件
-              </span>
+            <div className="flex flex-col gap-1 text-xs p-3 bg-surface rounded border border-subtle">
+              <div className="flex items-center gap-3">
+                <span className="text-mantis-400">完了</span>
+                <span className="text-gray-400">
+                  対象 {matchResult.total} 件 / 照合成功 {matchResult.matched} 件 / 失敗 {matchResult.failed} 件
+                </span>
+              </div>
+              {matchResult.lastError && (
+                <span className="text-yellow-600 text-[10px] break-all">
+                  最終エラー: {matchResult.lastError}
+                </span>
+              )}
             </div>
           )}
         </section>

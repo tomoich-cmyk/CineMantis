@@ -149,6 +149,9 @@ pub struct MetadataBatchProgress {
     pub matched: usize,
     pub skipped: usize,
     pub failed: usize,
+    /// デバッグ用: 最初に発生したエラー or 候補なしの理由
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// metadata:updated イベントペイロード
