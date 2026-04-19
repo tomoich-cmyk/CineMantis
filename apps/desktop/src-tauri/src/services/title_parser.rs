@@ -68,12 +68,41 @@ fn re_junk() -> &'static Regex {
             | 10bit|8bit|hdr|hdr10|dv|dolby
             | yts|yify|rarbg|ettv|fgt|eztv|publichd
             )\b
-            | \[.*?\]        # [タグ]
-            | \((?!\d{4}\)) .*? \)   # (タグ) ただし年号(4桁)は除外
+            | \[.*?\]
             "
         )
         .unwrap()
     })
+}
+
+/// (タグ) を除去するが (1999) のような4桁年号は残す
+fn remove_paren_tags(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '(' {
+            let mut inner = String::new();
+            let mut closed = false;
+            for d in chars.by_ref() {
+                if d == ')' { closed = true; break; }
+                inner.push(d);
+            }
+            if closed {
+                let trimmed = inner.trim();
+                // 4桁年号 (1999) は残す
+                if trimmed.len() == 4 && trimmed.chars().all(|x| x.is_ascii_digit()) {
+                    result.push('(');
+                    result.push_str(trimmed);
+                    result.push(')');
+                } else {
+                    result.push(' ');
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn re_separator() -> &'static Regex {
@@ -195,13 +224,15 @@ fn normalize_title(s: &str) -> String {
     let no_year = re_year().replace_all(&no_ep, " ");
     // 3. ジャンクタグを除去
     let no_junk = re_junk().replace_all(&no_year, " ");
-    // 4. シーズン表記を除去
-    let no_season = re_season_only().replace_all(&no_junk, " ");
-    // 5. パート表記を除去
+    // 4. (タグ) 除去（年号は除く）
+    let no_paren = remove_paren_tags(&no_junk);
+    // 5. シーズン表記を除去
+    let no_season = re_season_only().replace_all(&no_paren, " ");
+    // 6. パート表記を除去
     let no_part = re_part().replace_all(&no_season, " ");
-    // 6. セパレーターをスペースに
+    // 7. セパレーターをスペースに
     let spaced = re_separator().replace_all(&no_part, " ");
-    // 7. 折りたたみ
+    // 8. 折りたたみ
     let collapsed: String = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed.trim().to_string()
 }

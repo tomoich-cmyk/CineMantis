@@ -14,9 +14,9 @@ pub struct TmdbClient {
 impl TmdbClient {
     pub fn new(api_key: String) -> Self {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(12))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("reqwest client build failed");
+            .unwrap_or_else(|_| Client::new());
         Self { client, api_key }
     }
 

@@ -25,9 +25,15 @@ function Thumbnail({ src, alt }: { src: string | null; alt: string }) {
   const [failed, setFailed] = useState(false);
 
   if (!src || failed) {
+    const url = src ? toAssetUrl(src) : null;
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-gradient-to-b from-surface-hover to-surface">
+      <div className="w-full h-full flex flex-col items-center justify-center gap-1 bg-gradient-to-b from-surface-hover to-surface overflow-hidden">
         <span className="text-3xl opacity-20">🎬</span>
+        {url && (
+          <span className="text-[8px] text-red-400 break-all px-1 opacity-70 leading-tight">
+            {url}
+          </span>
+        )}
       </div>
     );
   }
@@ -44,8 +50,18 @@ function Thumbnail({ src, alt }: { src: string | null; alt: string }) {
 }
 
 /** ローカルパスを Tauri の asset URL に変換（Tauri v2 公式 API 使用） */
+let _debugLogged = false;
 function toAssetUrl(path: string): string {
-  return convertFileSrc(path);
+  const url = convertFileSrc(path);
+  if (!_debugLogged) {
+    _debugLogged = true;
+    console.log("[CineMantis] toAssetUrl input:", path);
+    console.log("[CineMantis] toAssetUrl output:", url);
+    // fetch でアクセス可能か確認
+    fetch(url).then(r => console.log("[CineMantis] fetch status:", r.status, r.url))
+              .catch(e => console.error("[CineMantis] fetch error:", e));
+  }
+  return url;
 }
 
 /** 秒数を "h:mm:ss" 形式にフォーマット */
