@@ -21,23 +21,19 @@ pub fn score_movie(result: &TmdbSearchMovie, parsed: &ParsedTitle) -> TmdbCandid
         .unwrap_or("")
         .to_lowercase();
 
-    // タイトル一致
-    if result_title == query_title {
-        score += 65;
-        reasons.push("title exact match".to_string());
-    } else if normalize_str(&result_title) == normalize_str(&query_title) {
-        score += 55;
-        reasons.push("normalized title match".to_string());
-    } else if result_title.contains(&query_title) || query_title.contains(&result_title) {
-        score += 25;
-        reasons.push("title partial match".to_string());
-    }
-
-    // 原題一致
-    if !result_orig.is_empty() {
-        if normalize_str(&result_orig) == normalize_str(&query_title) {
-            score += 15;
-            reasons.push("original title match".to_string());
+    // タイトル一致（language=ja-JP では title が日本語になるため、
+    // title と original_title の両方を同等の重みで照合する）
+    let title_score = title_match_score(&result_title, &query_title);
+    let orig_score  = if result_orig.is_empty() { 0 } else {
+        title_match_score(&result_orig, &query_title)
+    };
+    let best_title_score = title_score.max(orig_score);
+    if best_title_score > 0 {
+        score += best_title_score;
+        if title_score >= orig_score {
+            reasons.push(format!("title match({})", best_title_score));
+        } else {
+            reasons.push(format!("orig_title match({})", best_title_score));
         }
     }
 
@@ -92,20 +88,19 @@ pub fn score_tv(result: &TmdbSearchTv, parsed: &ParsedTitle) -> TmdbCandidate {
         .unwrap_or("")
         .to_lowercase();
 
-    if result_title == query_title {
-        score += 65;
-        reasons.push("title exact match".to_string());
-    } else if normalize_str(&result_title) == normalize_str(&query_title) {
-        score += 55;
-        reasons.push("normalized title match".to_string());
-    } else if result_title.contains(&query_title) || query_title.contains(&result_title) {
-        score += 25;
-        reasons.push("title partial match".to_string());
-    }
-
-    if !result_orig.is_empty() && normalize_str(&result_orig) == normalize_str(&query_title) {
-        score += 15;
-        reasons.push("original title match".to_string());
+    // title / original_name 両方を同等の重みで照合
+    let title_score = title_match_score(&result_title, &query_title);
+    let orig_score  = if result_orig.is_empty() { 0 } else {
+        title_match_score(&result_orig, &query_title)
+    };
+    let best_title_score = title_score.max(orig_score);
+    if best_title_score > 0 {
+        score += best_title_score;
+        if title_score >= orig_score {
+            reasons.push(format!("title match({})", best_title_score));
+        } else {
+            reasons.push(format!("orig_title match({})", best_title_score));
+        }
     }
 
     let result_year = parse_year_from_date(result.first_air_date.as_deref());
@@ -165,6 +160,20 @@ pub fn best_candidate(candidates: &[TmdbCandidate]) -> Option<&TmdbCandidate> {
 }
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
+
+/// タイトル一致スコアを返す（完全一致65 / 正規化一致55 / 部分一致25 / 不一致0）
+/// result_title と query_title はどちらも既に to_lowercase() 済みであること。
+fn title_match_score(result_title: &str, query_title: &str) -> i32 {
+    if result_title == query_title {
+        65
+    } else if normalize_str(result_title) == normalize_str(query_title) {
+        55
+    } else if result_title.contains(query_title) || query_title.contains(result_title) {
+        25
+    } else {
+        0
+    }
+}
 
 /// 比較用正規化（小文字・記号除去・スペース折りたたみ）
 pub fn normalize_str(s: &str) -> String {
