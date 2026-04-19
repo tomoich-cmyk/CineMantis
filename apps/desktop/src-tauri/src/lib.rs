@@ -58,6 +58,7 @@ pub fn run() {
             commands::tmdb::search_tmdb_candidates,
             commands::tmdb::auto_match_work,
             commands::tmdb::auto_match_source,
+            commands::tmdb::test_tmdb_api,
             commands::tmdb::apply_tmdb_match,
             commands::tmdb::refresh_tmdb_metadata,
             commands::tmdb::clear_tmdb_match,

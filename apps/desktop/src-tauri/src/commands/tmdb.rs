@@ -582,6 +582,25 @@ pub async fn auto_match_source_inner(
     Ok(MetadataBatchProgress { source_id, processed, total, matched, skipped, failed, last_error })
 }
 
+/// TMDb API の疎通テスト（"Unfaithful" を検索して最初の候補を返す）
+#[tauri::command]
+pub async fn test_tmdb_api(
+    state: State<'_, DbState>,
+) -> Result<String, String> {
+    let api_key = get_api_key_internal(&state)?;
+    let client = TmdbClient::new(api_key);
+    match client.search_movie("Unfaithful", Some(2002)).await {
+        Ok(results) => {
+            if results.is_empty() {
+                Ok("API OK - no results for 'Unfaithful 2002'".to_string())
+            } else {
+                Ok(format!("API OK - first result: '{}' (id={})", results[0].title, results[0].id))
+            }
+        }
+        Err(e) => Err(format!("API FAIL: {}", e)),
+    }
+}
+
 /// tmdb_id がある作品の人物情報（credits）だけ再取得して保存
 #[tauri::command]
 pub async fn repair_fetch_persons(
