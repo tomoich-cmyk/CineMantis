@@ -27,7 +27,7 @@ export function SettingsScreen() {
   // ── 全件一括照合 ──────────────────────────────────────────────────────────
   const [matching, setMatching] = useState(false);
   const [matchResult, setMatchResult] = useState<{
-    matched: number; total: number; failed: number; lastError?: string;
+    matched: number; total: number; failed: number; last_error?: string;
   } | null>(null);
   const [matchError, setMatchError] = useState<string | null>(null);
 
@@ -37,7 +37,7 @@ export function SettingsScreen() {
     setMatchError(null);
     try {
       const r = await autoMatchSource(null);
-      setMatchResult({ matched: r.matched, total: r.total, failed: r.failed, lastError: r.lastError });
+      setMatchResult({ matched: r.matched, total: r.total, failed: r.failed, last_error: r.last_error });
     } catch (e) {
       console.error("auto_match_source error:", e);
       setMatchError(String(e));
@@ -143,9 +143,9 @@ export function SettingsScreen() {
                   対象 {matchResult.total} 件 / 照合成功 {matchResult.matched} 件 / 失敗 {matchResult.failed} 件
                 </span>
               </div>
-              {matchResult.lastError && (
+              {matchResult.last_error && (
                 <span className="text-yellow-600 text-[10px] break-all">
-                  最終エラー: {matchResult.lastError}
+                  最終エラー: {matchResult.last_error}
                 </span>
               )}
             </div>
