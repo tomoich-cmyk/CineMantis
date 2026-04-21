@@ -114,7 +114,7 @@ async fn apply_match_internal(
     work_id: i64,
     tmdb_id: i64,
     media_type: &str,
-    new_match_status: &str,  // "auto" | "manual" | "locked"
+    new_match_status: &str,  // "matched" | "locked"
 ) -> Result<AutoMatchResult, String> {
     // シリーズ解析用に照合前のオリジナルタイトルを先取り
     let orig_work_title: String = {
@@ -369,7 +369,7 @@ pub async fn auto_match_work(
         Some(best) => {
             let result = apply_match_internal(
                 &app, &state, &client,
-                work_id, best.tmdb_id, &best.media_type, "auto",
+                work_id, best.tmdb_id, &best.media_type, "matched",
             )
             .await?;
             Ok(AutoMatchResult {
@@ -402,7 +402,7 @@ pub async fn apply_tmdb_match(
 ) -> Result<AutoMatchResult, String> {
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
-    let match_status = if lock { "locked" } else { "manual" };
+    let match_status = if lock { "locked" } else { "matched" };
     apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, match_status).await
 }
 
@@ -428,7 +428,7 @@ pub async fn refresh_tmdb_metadata(
         .ok_or_else(|| "tmdb_id not set".to_string())?
     };
 
-    apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, "auto").await
+    apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, "matched").await
 }
 
 /// 照合を解除する（poster 削除・match_status を unmatched に戻す）
@@ -555,7 +555,7 @@ pub async fn auto_match_source_inner(
                 eprintln!("[TMDb] MATCH: \"{}\" → \"{}\" ({})", title, best.title, best.confidence);
                 match apply_match_internal(
                     app, db, &client,
-                    work_id, best.tmdb_id, &best.media_type, "auto",
+                    work_id, best.tmdb_id, &best.media_type, "matched",
                 )
                 .await
                 {
