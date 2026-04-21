@@ -6,6 +6,7 @@ export interface SourceRow {
   name: string;
   root_path: string;
   source_type: string;
+  media_kind: string;
   is_enabled: boolean;
   status: string;
   last_scan_at: string | null;
@@ -18,6 +19,7 @@ function toSource(r: SourceRow): Source {
     name: r.name,
     rootPath: r.root_path,
     sourceType: r.source_type as Source["sourceType"],
+    mediaKind: (r.media_kind ?? "unknown") as Source["mediaKind"],
     isEnabled: r.is_enabled,
     status: r.status as Source["status"],
     lastScanAt: r.last_scan_at,
@@ -34,6 +36,7 @@ export async function addSource(payload: {
   name: string;
   root_path: string;
   source_type: string;
+  media_kind: string;
 }): Promise<number> {
   return invoke<number>("add_source", { payload });
 }

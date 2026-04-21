@@ -10,6 +10,18 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   external_hdd: "外付けHDD",
 };
 
+const MEDIA_KIND_LABELS: Record<string, string> = {
+  movie: "映画",
+  tv: "ドラマ",
+  unknown: "自動判定",
+};
+
+const MEDIA_KIND_CLASS: Record<string, string> = {
+  movie: "text-blue-400 border-blue-700 bg-blue-900/20",
+  tv: "text-purple-400 border-purple-700 bg-purple-900/20",
+  unknown: "text-gray-500 border-gray-700",
+};
+
 const STATUS_CLASS: Record<string, string> = {
   online: "text-mantis-400",
   offline: "text-gray-600",
@@ -49,6 +61,14 @@ function SourceCard({
         <p className="text-xs text-gray-500 truncate mt-0.5">{source.rootPath}</p>
         <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-600">
           <span>{SOURCE_TYPE_LABELS[source.sourceType] ?? source.sourceType}</span>
+          <span
+            className={clsx(
+              "px-1.5 py-0.5 rounded border text-xs",
+              MEDIA_KIND_CLASS[source.mediaKind] ?? MEDIA_KIND_CLASS.unknown
+            )}
+          >
+            {MEDIA_KIND_LABELS[source.mediaKind] ?? source.mediaKind}
+          </span>
           {source.lastScanAt && (
             <span>
               最終スキャン: {new Date(source.lastScanAt).toLocaleString("ja-JP")}
@@ -80,6 +100,7 @@ function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [sourceType, setSourceType] = useState<"local" | "nas" | "external_hdd">("local");
+  const [mediaKind, setMediaKind] = useState<"movie" | "tv" | "unknown">("unknown");
   const { mutate: addSource, isPending } = useAddSource();
 
   async function pickFolder() {
@@ -97,7 +118,7 @@ function AddSourceDialog({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     if (!path) return;
     addSource(
-      { name: name || path, root_path: path, source_type: sourceType },
+      { name: name || path, root_path: path, source_type: sourceType, media_kind: mediaKind },
       { onSuccess: onClose }
     );
   }
@@ -164,6 +185,31 @@ function AddSourceDialog({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Media Kind */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs text-gray-400">ライブラリ種別</label>
+          <div className="flex gap-2">
+            {(["movie", "tv", "unknown"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setMediaKind(k)}
+                className={clsx(
+                  "flex-1 py-1.5 text-xs rounded border transition-colors",
+                  mediaKind === k
+                    ? "border-mantis-600 bg-mantis-700/20 text-mantis-400"
+                    : "border-subtle text-gray-500 hover:border-gray-500"
+                )}
+              >
+                {MEDIA_KIND_LABELS[k]}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-600 leading-relaxed">
+            「自動判定」はファイル名から映画／ドラマを推定します。
+          </p>
         </div>
 
         {/* Actions */}

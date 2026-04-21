@@ -8,6 +8,8 @@ pub struct SourceRow {
     pub name: String,
     pub root_path: String,
     pub source_type: String,
+    /// "movie" | "tv" | "unknown"
+    pub media_kind: String,
     pub is_enabled: bool,
     pub status: String,
     pub last_scan_at: Option<String>,
@@ -19,6 +21,13 @@ pub struct AddSourcePayload {
     pub name: String,
     pub root_path: String,
     pub source_type: String,
+    /// "movie" | "tv" | "unknown"
+    #[serde(default = "default_media_kind")]
+    pub media_kind: String,
+}
+
+fn default_media_kind() -> String {
+    "unknown".to_string()
 }
 
 #[tauri::command]
@@ -26,7 +35,8 @@ pub fn list_sources(state: State<DbState>) -> Result<Vec<SourceRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, root_path, source_type, is_enabled, status, last_scan_at, last_seen_at
+            "SELECT id, name, root_path, source_type, media_kind, is_enabled, status,
+                    last_scan_at, last_seen_at
              FROM sources ORDER BY name",
         )
         .map_err(|e| e.to_string())?;
@@ -38,10 +48,11 @@ pub fn list_sources(state: State<DbState>) -> Result<Vec<SourceRow>, String> {
                 name: row.get(1)?,
                 root_path: row.get(2)?,
                 source_type: row.get(3)?,
-                is_enabled: row.get::<_, i64>(4)? != 0,
-                status: row.get(5)?,
-                last_scan_at: row.get(6)?,
-                last_seen_at: row.get(7)?,
+                media_kind: row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "unknown".to_string()),
+                is_enabled: row.get::<_, i64>(5)? != 0,
+                status: row.get(6)?,
+                last_scan_at: row.get(7)?,
+                last_seen_at: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -53,10 +64,15 @@ pub fn list_sources(state: State<DbState>) -> Result<Vec<SourceRow>, String> {
 
 #[tauri::command]
 pub fn add_source(state: State<DbState>, payload: AddSourcePayload) -> Result<i64, String> {
+    // media_kind の値を検証
+    let media_kind = match payload.media_kind.as_str() {
+        "movie" | "tv" | "unknown" => payload.media_kind.clone(),
+        _ => "unknown".to_string(),
+    };
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO sources (name, root_path, source_type) VALUES (?1, ?2, ?3)",
-        rusqlite::params![payload.name, payload.root_path, payload.source_type],
+        "INSERT INTO sources (name, root_path, source_type, media_kind) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![payload.name, payload.root_path, payload.source_type, media_kind],
     )
     .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())

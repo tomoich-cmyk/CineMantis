@@ -145,19 +145,28 @@ pub async fn scan_source(
 ) -> Result<ScanResult, String> {
     let window = app.get_webview_window("main")
         .ok_or("main window not found")?;
-    // 1. Get source root path
-    let root_path = {
+    // 1. Get source root path + media_kind
+    let (root_path, source_media_kind) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let result: Option<String> = conn
+        let result: Option<(String, String)> = conn
             .query_row(
-                "SELECT root_path FROM sources WHERE id = ?1 AND is_enabled = 1",
+                "SELECT root_path, COALESCE(media_kind, 'unknown')
+                 FROM sources WHERE id = ?1 AND is_enabled = 1",
                 rusqlite::params![source_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|e| e.to_string())?;
         result.ok_or_else(|| format!("Source {} not found or disabled", source_id))?
     };
+    // ソースの media_kind に応じた works の work_type / media_kind を決定
+    // "unknown" のときはファイル名解析結果（title_parser）を使う
+    let (source_work_type, source_work_media_kind): (Option<&str>, Option<&str>) =
+        match source_media_kind.as_str() {
+            "movie" => (Some("movie"), Some("movie")),
+            "tv"    => (Some("drama"), Some("tv")),
+            _       => (None, None),  // auto-detect from filename
+        };
 
     let root = Path::new(&root_path);
     if !root.exists() {
@@ -303,9 +312,24 @@ pub async fn scan_source(
 
                 // Auto-create a Work from filename (title estimation)
                 let title = estimate_title(&file_name);
+                // ソースの media_kind が設定されていればそれを使い、
+                // 未設定 (unknown) ならファイル名から TV パターンを推定する
+                let (work_type, work_media_kind) = if let (Some(wt), Some(mk)) =
+                    (source_work_type, source_work_media_kind)
+                {
+                    (wt.to_string(), mk.to_string())
+                } else {
+                    // title_parser でエピソードパターンを検出して判別
+                    let parsed = crate::services::title_parser::parse_title(&title);
+                    match parsed.media_kind.as_str() {
+                        "tv" => ("drama".to_string(), "tv".to_string()),
+                        _    => ("movie".to_string(), "unknown".to_string()),
+                    }
+                };
                 conn.execute(
-                    "INSERT INTO works (work_type, title, sort_title) VALUES ('movie', ?1, ?2)",
-                    rusqlite::params![title, title.to_lowercase()],
+                    "INSERT INTO works (work_type, media_kind, title, sort_title)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![work_type, work_media_kind, title, title.to_lowercase()],
                 )
                 .map_err(|e| e.to_string())?;
 

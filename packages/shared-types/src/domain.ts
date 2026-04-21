@@ -18,11 +18,16 @@ export type AvailabilityStatus = "available" | "missing" | "offline";
 
 // ─── Source ─────────────────────────────────────────────────────────────────
 
+/** ソースに登録されているライブラリ種別 */
+export type SourceMediaKind = "movie" | "tv" | "unknown";
+
 export interface Source {
   id: number;
   name: string;
   rootPath: string;
   sourceType: SourceType;
+  /** "movie" = 映画, "tv" = ドラマ, "unknown" = 自動判定 */
+  mediaKind: SourceMediaKind;
   isEnabled: boolean;
   status: SourceStatus;
   lastScanAt: string | null;
