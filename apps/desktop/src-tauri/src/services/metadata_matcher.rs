@@ -36,6 +36,12 @@ pub fn score_movie(result: &TmdbSearchMovie, parsed: &ParsedTitle) -> TmdbCandid
             reasons.push(format!("orig_title match({})", best_title_score));
         }
     }
+    // クロス言語ボーナス: title と original_title の両方がクエリにマッチする場合
+    // 例: "unknown アンノウン" に対して title="アンノウン" と orig="Unknown" が両方マッチ → +10
+    if best_title_score > 0 && !result_orig.is_empty() && title_score >= 25 && orig_score >= 25 {
+        score += 10;
+        reasons.push("cross-lang both matched(+10)".to_string());
+    }
 
     // 年一致
     let result_year = parse_year_from_date(result.release_date.as_deref());
@@ -102,6 +108,11 @@ pub fn score_tv(result: &TmdbSearchTv, parsed: &ParsedTitle) -> TmdbCandidate {
             reasons.push(format!("orig_title match({})", best_title_score));
         }
     }
+    // クロス言語ボーナス
+    if best_title_score > 0 && !result_orig.is_empty() && title_score >= 25 && orig_score >= 25 {
+        score += 10;
+        reasons.push("cross-lang both matched(+10)".to_string());
+    }
 
     let result_year = parse_year_from_date(result.first_air_date.as_deref());
     if let (Some(ry), Some(py)) = (result_year, parsed.year_hint) {
@@ -161,14 +172,28 @@ pub fn best_candidate(candidates: &[TmdbCandidate]) -> Option<&TmdbCandidate> {
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
-/// タイトル一致スコアを返す（完全一致65 / 正規化一致55 / 部分一致25 / 不一致0）
+/// タイトル一致スコアを返す
+/// 完全一致65 / 正規化一致55 / トークン一致50 / 部分一致25 / 不一致0
 /// result_title と query_title はどちらも既に to_lowercase() 済みであること。
+///
+/// 「トークン一致」: クエリを空白で分割した各トークンが結果タイトルと完全一致する場合。
+/// 例: query="unknown アンノウン", result="アンノウン" → "アンノウン" はクエリの1トークン → 50点
+/// これにより「英語タイトル + カタカナ表記」形式のフォルダ名でも正しく照合できる。
 fn title_match_score(result_title: &str, query_title: &str) -> i32 {
     if result_title == query_title {
-        65
-    } else if normalize_str(result_title) == normalize_str(query_title) {
-        55
-    } else if result_title.contains(query_title) || query_title.contains(result_title) {
+        return 65;
+    }
+    let r_norm = normalize_str(result_title);
+    let q_norm = normalize_str(query_title);
+    if r_norm == q_norm {
+        return 55;
+    }
+    // トークン一致: クエリの単語として結果タイトルが完全一致（2文字以上）
+    if r_norm.chars().count() >= 2 && q_norm.split_whitespace().any(|t| t == r_norm) {
+        return 50;
+    }
+    // 部分一致（一方が他方を含む）
+    if r_norm.contains(q_norm.as_str()) || q_norm.contains(r_norm.as_str()) {
         25
     } else {
         0
