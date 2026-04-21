@@ -167,7 +167,7 @@ pub fn get_integrity_report(
                     AND (us.play_count IS NULL OR us.play_count = 0)
                     THEN 1 ELSE 0 END AS watched_no_playcount,
                CASE WHEN w.tmdb_id IS NOT NULL
-                    AND (w.overview IS NULL OR w.overview = '')
+                    AND (w.synopsis IS NULL OR w.synopsis = '')
                     THEN 1 ELSE 0 END AS tmdb_no_overview,
                CASE WHEN NOT EXISTS (
                     SELECT 1 FROM work_parts wp WHERE wp.work_id = w.id)

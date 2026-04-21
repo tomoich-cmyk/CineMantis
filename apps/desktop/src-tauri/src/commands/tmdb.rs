@@ -187,7 +187,7 @@ async fn apply_match_internal(
         conn.execute(
             "UPDATE works SET
                title            = ?1,
-               overview         = COALESCE(?2, overview),
+               synopsis         = COALESCE(?2, synopsis),
                year             = COALESCE(?3, year),
                release_date     = COALESCE(?4, release_date),
                genres_json      = COALESCE(?5, genres_json),
