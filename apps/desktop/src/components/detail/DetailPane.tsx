@@ -60,7 +60,7 @@ const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
   auto:     { label: "自動照合", cls: "text-mantis-500" },
   manual:   { label: "手動照合", cls: "text-blue-400"   },
   locked:   { label: "固定",     cls: "text-yellow-400" },
-  pending:  { label: "照合中",   cls: "text-yellow-500" },
+  pending:  { label: "試行済",   cls: "text-orange-400" },
   unmatched:{ label: "未照合",   cls: "text-gray-600"   },
 };
 
@@ -110,6 +110,7 @@ export function DetailPane() {
 
   const matchInfo = MATCH_LABELS[work.match_status] ?? MATCH_LABELS.unmatched;
   const isMatched = ["auto", "manual", "locked", "matched"].includes(work.match_status);
+  const isPending = work.match_status === "pending";
   const isLocked  = work.match_status === "locked";
 
   // 再生進捗
@@ -384,6 +385,13 @@ export function DetailPane() {
 
           {/* アクションボタン */}
           <div className="flex flex-col gap-1.5">
+            {/* 試行済ヒント */}
+            {isPending && (
+              <p className="text-[11px] text-orange-400/70 leading-relaxed">
+                一括照合で候補が見つかりませんでした。「候補を探す」で別のキーワードを試すか、「自動照合」で再試行できます。
+              </p>
+            )}
+
             {/* 候補を探す（locked でも使用可） */}
             <button
               onClick={() => setShowCandidates(true)}
@@ -392,14 +400,14 @@ export function DetailPane() {
               候補を探す
             </button>
 
-            {/* 自動照合（未照合時のみ・locked 時は非表示） */}
+            {/* 自動照合（未照合・試行済のみ・locked 時は非表示） */}
             {!isMatched && !isLocked && (
               <button
                 onClick={() => autoMatch(work.id)}
                 disabled={autoMatching}
                 className="w-full py-1.5 text-xs border border-mantis-800 rounded text-mantis-400 hover:bg-mantis-900/30 transition-colors disabled:opacity-30"
               >
-                {autoMatching ? "照合中…" : "自動照合"}
+                {autoMatching ? "照合中…" : isPending ? "自動照合を再試行" : "自動照合"}
               </button>
             )}
 
