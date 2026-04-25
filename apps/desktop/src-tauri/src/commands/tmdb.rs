@@ -544,9 +544,11 @@ pub async fn auto_match_source_inner(
                     eprintln!("[TMDb] FAIL: {}", msg);
                     last_error = Some(msg);
                 }
+                // 一括照合での失敗は 'pending' に変更して次回スキップ
+                // （個別の「自動照合」ボタンを押すと 'unmatched' に戻るため再試行可能）
                 let conn = db.0.lock().map_err(|e| e.to_string())?;
                 let _ = conn.execute(
-                    "UPDATE works SET match_status = 'unmatched' WHERE id = ?1",
+                    "UPDATE works SET match_status = 'pending', metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
                     rusqlite::params![work_id],
                 );
                 failed += 1;
