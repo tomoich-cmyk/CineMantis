@@ -327,9 +327,15 @@ pub async fn scan_source(
                     }
                 };
                 conn.execute(
-                    "INSERT INTO works (work_type, media_kind, title, sort_title)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![work_type, work_media_kind, title, title.to_lowercase()],
+                    "INSERT INTO works (work_type, media_kind, title, sort_title, date_added, media_category)
+                     VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?5)",
+                    rusqlite::params![
+                        work_type,
+                        work_media_kind,
+                        title,
+                        title.to_lowercase(),
+                        if ["movie", "drama", "ova"].contains(&work_type.as_str()) { work_type.as_str() } else { "other" },
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
 

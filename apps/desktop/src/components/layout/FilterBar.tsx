@@ -2,179 +2,246 @@ import { clsx } from "clsx";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useFilterOptions } from "@/hooks/useWorks";
 import { useTags } from "@/hooks/useTags";
+import { usePersonsList } from "@/hooks/usePersons";
+import { useSeriesList } from "@/hooks/useSeries";
 
-// ── ヘルパー ──────────────────────────────────────────────────────────────────
-
-/** アクティブな拡張フィルタ数（TopBar バッジ用にエクスポート） */
 export function useActiveFilterCount(): number {
   const { filters } = useLibraryStore();
   let count = 0;
-  if (filters.yearFrom !== null)      count++;
-  if (filters.yearTo   !== null)      count++;
-  if (filters.genre    !== null)      count++;
-  if (filters.country  !== null)      count++;
+  if (filters.query.trim()) count++;
+  if (filters.workType !== null) count++;
+  if (filters.watchStatus !== null) count++;
+  if (filters.yearFrom !== null) count++;
+  if (filters.yearTo !== null) count++;
+  if (filters.genre !== null) count++;
+  if (filters.country !== null) count++;
+  if (filters.countryType !== null) count++;
+  if (filters.mediaCategory !== null) count++;
+  if (filters.dateAddedFrom !== null) count++;
+  if (filters.dateAddedTo !== null) count++;
+  if (filters.personId !== null) count++;
+  if (filters.seriesId !== null) count++;
   if (filters.minUserRating !== null) count++;
-  if (filters.isFavorite)             count++;
-  if (filters.tagIds.length > 0)      count++;
+  if (filters.isFavorite) count++;
+  if (filters.unorganizedOnly) count++;
+  if (filters.tagIds.length > 0) count++;
   return count;
 }
 
-// ── コンポーネント ────────────────────────────────────────────────────────────
+const WATCH_OPTIONS = [
+  ["unwatched", "未視聴"],
+  ["watching", "視聴中"],
+  ["watched", "視聴済"],
+  ["abandoned", "中止"],
+] as const;
+
+const CATEGORY_OPTIONS = [
+  ["movie", "映画"],
+  ["drama", "ドラマ"],
+  ["ova", "OVA"],
+  ["other", "その他"],
+] as const;
+
+const COUNTRY_TYPE_OPTIONS = [
+  ["foreign", "洋画"],
+  ["domestic", "邦画"],
+  ["unknown", "不明"],
+] as const;
+
+function fieldClass(extra = "") {
+  return `bg-surface-elevated border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600 ${extra}`;
+}
 
 export function FilterBar() {
-  const { filters, setFilter } = useLibraryStore();
+  const { filters, setFilter, resetFilters } = useLibraryStore();
   const { data: opts } = useFilterOptions();
   const { data: allTags = [] } = useTags();
-
+  const { data: allPersons = [] } = usePersonsList();
+  const { data: allSeries = [] } = useSeriesList();
   const activeCount = useActiveFilterCount();
 
   return (
     <div className="px-4 py-3 border-b border-subtle bg-surface flex flex-col gap-3">
-      {/* 行1: ジャンル / 国 / 年代 */}
       <div className="flex items-center gap-3 flex-wrap">
+        <input
+          value={filters.query}
+          onChange={(e) => setFilter("query", e.target.value)}
+          placeholder="検索"
+          className={fieldClass("w-56")}
+        />
 
-        {/* ジャンル */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500 whitespace-nowrap">ジャンル</span>
-          <select
-            value={filters.genre ?? ""}
-            onChange={(e) => setFilter("genre", e.target.value || null)}
-            className="bg-surface-elevated border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600 min-w-[120px]"
-          >
-            <option value="">すべて</option>
-            {opts?.genres.map((g) => (
-              <option key={g} value={g}>{g}</option>
-            ))}
-          </select>
-        </div>
+        <select
+          value={filters.mediaCategory ?? ""}
+          onChange={(e) => setFilter("mediaCategory", e.target.value || null)}
+          className={fieldClass("min-w-[92px]")}
+        >
+          <option value="">種別</option>
+          {CATEGORY_OPTIONS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
 
-        {/* 国 */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500 whitespace-nowrap">製作国</span>
-          <select
-            value={filters.country ?? ""}
-            onChange={(e) => setFilter("country", e.target.value || null)}
-            className="bg-surface-elevated border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600 min-w-[80px]"
-          >
-            <option value="">すべて</option>
-            {opts?.countries.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </div>
+        <select
+          value={filters.countryType ?? ""}
+          onChange={(e) => setFilter("countryType", e.target.value || null)}
+          className={fieldClass("min-w-[80px]")}
+        >
+          <option value="">洋邦</option>
+          {COUNTRY_TYPE_OPTIONS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
 
-        {/* 年代 */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500 whitespace-nowrap">年代</span>
-          <input
-            type="number"
-            placeholder={opts?.year_min?.toString() ?? "—"}
-            value={filters.yearFrom ?? ""}
-            onChange={(e) => setFilter("yearFrom", e.target.value ? Number(e.target.value) : null)}
-            className="w-16 bg-surface-elevated border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600 text-center"
-          />
-          <span className="text-gray-600 text-xs">〜</span>
-          <input
-            type="number"
-            placeholder={opts?.year_max?.toString() ?? "—"}
-            value={filters.yearTo ?? ""}
-            onChange={(e) => setFilter("yearTo", e.target.value ? Number(e.target.value) : null)}
-            className="w-16 bg-surface-elevated border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600 text-center"
-          />
-        </div>
+        <select
+          value={filters.watchStatus ?? ""}
+          onChange={(e) => setFilter("watchStatus", e.target.value || null)}
+          className={fieldClass("min-w-[104px]")}
+        >
+          <option value="">視聴状態</option>
+          {WATCH_OPTIONS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+
+        <select
+          value={filters.genre ?? ""}
+          onChange={(e) => setFilter("genre", e.target.value || null)}
+          className={fieldClass("min-w-[120px]")}
+        >
+          <option value="">ジャンル</option>
+          {opts?.genres.map((g) => (
+            <option key={g} value={g}>{g}</option>
+          ))}
+        </select>
+
+        <input
+          type="number"
+          placeholder={opts?.year_min?.toString() ?? "年から"}
+          value={filters.yearFrom ?? ""}
+          onChange={(e) => setFilter("yearFrom", e.target.value ? Number(e.target.value) : null)}
+          className={fieldClass("w-20 text-center")}
+        />
+        <input
+          type="number"
+          placeholder={opts?.year_max?.toString() ?? "年まで"}
+          value={filters.yearTo ?? ""}
+          onChange={(e) => setFilter("yearTo", e.target.value ? Number(e.target.value) : null)}
+          className={fieldClass("w-20 text-center")}
+        />
       </div>
 
-      {/* 行2: 評価 / お気に入り / タグ / リセット */}
       <div className="flex items-center gap-3 flex-wrap">
-
-        {/* 最低評価 */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500 whitespace-nowrap">評価</span>
-          <div className="flex gap-0.5">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <button
-                key={n}
-                onClick={() =>
-                  setFilter("minUserRating", filters.minUserRating === n ? null : n)
-                }
-                className={clsx(
-                  "text-base leading-none transition-colors",
-                  (filters.minUserRating ?? 0) >= n
-                    ? "text-yellow-400"
-                    : "text-gray-700 hover:text-gray-500"
-                )}
-                title={`${n}点以上`}
-              >
-                ★
-              </button>
-            ))}
-            {filters.minUserRating !== null && (
-              <span className="text-xs text-gray-500 ml-1">以上</span>
-            )}
-          </div>
+        <div className="flex items-center gap-0.5">
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button
+              key={n}
+              onClick={() => setFilter("minUserRating", filters.minUserRating === n ? null : n)}
+              className={clsx(
+                "text-base leading-none transition-colors",
+                (filters.minUserRating ?? 0) >= n ? "text-yellow-400" : "text-gray-700 hover:text-gray-500",
+              )}
+              title={`${n}点以上`}
+            >
+              ★
+            </button>
+          ))}
         </div>
 
-        {/* お気に入り */}
+        <input
+          type="date"
+          value={filters.dateAddedFrom ?? ""}
+          onChange={(e) => setFilter("dateAddedFrom", e.target.value ? `${e.target.value}T00:00:00` : null)}
+          className={fieldClass("w-36")}
+          title="登録日 from"
+        />
+        <input
+          type="date"
+          value={filters.dateAddedTo?.slice(0, 10) ?? ""}
+          onChange={(e) => setFilter("dateAddedTo", e.target.value ? `${e.target.value}T23:59:59` : null)}
+          className={fieldClass("w-36")}
+          title="登録日 to"
+        />
+
+        <select
+          value={filters.personId ?? ""}
+          onChange={(e) => setFilter("personId", e.target.value ? Number(e.target.value) : null)}
+          className={fieldClass("min-w-[130px]")}
+        >
+          <option value="">人物</option>
+          {allPersons.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+
+        <select
+          value={filters.seriesId ?? ""}
+          onChange={(e) => setFilter("seriesId", e.target.value ? Number(e.target.value) : null)}
+          className={fieldClass("min-w-[130px]")}
+        >
+          <option value="">シリーズ</option>
+          {allSeries.map((s) => (
+            <option key={s.id} value={s.id}>{s.title}</option>
+          ))}
+        </select>
+
+        <button
+          onClick={() => setFilter("unorganizedOnly", !filters.unorganizedOnly)}
+          className={clsx(
+            "px-2.5 py-0.5 text-xs rounded border transition-colors",
+            filters.unorganizedOnly
+              ? "bg-orange-900/30 border-orange-700/60 text-orange-300"
+              : "border-subtle text-gray-500 hover:text-gray-300",
+          )}
+        >
+          未整理
+        </button>
+
         <button
           onClick={() => setFilter("isFavorite", !filters.isFavorite)}
           className={clsx(
-            "flex items-center gap-1 px-2.5 py-0.5 text-xs rounded-full border transition-colors",
+            "px-2.5 py-0.5 text-xs rounded border transition-colors",
             filters.isFavorite
               ? "bg-yellow-900/30 border-yellow-700/60 text-yellow-400"
-              : "border-subtle text-gray-500 hover:text-gray-300"
+              : "border-subtle text-gray-500 hover:text-gray-300",
           )}
         >
-          ★ お気に入り
+          お気に入り
         </button>
 
-        {/* タグ */}
         {allTags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs text-gray-500 whitespace-nowrap">タグ</span>
-            <div className="flex gap-1 flex-wrap">
-              {allTags.map((tag) => {
-                const active = filters.tagIds.includes(tag.id);
-                return (
-                  <button
-                    key={tag.id}
-                    onClick={() => {
-                      const next = active
-                        ? filters.tagIds.filter((id) => id !== tag.id)
-                        : [...filters.tagIds, tag.id];
-                      setFilter("tagIds", next);
-                    }}
-                    className={clsx(
-                      "px-2 py-0.5 text-xs rounded border transition-colors",
-                      active
-                        ? "bg-mantis-900/40 border-mantis-700/60 text-mantis-400"
-                        : "border-subtle text-gray-600 hover:text-gray-300"
-                    )}
-                  >
-                    {tag.name}
-                  </button>
-                );
-              })}
-            </div>
+          <div className="flex gap-1 flex-wrap">
+            {allTags.map((tag) => {
+              const active = filters.tagIds.includes(tag.id);
+              return (
+                <button
+                  key={tag.id}
+                  onClick={() => {
+                    const next = active
+                      ? filters.tagIds.filter((id) => id !== tag.id)
+                      : [...filters.tagIds, tag.id];
+                    setFilter("tagIds", next);
+                  }}
+                  className={clsx(
+                    "px-2 py-0.5 text-xs rounded border transition-colors",
+                    active
+                      ? "bg-mantis-900/40 border-mantis-700/60 text-mantis-400"
+                      : "border-subtle text-gray-600 hover:text-gray-300",
+                  )}
+                >
+                  {tag.name}
+                </button>
+              );
+            })}
           </div>
         )}
 
         <div className="flex-1" />
-
-        {/* リセット */}
         {activeCount > 0 && (
           <button
-            onClick={() => {
-              setFilter("yearFrom", null);
-              setFilter("yearTo", null);
-              setFilter("genre", null);
-              setFilter("country", null);
-              setFilter("minUserRating", null);
-              setFilter("isFavorite", false);
-              setFilter("tagIds", []);
-            }}
-            className="text-xs text-gray-600 hover:text-gray-300 transition-colors underline-offset-2 hover:underline"
+            onClick={resetFilters}
+            className="text-xs text-gray-600 hover:text-gray-300 underline-offset-2 hover:underline"
           >
-            フィルタをリセット
+            フィルタ解除
           </button>
         )}
       </div>

@@ -28,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: "recently-added",    label: "最近追加",   icon: "🆕", group: "スマート" },
   { id: "recently-played",   label: "最近視聴",   icon: "⏱",  group: "スマート" },
   { id: "high-rated",        label: "高評価",     icon: "⭐", group: "スマート" },
+  { id: "unorganized",       label: "未整理",     icon: "!",  group: "スマート" },
   { id: "needs-attention",   label: "要確認",     icon: "⚠",  group: "スマート" },
 ];
 

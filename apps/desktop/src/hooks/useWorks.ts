@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listWorks, getWork, getFilterOptions } from "@/api/works";
+import { listWorks, getWork, getFilterOptions, updateWorkLibraryFields } from "@/api/works";
 import type { ListWorksParams } from "@/api/works";
 import { updateUserStats, recordPlay } from "@/api/stats";
 import { listWorkTags } from "@/api/tags";
@@ -25,6 +25,7 @@ type SmartOverride = {
   minUserRating?: number;
   minPlayCount?: number;
   matchStatus?: string | null;
+  unorganizedOnly?: boolean;
   sortField?: SortField;
   sortOrder?: SortOrder;
 };
@@ -36,13 +37,14 @@ function getSmartOverride(section: string): SmartOverride {
     case "unwatched":       return { watchStatus: "unwatched" };
     case "watching":        return { watchStatus: "watching" };
     case "recently-added":    return { sortField: "created_at",    sortOrder: "desc" };
-    case "recently-played":   return { sortField: "last_played_at", sortOrder: "desc", minPlayCount: 1 };
-    case "high-rated":        return { minUserRating: 4, sortField: "user_rating", sortOrder: "desc" };
+    case "recently-played":   return { sortField: "last_watched_at", sortOrder: "desc", minPlayCount: 1 };
+    case "high-rated":        return { minUserRating: 4, sortField: "my_rating", sortOrder: "desc" };
     case "favorites":         return { isFavorite: true, sortField: "title", sortOrder: "asc" };
-    case "continue-watching": return { watchStatus: "watching",  sortField: "last_played_at", sortOrder: "desc" };
+    case "continue-watching": return { watchStatus: "watching",  sortField: "last_watched_at", sortOrder: "desc" };
     case "needs-attention":   return { matchStatus: "unmatched", sortField: "created_at",     sortOrder: "desc" };
-    case "completed":         return { watchStatus: "watched",   sortField: "last_played_at", sortOrder: "desc" };
-    case "stalled":           return { watchStatus: "watching",  sortField: "last_played_at", sortOrder: "asc" };
+    case "unorganized":       return { unorganizedOnly: true, sortField: "reading", sortOrder: "asc" };
+    case "completed":         return { watchStatus: "watched",   sortField: "last_watched_at", sortOrder: "desc" };
+    case "stalled":           return { watchStatus: "watching",  sortField: "last_watched_at", sortOrder: "asc" };
     default:                  return {};
   }
 }
@@ -70,7 +72,14 @@ export function useWorkList() {
     yearTo:         filters.yearTo,
     genre:          filters.genre,
     country:        filters.country,
+    countryType:    filters.countryType,
+    mediaCategory:  filters.mediaCategory,
+    dateAddedFrom:  filters.dateAddedFrom,
+    dateAddedTo:    filters.dateAddedTo,
+    personId:       filters.personId,
+    seriesId:       filters.seriesId,
     tagIds:         filters.tagIds,
+    unorganizedOnly: smart.unorganizedOnly || filters.unorganizedOnly,
   };
 
   return useQuery({
@@ -118,6 +127,18 @@ export function useUpdateStats() {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: workKeys.detail(vars.work_id) });
       qc.invalidateQueries({ queryKey: workKeys.all });
+    },
+  });
+}
+
+export function useUpdateWorkLibraryFields() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: updateWorkLibraryFields,
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: workKeys.detail(vars.work_id) });
+      qc.invalidateQueries({ queryKey: workKeys.all });
+      qc.invalidateQueries({ queryKey: workKeys.filterOptions });
     },
   });
 }

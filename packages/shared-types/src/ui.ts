@@ -15,6 +15,7 @@ export type NavSection =
   | "recently-added"
   | "recently-played"
   | "high-rated"
+  | "unorganized"
   | "completed"
   | "stalled"
   | "needs-attention"
@@ -35,6 +36,14 @@ export type SortField =
   | "last_played_at"
   | "created_at"
   | "updated_at"
+  | "date_added"
+  | "last_watched_at"
+  | "my_rating"
+  | "watched_status"
+  | "media_category"
+  | "country_type"
+  | "reading"
+  | "release_year"
   | "runtime_sec"
   | "release_date";
 
@@ -47,11 +56,20 @@ export interface WorkSummary {
   id: number;
   title: string;
   year: number | null;
+  releaseYear: number | null;
   workType: WorkType;
+  mediaCategory: string;
+  countryType: string;
+  genreText: string | null;
+  dateAdded: string | null;
+  lastWatchedAt: string | null;
+  storagePath: string | null;
   posterPath: string | null;
   userRating: number | null;
+  myRating: number | null;
   playCount: number;
   watchStatus: WatchStatus;
+  watchedStatus: WatchStatus;
   isFavorite: boolean;
   runtimeSec: number | null;
   resumePositionSec: number | null;
