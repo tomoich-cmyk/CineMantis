@@ -113,9 +113,8 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "countryType",
   "genreText",
   "myRating",
-  "watchedStatus",
+  "playCount",
   "dateAdded",
-  "lastWatchedAt",
   "fileSize",
   "storagePath",
 ];
@@ -127,6 +126,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   countryType: 78,
   genreText: 170,
   myRating: 112,
+  playCount: 88,
   watchedStatus: 100,
   dateAdded: 132,
   lastWatchedAt: 132,
@@ -220,17 +220,34 @@ export const useLibraryStore = create<LibraryStore>()(
       name: "cinemantis-library-v1",
       merge: (persisted, current) => {
         const state = persisted as Partial<LibraryStore>;
-        const visibleColumns = state.visibleColumns ?? current.visibleColumns;
-        const nextVisibleColumns = visibleColumns.includes("fileSize")
+        const visibleColumns = (state.visibleColumns ?? current.visibleColumns)
+          .filter((column) => column !== "watchedStatus" && column !== "lastWatchedAt");
+        const withPlayCount = visibleColumns.includes("playCount")
           ? visibleColumns
           : [
-              ...visibleColumns.filter((column) => column !== "storagePath"),
+              ...visibleColumns.filter((column) => column !== "dateAdded"),
+              "playCount",
+              ...(visibleColumns.includes("dateAdded") ? ["dateAdded"] : []),
+            ];
+        const nextVisibleColumns = withPlayCount.includes("fileSize")
+          ? withPlayCount
+          : [
+              ...withPlayCount.filter((column) => column !== "storagePath"),
               "fileSize",
-              ...(visibleColumns.includes("storagePath") ? ["storagePath"] : []),
+              ...(withPlayCount.includes("storagePath") ? ["storagePath"] : []),
             ];
         return {
           ...current,
           ...state,
+          filters: state.filters
+            ? {
+                ...current.filters,
+                ...state.filters,
+                watchStatus: null,
+                dateAddedFrom: null,
+                dateAddedTo: null,
+              }
+            : current.filters,
           visibleColumns: nextVisibleColumns,
           columnWidths: { ...DEFAULT_COLUMN_WIDTHS, ...state.columnWidths },
         };

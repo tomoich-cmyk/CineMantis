@@ -29,6 +29,7 @@ interface Props {
   selected: boolean;
   onSelect: () => void;
   gridTemplateColumns: string;
+  visibleColumns: string[];
   top: number;
   height: number;
 }
@@ -50,6 +51,22 @@ function formatBytes(value: number | null) {
     unit += 1;
   }
   return `${size.toFixed(unit >= 3 ? 1 : 0)} ${units[unit]}`;
+}
+
+function formatGenres(value: string | null) {
+  if (!value) return "";
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.filter(Boolean).join(", ");
+  } catch {
+    // Plain text genre values are common for manually edited records.
+  }
+  return value
+    .replace(/^\[|\]$/g, "")
+    .split(/[,\u3001/]/)
+    .map((v) => v.replace(/^"|"$/g, "").trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 function cellClass(extra = "") {
@@ -74,13 +91,15 @@ function renderCell(column: string, work: WorkSummary) {
     case "countryType":
       return COUNTRY_LABEL[work.countryType] ?? work.countryType ?? "";
     case "genreText":
-      return <span className="truncate">{work.genreText || ""}</span>;
+      return <span className="truncate">{formatGenres(work.genreText)}</span>;
     case "myRating":
       return work.myRating !== null || work.userRating !== null ? (
         <StarRating value={work.myRating ?? work.userRating} size="xs" readonly />
       ) : (
         <span className="text-gray-700">未評価</span>
       );
+    case "playCount":
+      return <span className="font-mono text-gray-500">{work.playCount.toLocaleString("ja-JP")}</span>;
     case "watchedStatus":
       return (
         <span
@@ -108,8 +127,8 @@ function renderCell(column: string, work: WorkSummary) {
   }
 }
 
-export function WorkRow({ work, selected, onSelect, gridTemplateColumns, top, height }: Props) {
-  const { isSelectMode, selectedWorkIds, toggleSelectWork, visibleColumns } = useLibraryStore();
+export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visibleColumns, top, height }: Props) {
+  const { isSelectMode, selectedWorkIds, toggleSelectWork } = useLibraryStore();
   const isChecked = selectedWorkIds.includes(work.id);
 
   function handleClick() {
