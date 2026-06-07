@@ -281,19 +281,6 @@ export function DetailPane() {
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-gray-500">
-              種別
-              <select
-                defaultValue={work.media_category}
-                onChange={(e) => updateLibraryFields({ work_id: work.id, media_category: e.target.value })}
-                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
-              >
-                <option value="movie">映画</option>
-                <option value="drama">ドラマ</option>
-                <option value="ova">OVA</option>
-                <option value="other">その他</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs text-gray-500">
               洋邦
               <select
                 defaultValue={work.country_type}

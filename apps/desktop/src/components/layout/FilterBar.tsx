@@ -14,7 +14,6 @@ export function useActiveFilterCount(): number {
   if (filters.genre !== null) count++;
   if (filters.country !== null) count++;
   if (filters.countryType !== null) count++;
-  if (filters.mediaCategory !== null) count++;
   if (filters.personId !== null) count++;
   if (filters.seriesId !== null) count++;
   if (filters.minUserRating !== null) count++;
@@ -22,13 +21,6 @@ export function useActiveFilterCount(): number {
   if (filters.unorganizedOnly) count++;
   return count;
 }
-
-const CATEGORY_OPTIONS = [
-  ["movie", "映画"],
-  ["drama", "ドラマ"],
-  ["ova", "OVA"],
-  ["other", "その他"],
-] as const;
 
 const COUNTRY_TYPE_OPTIONS = [
   ["foreign", "洋画"],
@@ -56,17 +48,6 @@ export function FilterBar() {
           placeholder="検索"
           className={fieldClass("w-56")}
         />
-
-        <select
-          value={filters.mediaCategory ?? ""}
-          onChange={(e) => setFilter("mediaCategory", e.target.value || null)}
-          className={fieldClass("min-w-[92px]")}
-        >
-          <option value="">種別</option>
-          {CATEGORY_OPTIONS.map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
 
         <select
           value={filters.countryType ?? ""}

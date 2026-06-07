@@ -15,7 +15,6 @@ export interface LibraryFilters {
   genre: string | null;
   country: string | null;
   countryType: string | null;
-  mediaCategory: string | null;
   dateAddedFrom: string | null;
   dateAddedTo: string | null;
   personId: number | null;
@@ -92,7 +91,6 @@ const defaultFilters: LibraryFilters = {
   genre: null,
   country: null,
   countryType: null,
-  mediaCategory: null,
   dateAddedFrom: null,
   dateAddedTo: null,
   personId: null,
@@ -105,7 +103,6 @@ const defaultFilters: LibraryFilters = {
 export const DEFAULT_VISIBLE_COLUMNS = [
   "title",
   "releaseYear",
-  "mediaCategory",
   "countryType",
   "genreText",
   "myRating",
@@ -119,7 +116,6 @@ export const DEFAULT_VISIBLE_COLUMNS = [
 export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   title: 260,
   releaseYear: 72,
-  mediaCategory: 88,
   countryType: 78,
   genreText: 170,
   myRating: 112,
@@ -218,7 +214,7 @@ export const useLibraryStore = create<LibraryStore>()(
       merge: (persisted, current) => {
         const state = persisted as Partial<LibraryStore>;
         const visibleColumns = (state.visibleColumns ?? current.visibleColumns)
-          .filter((column) => column !== "watchedStatus");
+          .filter((column) => column !== "watchedStatus" && column !== "mediaCategory");
         const withPlayCount = visibleColumns.includes("playCount")
           ? visibleColumns
           : [
@@ -240,13 +236,16 @@ export const useLibraryStore = create<LibraryStore>()(
               "fileSize",
               ...(withLastWatched.includes("storagePath") ? ["storagePath"] : []),
             ];
+        const persistedFilters =
+          { ...(state.filters ?? {}) } as Partial<LibraryFilters> & { mediaCategory?: unknown };
+        delete persistedFilters.mediaCategory;
         return {
           ...current,
           ...state,
           filters: state.filters
             ? {
                 ...current.filters,
-                ...state.filters,
+                ...persistedFilters,
                 dateAddedFrom: null,
                 dateAddedTo: null,
               }

@@ -326,15 +326,17 @@ pub async fn scan_source(
                         _    => ("movie".to_string(), "unknown".to_string()),
                     }
                 };
+                let country_type = infer_country_type_from_path(file_path, root);
                 conn.execute(
-                    "INSERT INTO works (work_type, media_kind, title, sort_title, date_added, media_category)
-                     VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?5)",
+                    "INSERT INTO works (work_type, media_kind, title, sort_title, date_added, media_category, country_type)
+                     VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?5, ?6)",
                     rusqlite::params![
                         work_type,
                         work_media_kind,
                         title,
                         title.to_lowercase(),
                         if ["movie", "drama", "ova"].contains(&work_type.as_str()) { work_type.as_str() } else { "other" },
+                        country_type,
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -502,6 +504,47 @@ fn estimate_title(file_name: &str) -> String {
         .join(" ");
 
     collapsed
+}
+
+fn infer_country_type_from_path(file_path: &Path, root: &Path) -> &'static str {
+    let relative = file_path.strip_prefix(root).unwrap_or(file_path);
+    let full = file_path.to_string_lossy().to_lowercase();
+    let rel = relative.to_string_lossy().to_lowercase();
+    let haystack = format!("{} {}", full, rel);
+
+    let domestic_markers = [
+        "邦画",
+        "国内",
+        "日本映画",
+        "日本",
+        "japanese",
+        "japan",
+        "jp-movie",
+        "jp_movie",
+        "domestic",
+    ];
+    let foreign_markers = [
+        "洋画",
+        "海外",
+        "外国映画",
+        "外国",
+        "foreign",
+        "western",
+        "world cinema",
+        "world_cinema",
+        "korean",
+        "chinese",
+        "europe",
+        "america",
+    ];
+
+    if domestic_markers.iter().any(|marker| haystack.contains(marker)) {
+        return "domestic";
+    }
+    if foreign_markers.iter().any(|marker| haystack.contains(marker)) {
+        return "foreign";
+    }
+    "unknown"
 }
 
 /// Format unix timestamp as ISO 8601 string (no chrono dependency)

@@ -23,7 +23,6 @@ const ROW_HEIGHT: Record<Density, number> = {
 export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "title", label: "タイトル", sort: "title" },
   { key: "releaseYear", label: "年", sort: "release_year" },
-  { key: "mediaCategory", label: "種別", sort: "media_category" },
   { key: "countryType", label: "洋邦", sort: "country_type" },
   { key: "genreText", label: "ジャンル" },
   { key: "myRating", label: "評価", sort: "my_rating" },
@@ -33,13 +32,6 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "fileSize", label: "サイズ" },
   { key: "storagePath", label: "保存場所" },
 ];
-
-const CATEGORY_LABEL: Record<string, string> = {
-  movie: "映画",
-  drama: "ドラマ",
-  ova: "OVA",
-  other: "その他",
-};
 
 const COUNTRY_LABEL: Record<string, string> = {
   foreign: "洋画",
@@ -150,7 +142,6 @@ function BrowserPane({
 
 function LibraryBrowser({ works }: { works: WorkSummary[] }) {
   const {
-    activeSection,
     filters,
     setFilter,
     browserPaneHeight,
@@ -165,10 +156,6 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
   const decadeCounts = useMemo(() => makeCounts(works, (work) => [decadeOf(work)], yearSort), [works]);
   const playCountCounts = useMemo(() => makeCounts(works, (work) => [playCountBucket(work)], playCountSort), [works]);
   const genreCounts = useMemo(() => makeCounts(works, (work) => splitGenres(work.genreText)), [works]);
-  const categoryCounts = useMemo(
-    () => makeCounts(works, (work) => [CATEGORY_LABEL[work.mediaCategory] ?? work.mediaCategory ?? "その他"]),
-    [works],
-  );
 
   useEffect(() => {
     function onMove(event: MouseEvent) {
@@ -195,20 +182,10 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
   }
 
   const countryReverse: Record<string, string> = { 洋画: "foreign", 邦画: "domestic", 不明: "unknown" };
-  const categoryReverse: Record<string, string> = { 映画: "movie", ドラマ: "drama", OVA: "ova", その他: "other" };
-  const isDrama = activeSection === "all-drama";
 
   return (
     <div className="relative flex-shrink-0 overflow-hidden border-b border-[#151515] bg-black" style={{ height: browserPaneHeight }}>
-      <div className={`h-full grid ${isDrama ? "grid-cols-[1fr_0.9fr_0.9fr_1.2fr]" : "grid-cols-[0.85fr_0.85fr_0.75fr_1.55fr]"}`}>
-        {isDrama && (
-          <BrowserPane
-            title="種別"
-            items={categoryCounts}
-            active={filters.mediaCategory ? CATEGORY_LABEL[filters.mediaCategory] : null}
-            onPick={(value) => setFilter("mediaCategory", value ? categoryReverse[value] ?? null : null)}
-          />
-        )}
+      <div className="h-full grid grid-cols-[0.85fr_0.75fr_0.9fr_1.55fr]">
         <BrowserPane
           title="洋邦"
           items={countryCounts}
