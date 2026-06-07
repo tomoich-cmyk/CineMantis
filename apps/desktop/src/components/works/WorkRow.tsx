@@ -13,25 +13,11 @@ const STATUS_LABEL: Record<string, string> = {
   skipped: "中止",
 };
 
-const CATEGORY_LABEL: Record<string, string> = {
-  movie: "映画",
-  drama: "ドラマ",
-  ova: "OVA",
-  other: "その他",
-};
-
 const COUNTRY_LABEL: Record<string, string> = {
   foreign: "洋画",
   domestic: "邦画",
   unknown: "不明",
 };
-
-const CATEGORY_OPTIONS = [
-  ["movie", "映画"],
-  ["drama", "ドラマ"],
-  ["ova", "OVA"],
-  ["other", "その他"],
-] as const;
 
 const COUNTRY_OPTIONS = [
   ["foreign", "洋画"],
@@ -39,7 +25,7 @@ const COUNTRY_OPTIONS = [
   ["unknown", "不明"],
 ] as const;
 
-const EDITABLE_COLUMNS = new Set(["title", "releaseYear", "mediaCategory", "countryType", "genreText", "myRating"]);
+const EDITABLE_COLUMNS = new Set(["title", "releaseYear", "countryType", "genreText", "myRating"]);
 
 interface Props {
   work: WorkSummary;
@@ -113,8 +99,6 @@ function renderCell(column: string, work: WorkSummary) {
       );
     case "releaseYear":
       return work.releaseYear ?? work.year ?? "";
-    case "mediaCategory":
-      return CATEGORY_LABEL[work.mediaCategory] ?? work.mediaCategory ?? "";
     case "countryType":
       return COUNTRY_LABEL[work.countryType] ?? work.countryType ?? "";
     case "genreText":
@@ -176,8 +160,6 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
         return work.title;
       case "releaseYear":
         return String(work.releaseYear ?? work.year ?? "");
-      case "mediaCategory":
-        return work.mediaCategory ?? "other";
       case "countryType":
         return work.countryType ?? "unknown";
       case "genreText":
@@ -222,12 +204,6 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
       return;
     }
 
-    if (column === "mediaCategory") {
-      if (value === work.mediaCategory) return;
-      updateLibraryFields({ work_id: work.id, media_category: value });
-      return;
-    }
-
     if (column === "countryType") {
       if (value === work.countryType) return;
       updateLibraryFields({ work_id: work.id, country_type: value });
@@ -262,25 +238,6 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
   }
 
   function renderEditor(column: string) {
-    if (column === "mediaCategory") {
-      return (
-        <select
-          autoFocus
-          value={draft}
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={handleEditorKey}
-          onBlur={() => commitEdit(column)}
-          onChange={(event) => {
-            setDraft(event.target.value);
-            commitEdit(column, event.target.value);
-          }}
-          className={editorClass()}
-        >
-          {CATEGORY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
-      );
-    }
-
     if (column === "countryType") {
       return (
         <select

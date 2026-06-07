@@ -60,7 +60,6 @@ export function useWorkList() {
     genre:          filters.genre,
     country:        filters.country,
     countryType:    filters.countryType,
-    mediaCategory:  filters.mediaCategory,
     dateAddedFrom:  filters.dateAddedFrom,
     dateAddedTo:    filters.dateAddedTo,
     personId:       filters.personId,
