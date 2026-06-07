@@ -116,6 +116,7 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "watchedStatus",
   "dateAdded",
   "lastWatchedAt",
+  "fileSize",
   "storagePath",
 ];
 
@@ -129,6 +130,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   watchedStatus: 100,
   dateAdded: 132,
   lastWatchedAt: 132,
+  fileSize: 96,
   storagePath: 280,
 };
 
@@ -216,6 +218,23 @@ export const useLibraryStore = create<LibraryStore>()(
     }),
     {
       name: "cinemantis-library-v1",
+      merge: (persisted, current) => {
+        const state = persisted as Partial<LibraryStore>;
+        const visibleColumns = state.visibleColumns ?? current.visibleColumns;
+        const nextVisibleColumns = visibleColumns.includes("fileSize")
+          ? visibleColumns
+          : [
+              ...visibleColumns.filter((column) => column !== "storagePath"),
+              "fileSize",
+              ...(visibleColumns.includes("storagePath") ? ["storagePath"] : []),
+            ];
+        return {
+          ...current,
+          ...state,
+          visibleColumns: nextVisibleColumns,
+          columnWidths: { ...DEFAULT_COLUMN_WIDTHS, ...state.columnWidths },
+        };
+      },
       // 保存する項目のみ抽出（一時的な選択状態・activeSection は除外）
       partialize: (state) => ({
         sortField:     state.sortField,

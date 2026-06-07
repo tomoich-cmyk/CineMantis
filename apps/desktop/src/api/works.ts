@@ -14,6 +14,7 @@ interface WorkSummaryRow {
   date_added: string | null;
   last_watched_at: string | null;
   storage_path: string | null;
+  file_size: number | null;
   poster_path: string | null;
   user_rating: number | null;
   my_rating: number | null;
@@ -52,6 +53,7 @@ interface WorkDetailRow {
   match_confidence: number | null;
   release_date: string | null;
   date_added: string | null;
+  file_size: number | null;
   user_rating: number | null;
   my_rating: number | null;
   play_count: number;
@@ -90,6 +92,7 @@ function toSummary(r: WorkSummaryRow): WorkSummary {
     dateAdded: r.date_added,
     lastWatchedAt: r.last_watched_at,
     storagePath: r.storage_path,
+    fileSize: r.file_size,
     posterPath: r.poster_path,
     userRating: r.user_rating,
     myRating: r.my_rating,
@@ -202,4 +205,8 @@ export async function updateWorkLibraryFields(
   payload: UpdateWorkLibraryPayload,
 ): Promise<void> {
   return invoke("update_work_library_fields", { payload });
+}
+
+export async function deleteWorkFiles(workId: number): Promise<void> {
+  return invoke("delete_work_files", { workId });
 }

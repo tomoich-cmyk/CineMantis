@@ -17,6 +17,7 @@ pub struct WorkSummaryRow {
     pub date_added: Option<String>,
     pub last_watched_at: Option<String>,
     pub storage_path: Option<String>,
+    pub file_size: Option<i64>,
     pub poster_path: Option<String>,
     pub user_rating: Option<i64>,
     pub my_rating: Option<i64>,
@@ -56,6 +57,7 @@ pub struct WorkDetailRow {
     pub match_confidence: Option<f64>,
     pub release_date: Option<String>,
     pub date_added: Option<String>,
+    pub file_size: Option<i64>,
     // user_stats joined
     pub user_rating: Option<i64>,
     pub my_rating: Option<i64>,
@@ -198,6 +200,12 @@ pub fn list_works(
                   JOIN sources s ON s.id = f.source_id
                   WHERE wp0.work_id = w.id
                 ),
+                (
+                  SELECT SUM(COALESCE(f.file_size, 0))
+                  FROM work_parts wp_size
+                  JOIN files f ON f.id = wp_size.file_id
+                  WHERE wp_size.work_id = w.id
+                ),
                 COALESCE(w.poster_path, w.thumb_path),
                 us.user_rating, COALESCE(us.my_rating, us.user_rating), COALESCE(us.play_count, 0),
                 COALESCE(us.watch_status, 'unwatched'),
@@ -267,17 +275,18 @@ pub fn list_works(
                     date_added: row.get(9)?,
                     last_watched_at: row.get(10)?,
                     storage_path: row.get(11)?,
-                    poster_path: row.get(12)?,
-                    user_rating: row.get(13)?,
-                    my_rating: row.get(14)?,
-                    play_count: row.get(15)?,
-                    watch_status: row.get(16)?,
-                    watched_status: row.get(17)?,
-                    is_favorite: row.get::<_, i64>(18)? != 0,
-                    runtime_sec: row.get(19)?,
-                    resume_position_sec: row.get(20)?,
-                    external_rating: row.get(21)?,
-                    match_status: row.get(22)?,
+                    file_size: row.get(12)?,
+                    poster_path: row.get(13)?,
+                    user_rating: row.get(14)?,
+                    my_rating: row.get(15)?,
+                    play_count: row.get(16)?,
+                    watch_status: row.get(17)?,
+                    watched_status: row.get(18)?,
+                    is_favorite: row.get::<_, i64>(19)? != 0,
+                    runtime_sec: row.get(20)?,
+                    resume_position_sec: row.get(21)?,
+                    external_rating: row.get(22)?,
+                    match_status: row.get(23)?,
                 })
             },
         )
@@ -305,6 +314,12 @@ pub fn get_work(state: State<'_, DbState>, work_id: i64) -> Result<Option<WorkDe
                     w.tmdb_id, w.tmdb_media_type, w.imdb_id,
                     w.match_status, w.match_confidence, w.release_date,
                     COALESCE(w.date_added, w.created_at),
+                    (
+                      SELECT SUM(COALESCE(f.file_size, 0))
+                      FROM work_parts wp_size
+                      JOIN files f ON f.id = wp_size.file_id
+                      WHERE wp_size.work_id = w.id
+                    ),
                     us.user_rating, COALESCE(us.my_rating, us.user_rating), COALESCE(us.play_count, 0),
                     us.last_played_at, COALESCE(us.last_watched_at, us.last_played_at), us.resume_position_sec,
                     COALESCE(us.is_favorite, 0),
@@ -344,16 +359,17 @@ pub fn get_work(state: State<'_, DbState>, work_id: i64) -> Result<Option<WorkDe
                 match_confidence: row.get(21)?,
                 release_date: row.get(22)?,
                 date_added: row.get(23)?,
-                user_rating: row.get(24)?,
-                my_rating: row.get(25)?,
-                play_count: row.get(26)?,
-                last_played_at: row.get(27)?,
-                last_watched_at: row.get(28)?,
-                resume_position_sec: row.get(29)?,
-                is_favorite: row.get::<_, i64>(30)? != 0,
-                watch_status: row.get(31)?,
-                watched_status: row.get(32)?,
-                personal_note: row.get(33)?,
+                file_size: row.get(24)?,
+                user_rating: row.get(25)?,
+                my_rating: row.get(26)?,
+                play_count: row.get(27)?,
+                last_played_at: row.get(28)?,
+                last_watched_at: row.get(29)?,
+                resume_position_sec: row.get(30)?,
+                is_favorite: row.get::<_, i64>(31)? != 0,
+                watch_status: row.get(32)?,
+                watched_status: row.get(33)?,
+                personal_note: row.get(34)?,
             })
         })
         .optional()
@@ -505,9 +521,75 @@ pub fn delete_work(
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM user_stats   WHERE work_id = ?1", rusqlite::params![work_id])
         .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM series_works WHERE work_id = ?1", rusqlite::params![work_id])
+    conn.execute("DELETE FROM series_items WHERE work_id = ?1", rusqlite::params![work_id])
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM works WHERE id = ?1", rusqlite::params![work_id])
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_work_files(
+    state: State<'_, DbState>,
+    work_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    let files: Vec<(i64, String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.id, f.file_path, s.root_path
+                 FROM work_parts wp
+                 JOIN files f ON f.id = wp.file_id
+                 JOIN sources s ON s.id = f.source_id
+                 WHERE wp.work_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params![work_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+
+    for (_, file_path, root_path) in &files {
+        let mut path = std::path::PathBuf::from(file_path);
+        if !path.is_absolute() {
+            path = std::path::PathBuf::from(root_path).join(file_path);
+        }
+        if !path.exists() {
+            continue;
+        }
+        if !path.is_file() {
+            return Err(format!("削除対象がファイルではありません: {}", path.display()));
+        }
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("ファイル削除に失敗しました: {} ({})", path.display(), e))?;
+    }
+
+    conn.execute("DELETE FROM work_parts   WHERE work_id = ?1", rusqlite::params![work_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM work_tags    WHERE work_id = ?1", rusqlite::params![work_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM work_persons WHERE work_id = ?1", rusqlite::params![work_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM user_stats   WHERE work_id = ?1", rusqlite::params![work_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM series_items WHERE work_id = ?1", rusqlite::params![work_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM works WHERE id = ?1", rusqlite::params![work_id])
+        .map_err(|e| e.to_string())?;
+
+    for (file_id, _, _) in files {
+        conn.execute(
+            "DELETE FROM files
+             WHERE id = ?1
+               AND NOT EXISTS (SELECT 1 FROM work_parts WHERE file_id = ?1)",
+            rusqlite::params![file_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }

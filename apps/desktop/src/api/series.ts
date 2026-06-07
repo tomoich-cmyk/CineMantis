@@ -62,6 +62,7 @@ export async function getSeriesWorks(seriesId: number): Promise<WorkSummary[]> {
     dateAdded: null,
     lastWatchedAt: null,
     storagePath: null,
+    fileSize: null,
     posterPath: r.poster_path,
     userRating: r.user_rating,
     myRating: r.user_rating,
