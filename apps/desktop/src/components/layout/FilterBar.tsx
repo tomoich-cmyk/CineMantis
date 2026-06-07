@@ -1,7 +1,6 @@
 import { clsx } from "clsx";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useFilterOptions } from "@/hooks/useWorks";
-import { useTags } from "@/hooks/useTags";
 import { usePersonsList } from "@/hooks/usePersons";
 import { useSeriesList } from "@/hooks/useSeries";
 
@@ -21,7 +20,6 @@ export function useActiveFilterCount(): number {
   if (filters.minUserRating !== null) count++;
   if (filters.isFavorite) count++;
   if (filters.unorganizedOnly) count++;
-  if (filters.tagIds.length > 0) count++;
   return count;
 }
 
@@ -45,7 +43,6 @@ function fieldClass(extra = "") {
 export function FilterBar() {
   const { filters, setFilter, resetFilters } = useLibraryStore();
   const { data: opts } = useFilterOptions();
-  const { data: allTags = [] } = useTags();
   const { data: allPersons = [] } = usePersonsList();
   const { data: allSeries = [] } = useSeriesList();
   const activeCount = useActiveFilterCount();
@@ -157,33 +154,6 @@ export function FilterBar() {
         >
           お気に入り
         </button>
-
-        {allTags.length > 0 && (
-          <div className="flex gap-1 flex-wrap">
-            {allTags.map((tag) => {
-              const active = filters.tagIds.includes(tag.id);
-              return (
-                <button
-                  key={tag.id}
-                  onClick={() => {
-                    const next = active
-                      ? filters.tagIds.filter((id) => id !== tag.id)
-                      : [...filters.tagIds, tag.id];
-                    setFilter("tagIds", next);
-                  }}
-                  className={clsx(
-                    "px-2 py-0.5 text-xs rounded border transition-colors",
-                    active
-                      ? "bg-mantis-900/40 border-mantis-700/60 text-mantis-400"
-                      : "border-subtle text-gray-600 hover:text-gray-300",
-                  )}
-                >
-                  {tag.name}
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         <div className="flex-1" />
         {activeCount > 0 && (

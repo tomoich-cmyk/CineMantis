@@ -29,6 +29,7 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "myRating", label: "評価", sort: "my_rating" },
   { key: "playCount", label: "再生回数", sort: "play_count" },
   { key: "dateAdded", label: "登録日時", sort: "date_added" },
+  { key: "lastWatchedAt", label: "再生日時", sort: "last_watched_at" },
   { key: "fileSize", label: "サイズ" },
   { key: "storagePath", label: "保存場所" },
 ];
