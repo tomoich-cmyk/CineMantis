@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { clsx } from "clsx";
 import type { WorkSummary } from "@cinemantis/shared-types";
 import { StarRating } from "@/components/common/StarRating";
 import { useLibraryStore } from "@/store/libraryStore";
+import { useUpdateStats, useUpdateWorkLibraryFields } from "@/hooks/useWorks";
 
 const STATUS_LABEL: Record<string, string> = {
   unwatched: "未視聴",
@@ -23,6 +25,21 @@ const COUNTRY_LABEL: Record<string, string> = {
   domestic: "邦画",
   unknown: "不明",
 };
+
+const CATEGORY_OPTIONS = [
+  ["movie", "映画"],
+  ["drama", "ドラマ"],
+  ["ova", "OVA"],
+  ["other", "その他"],
+] as const;
+
+const COUNTRY_OPTIONS = [
+  ["foreign", "洋画"],
+  ["domestic", "邦画"],
+  ["unknown", "不明"],
+] as const;
+
+const EDITABLE_COLUMNS = new Set(["title", "releaseYear", "mediaCategory", "countryType", "genreText", "myRating"]);
 
 interface Props {
   work: WorkSummary;
@@ -77,6 +94,10 @@ function formatGenres(value: string | null) {
 
 function cellClass(extra = "") {
   return `min-w-0 flex items-center px-2 border-r border-[#151515] truncate ${extra}`;
+}
+
+function editorClass(extra = "") {
+  return `w-full h-[calc(100%-4px)] bg-[#10131a] border border-mantis-700/70 px-1.5 text-xs text-gray-100 outline-none ${extra}`;
 }
 
 function renderCell(column: string, work: WorkSummary) {
@@ -135,6 +156,10 @@ function renderCell(column: string, work: WorkSummary) {
 
 export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visibleColumns, top, height }: Props) {
   const { isSelectMode, selectedWorkIds, toggleSelectWork } = useLibraryStore();
+  const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
+  const { mutate: updateStats } = useUpdateStats();
+  const [editingColumn, setEditingColumn] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
   const isChecked = selectedWorkIds.includes(work.id);
 
   function handleClick() {
@@ -143,6 +168,152 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
     } else {
       onSelect();
     }
+  }
+
+  function editableValue(column: string) {
+    switch (column) {
+      case "title":
+        return work.title;
+      case "releaseYear":
+        return String(work.releaseYear ?? work.year ?? "");
+      case "mediaCategory":
+        return work.mediaCategory ?? "other";
+      case "countryType":
+        return work.countryType ?? "unknown";
+      case "genreText":
+        return formatGenres(work.genreText);
+      case "myRating":
+        return String(work.myRating ?? work.userRating ?? "");
+      default:
+        return "";
+    }
+  }
+
+  function startEdit(column: string, event: React.MouseEvent) {
+    if (!EDITABLE_COLUMNS.has(column)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setEditingColumn(column);
+    setDraft(editableValue(column));
+  }
+
+  function cancelEdit() {
+    setEditingColumn(null);
+    setDraft("");
+  }
+
+  function commitEdit(column: string, value = draft) {
+    if (editingColumn !== column) return;
+    const trimmed = value.trim();
+    setEditingColumn(null);
+    setDraft("");
+
+    if (column === "title") {
+      if (!trimmed || trimmed === work.title) return;
+      updateLibraryFields({ work_id: work.id, title: trimmed });
+      return;
+    }
+
+    if (column === "releaseYear") {
+      const next = trimmed ? Number(trimmed) : null;
+      if (next !== null && (!Number.isInteger(next) || next < 0)) return;
+      if (next === (work.releaseYear ?? work.year ?? null)) return;
+      updateLibraryFields({ work_id: work.id, release_year: next });
+      return;
+    }
+
+    if (column === "mediaCategory") {
+      if (value === work.mediaCategory) return;
+      updateLibraryFields({ work_id: work.id, media_category: value });
+      return;
+    }
+
+    if (column === "countryType") {
+      if (value === work.countryType) return;
+      updateLibraryFields({ work_id: work.id, country_type: value });
+      return;
+    }
+
+    if (column === "genreText") {
+      const next = trimmed || null;
+      if (next === (work.genreText ?? null)) return;
+      updateLibraryFields({ work_id: work.id, genre_text: next });
+      return;
+    }
+
+    if (column === "myRating") {
+      const next = trimmed ? Number(trimmed) : null;
+      if (next !== null && (!Number.isFinite(next) || next < 1 || next > 5)) return;
+      if (next === (work.myRating ?? work.userRating ?? null)) return;
+      updateStats({ work_id: work.id, user_rating: next, my_rating: next });
+    }
+  }
+
+  function handleEditorKey(event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
+    if (!editingColumn) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitEdit(editingColumn);
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEdit();
+    }
+  }
+
+  function renderEditor(column: string) {
+    if (column === "mediaCategory") {
+      return (
+        <select
+          autoFocus
+          value={draft}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={handleEditorKey}
+          onBlur={() => commitEdit(column)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            commitEdit(column, event.target.value);
+          }}
+          className={editorClass()}
+        >
+          {CATEGORY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      );
+    }
+
+    if (column === "countryType") {
+      return (
+        <select
+          autoFocus
+          value={draft}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={handleEditorKey}
+          onBlur={() => commitEdit(column)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            commitEdit(column, event.target.value);
+          }}
+          className={editorClass()}
+        >
+          {COUNTRY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      );
+    }
+
+    return (
+      <input
+        autoFocus
+        type={column === "releaseYear" || column === "myRating" ? "number" : "text"}
+        min={column === "myRating" ? 1 : undefined}
+        max={column === "myRating" ? 5 : undefined}
+        value={draft}
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={handleEditorKey}
+        onBlur={() => commitEdit(column)}
+        className={editorClass(column === "title" || column === "genreText" ? "" : "text-center")}
+      />
+    );
   }
 
   return (
@@ -167,8 +338,13 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
       )}
 
       {visibleColumns.map((column) => (
-        <div key={column} className={cellClass(column === "title" ? "font-medium" : "")}>
-          {renderCell(column, work)}
+        <div
+          key={column}
+          onDoubleClick={(event) => startEdit(column, event)}
+          title={EDITABLE_COLUMNS.has(column) ? "ダブルクリックで編集" : undefined}
+          className={cellClass(column === "title" ? "font-medium" : "")}
+        >
+          {editingColumn === column ? renderEditor(column) : renderCell(column, work)}
         </div>
       ))}
     </div>
