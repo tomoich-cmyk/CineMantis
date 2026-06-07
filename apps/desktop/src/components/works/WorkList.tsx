@@ -27,9 +27,8 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "countryType", label: "洋邦", sort: "country_type" },
   { key: "genreText", label: "ジャンル" },
   { key: "myRating", label: "評価", sort: "my_rating" },
-  { key: "watchedStatus", label: "視聴状態", sort: "watched_status" },
+  { key: "playCount", label: "再生回数", sort: "play_count" },
   { key: "dateAdded", label: "登録日時", sort: "date_added" },
-  { key: "lastWatchedAt", label: "最終視聴", sort: "last_watched_at" },
   { key: "fileSize", label: "サイズ" },
   { key: "storagePath", label: "保存場所" },
 ];
@@ -50,13 +49,7 @@ const COUNTRY_LABEL: Record<string, string> = {
 function decadeOf(work: WorkSummary) {
   const year = work.releaseYear ?? work.year;
   if (!year) return "不明";
-  return `${Math.floor(year / 10) * 10}s`;
-}
-
-function ratingBucket(work: WorkSummary) {
-  const rating = work.myRating ?? work.userRating;
-  if (!rating) return "未評価";
-  return `★ ${rating}`;
+  return String(year);
 }
 
 function splitGenres(value: string | null) {
@@ -69,14 +62,49 @@ function splitGenres(value: string | null) {
     .slice(0, 8);
 }
 
-function makeCounts(works: WorkSummary[], getValues: (work: WorkSummary) => string[]) {
+function makeCounts(
+  works: WorkSummary[],
+  getValues: (work: WorkSummary) => string[],
+  sorter?: (a: [string, number], b: [string, number]) => number,
+) {
   const counts = new Map<string, number>();
   for (const work of works) {
     for (const value of getValues(work)) {
       counts.set(value, (counts.get(value) ?? 0) + 1);
     }
   }
-  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ja"));
+  return Array.from(counts.entries()).sort(sorter ?? countSort);
+}
+
+function countSort(a: [string, number], b: [string, number]) {
+  const aUnknown = a[0] === "不明" || a[0] === "未設定";
+  const bUnknown = b[0] === "不明" || b[0] === "未設定";
+  if (aUnknown !== bUnknown) return aUnknown ? 1 : -1;
+  return b[1] - a[1] || a[0].localeCompare(b[0], "ja");
+}
+
+function yearSort(a: [string, number], b: [string, number]) {
+  const aYear = Number(a[0]);
+  const bYear = Number(b[0]);
+  const aUnknown = Number.isNaN(aYear);
+  const bUnknown = Number.isNaN(bYear);
+  if (aUnknown !== bUnknown) return aUnknown ? 1 : -1;
+  if (!aUnknown && aYear !== bYear) return bYear - aYear;
+  return countSort(a, b);
+}
+
+function playCountBucket(work: WorkSummary) {
+  const count = work.playCount ?? 0;
+  if (count <= 0) return "0回";
+  if (count === 1) return "1回";
+  if (count <= 4) return "2-4回";
+  if (count <= 9) return "5-9回";
+  return "10回以上";
+}
+
+function playCountSort(a: [string, number], b: [string, number]) {
+  const order = ["0回", "1回", "2-4回", "5-9回", "10回以上"];
+  return order.indexOf(a[0]) - order.indexOf(b[0]);
 }
 
 function BrowserPane({
@@ -133,8 +161,8 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
     () => makeCounts(works, (work) => [COUNTRY_LABEL[work.countryType] ?? work.countryType ?? "不明"]),
     [works],
   );
-  const decadeCounts = useMemo(() => makeCounts(works, (work) => [decadeOf(work)]), [works]);
-  const ratingCounts = useMemo(() => makeCounts(works, (work) => [ratingBucket(work)]), [works]);
+  const decadeCounts = useMemo(() => makeCounts(works, (work) => [decadeOf(work)], yearSort), [works]);
+  const playCountCounts = useMemo(() => makeCounts(works, (work) => [playCountBucket(work)], playCountSort), [works]);
   const genreCounts = useMemo(() => makeCounts(works, (work) => splitGenres(work.genreText)), [works]);
   const categoryCounts = useMemo(
     () => makeCounts(works, (work) => [CATEGORY_LABEL[work.mediaCategory] ?? work.mediaCategory ?? "その他"]),
@@ -187,25 +215,25 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
           onPick={(value) => setFilter("countryType", value ? countryReverse[value] ?? null : null)}
         />
         <BrowserPane
-          title="年代"
+          title="年"
           items={decadeCounts}
-          active={filters.yearFrom !== null && filters.yearTo !== null ? `${Math.floor(filters.yearFrom / 10) * 10}s` : null}
+          active={filters.yearFrom !== null && filters.yearTo !== null && filters.yearFrom === filters.yearTo ? String(filters.yearFrom) : null}
           onPick={(value) => {
             if (!value || value === "不明") {
               setFilter("yearFrom", null);
               setFilter("yearTo", null);
               return;
             }
-            const start = Number(value.slice(0, 4));
-            setFilter("yearFrom", start);
-            setFilter("yearTo", start + 9);
+            const year = Number(value);
+            setFilter("yearFrom", year);
+            setFilter("yearTo", year);
           }}
         />
         <BrowserPane
-          title="評価"
-          items={ratingCounts}
-          active={filters.minUserRating ? `★ ${filters.minUserRating}` : null}
-          onPick={(value) => setFilter("minUserRating", value?.startsWith("★") ? Number(value.replace("★", "").trim()) : null)}
+          title="再生回数"
+          items={playCountCounts}
+          active={null}
+          onPick={() => {}}
         />
         <BrowserPane
           title="ジャンル"
@@ -402,6 +430,7 @@ function VirtualList({
                   selected={selectedWorkId === work.id}
                   onSelect={() => setSelectedWorkId(selectedWorkId === work.id ? null : work.id)}
                   gridTemplateColumns={gridTemplateColumns}
+                  visibleColumns={visibleDefs.map((column) => column.key)}
                   top={vItem.start}
                   height={vItem.size}
                 />

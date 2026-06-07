@@ -10,15 +10,12 @@ export function useActiveFilterCount(): number {
   let count = 0;
   if (filters.query.trim()) count++;
   if (filters.workType !== null) count++;
-  if (filters.watchStatus !== null) count++;
   if (filters.yearFrom !== null) count++;
   if (filters.yearTo !== null) count++;
   if (filters.genre !== null) count++;
   if (filters.country !== null) count++;
   if (filters.countryType !== null) count++;
   if (filters.mediaCategory !== null) count++;
-  if (filters.dateAddedFrom !== null) count++;
-  if (filters.dateAddedTo !== null) count++;
   if (filters.personId !== null) count++;
   if (filters.seriesId !== null) count++;
   if (filters.minUserRating !== null) count++;
@@ -27,13 +24,6 @@ export function useActiveFilterCount(): number {
   if (filters.tagIds.length > 0) count++;
   return count;
 }
-
-const WATCH_OPTIONS = [
-  ["unwatched", "未視聴"],
-  ["watching", "視聴中"],
-  ["watched", "視聴済"],
-  ["abandoned", "中止"],
-] as const;
 
 const CATEGORY_OPTIONS = [
   ["movie", "映画"],
@@ -93,17 +83,6 @@ export function FilterBar() {
         </select>
 
         <select
-          value={filters.watchStatus ?? ""}
-          onChange={(e) => setFilter("watchStatus", e.target.value || null)}
-          className={fieldClass("min-w-[104px]")}
-        >
-          <option value="">視聴状態</option>
-          {WATCH_OPTIONS.map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-
-        <select
           value={filters.genre ?? ""}
           onChange={(e) => setFilter("genre", e.target.value || null)}
           className={fieldClass("min-w-[120px]")}
@@ -114,20 +93,6 @@ export function FilterBar() {
           ))}
         </select>
 
-        <input
-          type="number"
-          placeholder={opts?.year_min?.toString() ?? "年から"}
-          value={filters.yearFrom ?? ""}
-          onChange={(e) => setFilter("yearFrom", e.target.value ? Number(e.target.value) : null)}
-          className={fieldClass("w-20 text-center")}
-        />
-        <input
-          type="number"
-          placeholder={opts?.year_max?.toString() ?? "年まで"}
-          value={filters.yearTo ?? ""}
-          onChange={(e) => setFilter("yearTo", e.target.value ? Number(e.target.value) : null)}
-          className={fieldClass("w-20 text-center")}
-        />
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
@@ -146,21 +111,6 @@ export function FilterBar() {
             </button>
           ))}
         </div>
-
-        <input
-          type="date"
-          value={filters.dateAddedFrom ?? ""}
-          onChange={(e) => setFilter("dateAddedFrom", e.target.value ? `${e.target.value}T00:00:00` : null)}
-          className={fieldClass("w-36")}
-          title="登録日 from"
-        />
-        <input
-          type="date"
-          value={filters.dateAddedTo?.slice(0, 10) ?? ""}
-          onChange={(e) => setFilter("dateAddedTo", e.target.value ? `${e.target.value}T23:59:59` : null)}
-          className={fieldClass("w-36")}
-          title="登録日 to"
-        />
 
         <select
           value={filters.personId ?? ""}

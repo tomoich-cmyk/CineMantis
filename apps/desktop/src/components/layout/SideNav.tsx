@@ -19,11 +19,6 @@ const NAV_ITEMS: NavItem[] = [
   { id: "persons", label: "人物", icon: "👤", group: "ライブラリ" },
   { id: "tags", label: "タグ", icon: "🏷", group: "ライブラリ" },
   // Smart lists
-  { id: "continue-watching", label: "視聴途中",   icon: "⏸",  group: "スマート" },
-  { id: "stalled",           label: "止まった視聴", icon: "💤", group: "スマート" },
-  { id: "unwatched",         label: "未視聴",     icon: "⬜", group: "スマート" },
-  { id: "watching",          label: "視聴中",     icon: "▶",  group: "スマート" },
-  { id: "completed",         label: "視聴済",     icon: "✓",  group: "スマート" },
   { id: "favorites",         label: "お気に入り", icon: "★",  group: "スマート" },
   { id: "recently-added",    label: "最近追加",   icon: "🆕", group: "スマート" },
   { id: "recently-played",   label: "最近視聴",   icon: "⏱",  group: "スマート" },
