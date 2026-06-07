@@ -6,9 +6,7 @@ export type Density = "compact" | "normal" | "relaxed";
 
 export interface LibraryFilters {
   workType: WorkType | null;
-  watchStatus: string | null;
   matchStatus: string | null;
-  tagIds: number[];
   sourceId: number | null;
   query: string;
   // 拡張フィルタ (FilterBar)
@@ -86,9 +84,7 @@ interface LibraryStore {
 
 const defaultFilters: LibraryFilters = {
   workType: null,
-  watchStatus: null,
   matchStatus: null,
-  tagIds: [],
   sourceId: null,
   query: "",
   yearFrom: null,
@@ -251,10 +247,8 @@ export const useLibraryStore = create<LibraryStore>()(
             ? {
                 ...current.filters,
                 ...state.filters,
-                watchStatus: null,
                 dateAddedFrom: null,
                 dateAddedTo: null,
-                tagIds: [],
               }
             : current.filters,
           visibleColumns: nextVisibleColumns,

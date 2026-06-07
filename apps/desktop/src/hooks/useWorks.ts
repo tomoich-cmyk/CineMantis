@@ -20,10 +20,7 @@ export const workKeys = {
 
 type SmartOverride = {
   workType?: string | null;
-  watchStatus?: string | null;
   isFavorite?: boolean;
-  minUserRating?: number;
-  minPlayCount?: number;
   matchStatus?: string | null;
   unorganizedOnly?: boolean;
   sortField?: SortField;
@@ -34,17 +31,9 @@ function getSmartOverride(section: string): SmartOverride {
   switch (section) {
     case "all-movies":      return { workType: "movie" };
     case "all-drama":       return { workType: "drama" };
-    case "unwatched":       return { watchStatus: "unwatched" };
-    case "watching":        return { watchStatus: "watching" };
-    case "recently-added":    return { sortField: "created_at",    sortOrder: "desc" };
-    case "recently-played":   return { sortField: "last_watched_at", sortOrder: "desc", minPlayCount: 1 };
-    case "high-rated":        return { minUserRating: 4, sortField: "my_rating", sortOrder: "desc" };
     case "favorites":         return { isFavorite: true, sortField: "title", sortOrder: "asc" };
-    case "continue-watching": return { watchStatus: "watching",  sortField: "last_watched_at", sortOrder: "desc" };
     case "needs-attention":   return { matchStatus: "unmatched", sortField: "created_at",     sortOrder: "desc" };
     case "unorganized":       return { unorganizedOnly: true, sortField: "reading", sortOrder: "asc" };
-    case "completed":         return { watchStatus: "watched",   sortField: "last_watched_at", sortOrder: "desc" };
-    case "stalled":           return { watchStatus: "watching",  sortField: "last_watched_at", sortOrder: "asc" };
     default:                  return {};
   }
 }
@@ -59,10 +48,8 @@ export function useWorkList() {
   const params: ListWorksParams = {
     // smart overrides → then user filters
     workType:       smart.workType      !== undefined ? smart.workType      : (filters.workType ?? null),
-    watchStatus:    smart.watchStatus   !== undefined ? smart.watchStatus   : (filters.watchStatus ?? null),
     isFavorite:     smart.isFavorite    !== undefined ? smart.isFavorite    : (filters.isFavorite || null),
-    minUserRating:  smart.minUserRating !== undefined ? smart.minUserRating : (filters.minUserRating ?? null),
-    minPlayCount:   smart.minPlayCount  !== undefined ? smart.minPlayCount  : null,
+    minUserRating:  filters.minUserRating ?? null,
     sortField:      smart.sortField     !== undefined ? smart.sortField     : sortField,
     sortOrder:      smart.sortOrder     !== undefined ? smart.sortOrder     : sortOrder,
     // passthrough filters
@@ -78,7 +65,6 @@ export function useWorkList() {
     dateAddedTo:    filters.dateAddedTo,
     personId:       filters.personId,
     seriesId:       filters.seriesId,
-    tagIds:         filters.tagIds,
     unorganizedOnly: smart.unorganizedOnly || filters.unorganizedOnly,
   };
 
