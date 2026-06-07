@@ -30,6 +30,7 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "watchedStatus", label: "視聴状態", sort: "watched_status" },
   { key: "dateAdded", label: "登録日時", sort: "date_added" },
   { key: "lastWatchedAt", label: "最終視聴", sort: "last_watched_at" },
+  { key: "fileSize", label: "サイズ" },
   { key: "storagePath", label: "保存場所" },
 ];
 
@@ -91,13 +92,14 @@ function BrowserPane({
 }) {
   const total = items.reduce((sum, [, count]) => sum + count, 0);
   return (
-    <section className="min-w-0 flex flex-col border-r border-[#151515] bg-[#070707]">
+    <section className="min-w-0 flex flex-col overflow-hidden border-r border-[#151515] bg-[#070707]">
       <div className="h-7 flex items-center px-3 text-xs text-gray-500 border-b border-[#151515]">{title}</div>
       <div className="flex-1 overflow-auto">
         <button
           onClick={() => onPick(null)}
-          className={`w-full grid grid-cols-[1fr_auto] gap-2 px-3 py-1 text-left text-xs ${active === null ? "bg-mantis-600 text-black" : "text-gray-300 hover:bg-[#141414]"}`}
+          className={`w-full grid grid-cols-[2px_1fr_auto] gap-2 px-2 py-1 text-left text-xs ${active === null ? "bg-[#101510] text-mantis-300" : "text-gray-300 hover:bg-[#141414]"}`}
         >
+          <span className={active === null ? "bg-mantis-500" : ""} />
           <span className="truncate">すべて</span>
           <span>{total.toLocaleString("ja-JP")}</span>
         </button>
@@ -105,8 +107,9 @@ function BrowserPane({
           <button
             key={label}
             onClick={() => onPick(label)}
-            className={`w-full grid grid-cols-[1fr_auto] gap-2 px-3 py-1 text-left text-xs ${active === label ? "bg-mantis-600 text-black" : "text-gray-400 hover:bg-[#141414] hover:text-gray-100"}`}
+            className={`w-full grid grid-cols-[2px_1fr_auto] gap-2 px-2 py-1 text-left text-xs ${active === label ? "bg-[#101510] text-mantis-300" : "text-gray-400 hover:bg-[#141414] hover:text-gray-100"}`}
           >
+            <span className={active === label ? "bg-mantis-500" : ""} />
             <span className="truncate">{label}</span>
             <span>{count.toLocaleString("ja-JP")}</span>
           </button>
@@ -167,7 +170,7 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
   const isDrama = activeSection === "all-drama";
 
   return (
-    <div className="relative flex-shrink-0 border-b border-[#151515] bg-black" style={{ height: browserPaneHeight }}>
+    <div className="relative flex-shrink-0 overflow-hidden border-b border-[#151515] bg-black" style={{ height: browserPaneHeight }}>
       <div className={`h-full grid ${isDrama ? "grid-cols-[1fr_0.9fr_0.9fr_1.2fr]" : "grid-cols-[0.85fr_0.85fr_0.75fr_1.55fr]"}`}>
         {isDrama && (
           <BrowserPane
@@ -215,7 +218,7 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
         type="button"
         aria-label="ブラウザ行の高さを変更"
         onMouseDown={startResize}
-        className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize bg-transparent hover:bg-mantis-500/70"
+        className="absolute bottom-0 left-0 right-0 h-px cursor-row-resize bg-[#1a1a1a] hover:bg-mantis-500/60"
       />
     </div>
   );

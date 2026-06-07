@@ -102,6 +102,7 @@ pub fn run() {
             commands::audit::get_integrity_report,
             // Work (delete)
             commands::work::delete_work,
+            commands::work::delete_work_files,
             // TMDb repair
             commands::tmdb::repair_fetch_persons,
             // Platform

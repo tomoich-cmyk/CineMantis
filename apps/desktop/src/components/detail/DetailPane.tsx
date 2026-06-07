@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useLibraryStore } from "@/store/libraryStore";
-import { useWorkDetail, useWorkTags, useUpdateStats, useUpdateWorkLibraryFields } from "@/hooks/useWorks";
+import { useWorkDetail, useWorkTags, useUpdateStats, useUpdateWorkLibraryFields, useDeleteWorkFiles } from "@/hooks/useWorks";
 import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
 import { useWorkPersons } from "@/hooks/usePersons";
 import { useOpenWorkFile, useSetWatchStatus, useUpdateResumePosition } from "@/hooks/useWatch";
@@ -47,6 +47,18 @@ function formatRuntime(sec: number | null) {
   return h > 0 ? `${h}時間${m}分` : `${m}分`;
 }
 
+function formatBytes(value: number | null) {
+  if (value === null || value <= 0) return null;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit >= 3 ? 1 : 0)} ${units[unit]}`;
+}
+
 function formatPosition(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
@@ -82,6 +94,7 @@ export function DetailPane() {
   const { data: persons = [] } = useWorkPersons(selectedWorkId);
   const { mutate: updateStats } = useUpdateStats();
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
+  const { mutate: deleteFiles, isPending: deletingFiles } = useDeleteWorkFiles();
   const { mutate: autoMatch, isPending: autoMatching } = useAutoMatchWork();
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
@@ -95,6 +108,18 @@ export function DetailPane() {
   function navigateToPerson(personId: number) {
     setSelectedPersonId(personId);
     setActiveSection("persons");
+  }
+
+  function confirmDeleteFiles() {
+    if (!work) return;
+    const ok = window.confirm(
+      `「${work.title}」の実ファイルを削除し、ライブラリからも削除します。\n\nこの操作は元に戻せません。本当に削除しますか？`,
+    );
+    if (!ok) return;
+    deleteFiles(work.id, {
+      onSuccess: () => setSelectedWorkId(null),
+      onError: (error) => window.alert(String(error)),
+    });
   }
 
   if (!selectedWorkId) return null;
@@ -217,6 +242,7 @@ export function DetailPane() {
           <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
             {work.year         && <span>{work.year}</span>}
             {work.runtime_sec  && <><span>·</span><span>{formatRuntime(work.runtime_sec)}</span></>}
+            {formatBytes(work.file_size) && <><span>·</span><span>{formatBytes(work.file_size)}</span></>}
             {work.external_rating && (
               <><span>·</span><span className="text-yellow-500">★ {work.external_rating.toFixed(1)}</span></>
             )}
@@ -498,6 +524,14 @@ export function DetailPane() {
                 照合を解除
               </button>
             )}
+
+            <button
+              onClick={confirmDeleteFiles}
+              disabled={deletingFiles}
+              className="w-full py-1.5 text-xs border border-red-900/60 rounded text-red-500/80 hover:text-red-300 hover:border-red-700 transition-colors disabled:opacity-30"
+            >
+              {deletingFiles ? "削除中..." : "実ファイルを削除"}
+            </button>
           </div>
         </div>
       </aside>

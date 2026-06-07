@@ -145,6 +145,7 @@ pub fn get_person_works(
                 date_added: None,
                 last_watched_at: None,
                 storage_path: None,
+                file_size: None,
                 poster_path: row.get(4)?,
                 user_rating: row.get(5)?,
                 my_rating: row.get(5)?,

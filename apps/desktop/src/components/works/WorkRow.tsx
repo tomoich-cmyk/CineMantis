@@ -40,6 +40,18 @@ function formatDate(value: string | null) {
   return date.toLocaleDateString("ja-JP");
 }
 
+function formatBytes(value: number | null) {
+  if (value === null || value <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit >= 3 ? 1 : 0)} ${units[unit]}`;
+}
+
 function cellClass(extra = "") {
   return `min-w-0 flex items-center px-2 border-r border-[#151515] truncate ${extra}`;
 }
@@ -87,6 +99,8 @@ function renderCell(column: string, work: WorkSummary) {
       return formatDate(work.dateAdded);
     case "lastWatchedAt":
       return formatDate(work.lastWatchedAt);
+    case "fileSize":
+      return <span className="font-mono text-gray-500">{formatBytes(work.fileSize)}</span>;
     case "storagePath":
       return <span className="truncate text-gray-500">{work.storagePath || ""}</span>;
     default:

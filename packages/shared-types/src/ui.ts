@@ -64,6 +64,7 @@ export interface WorkSummary {
   dateAdded: string | null;
   lastWatchedAt: string | null;
   storagePath: string | null;
+  fileSize: number | null;
   posterPath: string | null;
   userRating: number | null;
   myRating: number | null;

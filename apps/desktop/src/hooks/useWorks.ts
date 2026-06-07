@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listWorks, getWork, getFilterOptions, updateWorkLibraryFields } from "@/api/works";
+import { listWorks, getWork, getFilterOptions, updateWorkLibraryFields, deleteWorkFiles } from "@/api/works";
 import type { ListWorksParams } from "@/api/works";
 import { updateUserStats, recordPlay } from "@/api/stats";
 import { listWorkTags } from "@/api/tags";
@@ -137,6 +137,17 @@ export function useUpdateWorkLibraryFields() {
     mutationFn: updateWorkLibraryFields,
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: workKeys.detail(vars.work_id) });
+      qc.invalidateQueries({ queryKey: workKeys.all });
+      qc.invalidateQueries({ queryKey: workKeys.filterOptions });
+    },
+  });
+}
+
+export function useDeleteWorkFiles() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteWorkFiles,
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: workKeys.all });
       qc.invalidateQueries({ queryKey: workKeys.filterOptions });
     },
