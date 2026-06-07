@@ -20,17 +20,17 @@ const ROW_HEIGHT: Record<Density, number> = {
   relaxed: 40,
 };
 
-export const COLUMN_DEFS: { key: string; label: string; sort?: SortField; min: number }[] = [
-  { key: "title", label: "タイトル", sort: "title", min: 160 },
-  { key: "releaseYear", label: "年", sort: "release_year", min: 56 },
-  { key: "mediaCategory", label: "種別", sort: "media_category", min: 70 },
-  { key: "countryType", label: "洋邦", sort: "country_type", min: 66 },
-  { key: "genreText", label: "ジャンル", min: 110 },
-  { key: "myRating", label: "評価", sort: "my_rating", min: 92 },
-  { key: "watchedStatus", label: "視聴状態", sort: "watched_status", min: 86 },
-  { key: "dateAdded", label: "登録日時", sort: "date_added", min: 112 },
-  { key: "lastWatchedAt", label: "最終視聴", sort: "last_watched_at", min: 112 },
-  { key: "storagePath", label: "保存場所", min: 180 },
+export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
+  { key: "title", label: "タイトル", sort: "title" },
+  { key: "releaseYear", label: "年", sort: "release_year" },
+  { key: "mediaCategory", label: "種別", sort: "media_category" },
+  { key: "countryType", label: "洋邦", sort: "country_type" },
+  { key: "genreText", label: "ジャンル" },
+  { key: "myRating", label: "評価", sort: "my_rating" },
+  { key: "watchedStatus", label: "視聴状態", sort: "watched_status" },
+  { key: "dateAdded", label: "登録日時", sort: "date_added" },
+  { key: "lastWatchedAt", label: "最終視聴", sort: "last_watched_at" },
+  { key: "storagePath", label: "保存場所" },
 ];
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -65,7 +65,7 @@ function splitGenres(value: string | null) {
     .split(/[,\u3001/]/)
     .map((v) => v.replace(/^"|"$/g, "").trim())
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(0, 8);
 }
 
 function makeCounts(works: WorkSummary[], getValues: (work: WorkSummary) => string[]) {
@@ -89,16 +89,17 @@ function BrowserPane({
   active: string | null;
   onPick: (value: string | null) => void;
 }) {
+  const total = items.reduce((sum, [, count]) => sum + count, 0);
   return (
-    <section className="min-w-0 flex flex-col border-r border-[#161616] bg-[#090909]">
-      <div className="h-7 flex items-center px-3 text-xs text-gray-500 border-b border-[#161616]">{title}</div>
+    <section className="min-w-0 flex flex-col border-r border-[#151515] bg-[#070707]">
+      <div className="h-7 flex items-center px-3 text-xs text-gray-500 border-b border-[#151515]">{title}</div>
       <div className="flex-1 overflow-auto">
         <button
           onClick={() => onPick(null)}
           className={`w-full grid grid-cols-[1fr_auto] gap-2 px-3 py-1 text-left text-xs ${active === null ? "bg-mantis-600 text-black" : "text-gray-300 hover:bg-[#141414]"}`}
         >
           <span className="truncate">すべて</span>
-          <span>{items.reduce((sum, [, count]) => sum + count, 0).toLocaleString("ja-JP")}</span>
+          <span>{total.toLocaleString("ja-JP")}</span>
         </button>
         {items.map(([label, count]) => (
           <button
@@ -116,11 +117,15 @@ function BrowserPane({
 }
 
 function LibraryBrowser({ works }: { works: WorkSummary[] }) {
-  const { filters, setFilter } = useLibraryStore();
-  const categoryCounts = useMemo(
-    () => makeCounts(works, (work) => [CATEGORY_LABEL[work.mediaCategory] ?? work.mediaCategory ?? "その他"]),
-    [works],
-  );
+  const {
+    activeSection,
+    filters,
+    setFilter,
+    browserPaneHeight,
+    setBrowserPaneHeight,
+  } = useLibraryStore();
+  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
   const countryCounts = useMemo(
     () => makeCounts(works, (work) => [COUNTRY_LABEL[work.countryType] ?? work.countryType ?? "不明"]),
     [works],
@@ -128,50 +133,89 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
   const decadeCounts = useMemo(() => makeCounts(works, (work) => [decadeOf(work)]), [works]);
   const ratingCounts = useMemo(() => makeCounts(works, (work) => [ratingBucket(work)]), [works]);
   const genreCounts = useMemo(() => makeCounts(works, (work) => splitGenres(work.genreText)), [works]);
+  const categoryCounts = useMemo(
+    () => makeCounts(works, (work) => [CATEGORY_LABEL[work.mediaCategory] ?? work.mediaCategory ?? "その他"]),
+    [works],
+  );
 
-  const categoryReverse: Record<string, string> = { 映画: "movie", ドラマ: "drama", OVA: "ova", その他: "other" };
+  useEffect(() => {
+    function onMove(event: MouseEvent) {
+      const current = resizeRef.current;
+      if (!current) return;
+      setBrowserPaneHeight(current.startHeight + event.clientY - current.startY);
+    }
+    function onUp() {
+      resizeRef.current = null;
+      document.body.classList.remove("cm-row-resizing");
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [setBrowserPaneHeight]);
+
+  function startResize(event: React.MouseEvent) {
+    event.preventDefault();
+    resizeRef.current = { startY: event.clientY, startHeight: browserPaneHeight };
+    document.body.classList.add("cm-row-resizing");
+  }
+
   const countryReverse: Record<string, string> = { 洋画: "foreign", 邦画: "domestic", 不明: "unknown" };
+  const categoryReverse: Record<string, string> = { 映画: "movie", ドラマ: "drama", OVA: "ova", その他: "other" };
+  const isDrama = activeSection === "all-drama";
 
   return (
-    <div className="h-48 grid grid-cols-[1.1fr_0.9fr_0.9fr_0.8fr_1.2fr] border-b border-[#161616] bg-black">
-      <BrowserPane
-        title="種別"
-        items={categoryCounts}
-        active={filters.mediaCategory ? CATEGORY_LABEL[filters.mediaCategory] : null}
-        onPick={(value) => setFilter("mediaCategory", value ? categoryReverse[value] ?? null : null)}
-      />
-      <BrowserPane
-        title="洋邦"
-        items={countryCounts}
-        active={filters.countryType ? COUNTRY_LABEL[filters.countryType] : null}
-        onPick={(value) => setFilter("countryType", value ? countryReverse[value] ?? null : null)}
-      />
-      <BrowserPane
-        title="年代"
-        items={decadeCounts}
-        active={filters.yearFrom !== null && filters.yearTo !== null ? `${Math.floor(filters.yearFrom / 10) * 10}s` : null}
-        onPick={(value) => {
-          if (!value || value === "不明") {
-            setFilter("yearFrom", null);
-            setFilter("yearTo", null);
-            return;
-          }
-          const start = Number(value.slice(0, 4));
-          setFilter("yearFrom", start);
-          setFilter("yearTo", start + 9);
-        }}
-      />
-      <BrowserPane
-        title="評価"
-        items={ratingCounts}
-        active={filters.minUserRating ? `★ ${filters.minUserRating}` : null}
-        onPick={(value) => setFilter("minUserRating", value?.startsWith("★") ? Number(value.replace("★", "").trim()) : null)}
-      />
-      <BrowserPane
-        title="ジャンル"
-        items={genreCounts}
-        active={filters.genre}
-        onPick={(value) => setFilter("genre", value === "未設定" ? null : value)}
+    <div className="relative flex-shrink-0 border-b border-[#151515] bg-black" style={{ height: browserPaneHeight }}>
+      <div className={`h-full grid ${isDrama ? "grid-cols-[1fr_0.9fr_0.9fr_1.2fr]" : "grid-cols-[0.85fr_0.85fr_0.75fr_1.55fr]"}`}>
+        {isDrama && (
+          <BrowserPane
+            title="種別"
+            items={categoryCounts}
+            active={filters.mediaCategory ? CATEGORY_LABEL[filters.mediaCategory] : null}
+            onPick={(value) => setFilter("mediaCategory", value ? categoryReverse[value] ?? null : null)}
+          />
+        )}
+        <BrowserPane
+          title="洋邦"
+          items={countryCounts}
+          active={filters.countryType ? COUNTRY_LABEL[filters.countryType] : null}
+          onPick={(value) => setFilter("countryType", value ? countryReverse[value] ?? null : null)}
+        />
+        <BrowserPane
+          title="年代"
+          items={decadeCounts}
+          active={filters.yearFrom !== null && filters.yearTo !== null ? `${Math.floor(filters.yearFrom / 10) * 10}s` : null}
+          onPick={(value) => {
+            if (!value || value === "不明") {
+              setFilter("yearFrom", null);
+              setFilter("yearTo", null);
+              return;
+            }
+            const start = Number(value.slice(0, 4));
+            setFilter("yearFrom", start);
+            setFilter("yearTo", start + 9);
+          }}
+        />
+        <BrowserPane
+          title="評価"
+          items={ratingCounts}
+          active={filters.minUserRating ? `★ ${filters.minUserRating}` : null}
+          onPick={(value) => setFilter("minUserRating", value?.startsWith("★") ? Number(value.replace("★", "").trim()) : null)}
+        />
+        <BrowserPane
+          title="ジャンル"
+          items={genreCounts}
+          active={filters.genre}
+          onPick={(value) => setFilter("genre", value === "未設定" ? null : value)}
+        />
+      </div>
+      <button
+        type="button"
+        aria-label="ブラウザ行の高さを変更"
+        onMouseDown={startResize}
+        className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize bg-transparent hover:bg-mantis-500/70"
       />
     </div>
   );
@@ -282,8 +326,8 @@ function VirtualList({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#070707]">
-      <div className="h-8 flex items-center justify-between px-3 border-b border-[#161616] bg-[#0b0b0b]">
-        <div className="text-xs text-gray-500">トラック: {works.length.toLocaleString("ja-JP")} 件</div>
+      <div className="h-8 flex items-center justify-between px-3 border-b border-[#151515] bg-[#0b0b0b]">
+        <div className="text-xs text-gray-500">作品: {works.length.toLocaleString("ja-JP")} 件</div>
         <div className="relative">
           <button
             onClick={() => setColumnMenuOpen((v) => !v)}
