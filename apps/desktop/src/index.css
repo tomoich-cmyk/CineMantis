@@ -21,6 +21,12 @@
     user-select: none !important;
   }
 
+  body.cm-row-resizing,
+  body.cm-row-resizing * {
+    cursor: row-resize !important;
+    user-select: none !important;
+  }
+
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;

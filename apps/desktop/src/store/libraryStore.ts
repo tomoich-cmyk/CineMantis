@@ -80,6 +80,8 @@ interface LibraryStore {
   setVisibleColumns: (columns: string[]) => void;
   columnWidths: Record<string, number>;
   setColumnWidth: (key: string, width: number) => void;
+  browserPaneHeight: number;
+  setBrowserPaneHeight: (height: number) => void;
 }
 
 const defaultFilters: LibraryFilters = {
@@ -208,6 +210,9 @@ export const useLibraryStore = create<LibraryStore>()(
             [key]: Math.max(56, Math.min(640, Math.round(width))),
           },
         })),
+      browserPaneHeight: 176,
+      setBrowserPaneHeight: (height) =>
+        set({ browserPaneHeight: Math.max(72, Math.min(360, Math.round(height))) }),
     }),
     {
       name: "cinemantis-library-v1",
@@ -220,6 +225,7 @@ export const useLibraryStore = create<LibraryStore>()(
         filterBarOpen: state.filterBarOpen,
         visibleColumns: state.visibleColumns,
         columnWidths: state.columnWidths,
+        browserPaneHeight: state.browserPaneHeight,
         filters: {
           ...state.filters,
           query: "", // 検索文字列は保存しない
