@@ -78,6 +78,8 @@ interface LibraryStore {
 
   visibleColumns: string[];
   setVisibleColumns: (columns: string[]) => void;
+  columnWidths: Record<string, number>;
+  setColumnWidth: (key: string, width: number) => void;
 }
 
 const defaultFilters: LibraryFilters = {
@@ -114,6 +116,19 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "lastWatchedAt",
   "storagePath",
 ];
+
+export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
+  title: 260,
+  releaseYear: 72,
+  mediaCategory: 88,
+  countryType: 78,
+  genreText: 170,
+  myRating: 112,
+  watchedStatus: 100,
+  dateAdded: 132,
+  lastWatchedAt: 132,
+  storagePath: 280,
+};
 
 export const useLibraryStore = create<LibraryStore>()(
   persist(
@@ -185,6 +200,14 @@ export const useLibraryStore = create<LibraryStore>()(
 
       visibleColumns: DEFAULT_VISIBLE_COLUMNS,
       setVisibleColumns: (visibleColumns) => set({ visibleColumns }),
+      columnWidths: DEFAULT_COLUMN_WIDTHS,
+      setColumnWidth: (key, width) =>
+        set((s) => ({
+          columnWidths: {
+            ...s.columnWidths,
+            [key]: Math.max(56, Math.min(640, Math.round(width))),
+          },
+        })),
     }),
     {
       name: "cinemantis-library-v1",
@@ -196,6 +219,7 @@ export const useLibraryStore = create<LibraryStore>()(
         density:       state.density,
         filterBarOpen: state.filterBarOpen,
         visibleColumns: state.visibleColumns,
+        columnWidths: state.columnWidths,
         filters: {
           ...state.filters,
           query: "", // 検索文字列は保存しない
