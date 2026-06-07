@@ -8,7 +8,7 @@ export async function openWorkFile(workId: number): Promise<void> {
 /** 視聴状態を直接セット */
 export async function setWatchStatus(
   workId: number,
-  status: "unwatched" | "watching" | "watched" | "skipped"
+  status: "unwatched" | "watching" | "watched" | "abandoned" | "skipped"
 ): Promise<void> {
   return invoke("set_watch_status", { workId, status });
 }

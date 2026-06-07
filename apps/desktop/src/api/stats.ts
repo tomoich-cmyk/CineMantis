@@ -3,18 +3,24 @@ import { invoke } from "@tauri-apps/api/core";
 export interface UserStatsRow {
   work_id: number;
   user_rating: number | null;
+  my_rating: number | null;
   play_count: number;
   last_played_at: string | null;
+  last_watched_at: string | null;
   resume_position_sec: number | null;
   is_favorite: boolean;
   watch_status: string;
+  watched_status: string;
   personal_note: string | null;
 }
 
 export interface UpdateStatsPayload {
   work_id: number;
   user_rating?: number | null;
+  my_rating?: number | null;
   watch_status?: string | null;
+  watched_status?: string | null;
+  last_watched_at?: string | null;
   is_favorite?: boolean | null;
   personal_note?: string | null;
   resume_position_sec?: number | null;

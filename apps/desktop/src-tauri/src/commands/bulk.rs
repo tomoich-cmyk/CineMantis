@@ -55,11 +55,14 @@ pub fn bulk_set_watch_status(
     status: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let legacy_status = if status == "abandoned" { "skipped".to_string() } else { status.clone() };
     conn.execute(
-        "INSERT INTO user_stats (work_id, watch_status)
-         SELECT CAST(je.value AS INTEGER), ?2 FROM json_each(?1) je
-         ON CONFLICT(work_id) DO UPDATE SET watch_status = excluded.watch_status",
-        rusqlite::params![work_ids_json, status],
+        "INSERT INTO user_stats (work_id, watch_status, watched_status)
+         SELECT CAST(je.value AS INTEGER), ?2, ?3 FROM json_each(?1) je
+         ON CONFLICT(work_id) DO UPDATE SET
+           watch_status = excluded.watch_status,
+           watched_status = excluded.watched_status",
+        rusqlite::params![work_ids_json, legacy_status, status],
     )
     .map_err(|e| e.to_string())?;
     Ok(())

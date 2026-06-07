@@ -16,8 +16,15 @@ export interface LibraryFilters {
   yearTo: number | null;
   genre: string | null;
   country: string | null;
+  countryType: string | null;
+  mediaCategory: string | null;
+  dateAddedFrom: string | null;
+  dateAddedTo: string | null;
+  personId: number | null;
+  seriesId: number | null;
   minUserRating: number | null;
   isFavorite: boolean;
+  unorganizedOnly: boolean;
 }
 
 interface LibraryStore {
@@ -68,6 +75,9 @@ interface LibraryStore {
   toggleSelectWork: (id: number) => void;
   selectAllWorks: (ids: number[]) => void;
   clearSelection: () => void;
+
+  visibleColumns: string[];
+  setVisibleColumns: (columns: string[]) => void;
 }
 
 const defaultFilters: LibraryFilters = {
@@ -81,9 +91,29 @@ const defaultFilters: LibraryFilters = {
   yearTo: null,
   genre: null,
   country: null,
+  countryType: null,
+  mediaCategory: null,
+  dateAddedFrom: null,
+  dateAddedTo: null,
+  personId: null,
+  seriesId: null,
   minUserRating: null,
   isFavorite: false,
+  unorganizedOnly: false,
 };
+
+export const DEFAULT_VISIBLE_COLUMNS = [
+  "title",
+  "releaseYear",
+  "mediaCategory",
+  "countryType",
+  "genreText",
+  "myRating",
+  "watchedStatus",
+  "dateAdded",
+  "lastWatchedAt",
+  "storagePath",
+];
 
 export const useLibraryStore = create<LibraryStore>()(
   persist(
@@ -152,6 +182,9 @@ export const useLibraryStore = create<LibraryStore>()(
         })),
       selectAllWorks: (ids) => set({ selectedWorkIds: ids }),
       clearSelection: () => set({ selectedWorkIds: [] }),
+
+      visibleColumns: DEFAULT_VISIBLE_COLUMNS,
+      setVisibleColumns: (visibleColumns) => set({ visibleColumns }),
     }),
     {
       name: "cinemantis-library-v1",
@@ -162,6 +195,7 @@ export const useLibraryStore = create<LibraryStore>()(
         viewMode:      state.viewMode,
         density:       state.density,
         filterBarOpen: state.filterBarOpen,
+        visibleColumns: state.visibleColumns,
         filters: {
           ...state.filters,
           query: "", // 検索文字列は保存しない

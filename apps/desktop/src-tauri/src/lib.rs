@@ -38,6 +38,7 @@ pub fn run() {
             commands::work::list_works,
             commands::work::get_work,
             commands::work::get_filter_options,
+            commands::work::update_work_library_fields,
             // User stats
             commands::stats::update_user_stats,
             commands::stats::get_user_stats,

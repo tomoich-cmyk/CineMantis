@@ -44,14 +44,19 @@ pub fn open_work_file(
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO user_stats (work_id, play_count, last_played_at, watch_status)
-             VALUES (?1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'watching')
+            "INSERT INTO user_stats (work_id, play_count, last_played_at, last_watched_at, watch_status, watched_status)
+             VALUES (?1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'watching', 'watching')
              ON CONFLICT(work_id) DO UPDATE SET
                play_count     = play_count + 1,
                last_played_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+               last_watched_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                watch_status   = CASE
                                   WHEN watch_status = 'unwatched' THEN 'watching'
                                   ELSE watch_status
+                                END,
+               watched_status = CASE
+                                  WHEN watched_status = 'unwatched' THEN 'watching'
+                                  ELSE watched_status
                                 END",
             rusqlite::params![work_id],
         )
@@ -71,11 +76,12 @@ pub fn set_watch_status(
     status: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let legacy_status = if status == "abandoned" { "skipped".to_string() } else { status.clone() };
     conn.execute(
-        "INSERT INTO user_stats (work_id, watch_status)
-         VALUES (?1, ?2)
-         ON CONFLICT(work_id) DO UPDATE SET watch_status = ?2",
-        rusqlite::params![work_id, status],
+        "INSERT INTO user_stats (work_id, watch_status, watched_status)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(work_id) DO UPDATE SET watch_status = ?2, watched_status = ?3",
+        rusqlite::params![work_id, legacy_status, status],
     )
     .map_err(|e| e.to_string())?;
     Ok(())

@@ -26,7 +26,7 @@ export function useSetWatchStatus() {
       status,
     }: {
       workId: number;
-      status: "unwatched" | "watching" | "watched" | "skipped";
+      status: "unwatched" | "watching" | "watched" | "abandoned" | "skipped";
     }) => setWatchStatus(workId, status),
     onSuccess: (_data, { workId }) => {
       qc.invalidateQueries({ queryKey: workKeys.detail(workId) });

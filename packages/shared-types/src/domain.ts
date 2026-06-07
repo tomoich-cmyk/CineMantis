@@ -2,7 +2,11 @@
 
 export type WorkType = "movie" | "drama" | "ova" | "special" | "other";
 
-export type WatchStatus = "unwatched" | "watching" | "watched" | "skipped";
+export type WatchStatus = "unwatched" | "watching" | "watched" | "abandoned" | "skipped";
+
+export type CountryType = "foreign" | "domestic" | "unknown";
+
+export type MediaCategory = "movie" | "drama" | "ova" | "other";
 
 export type MatchStatus = "unmatched" | "pending" | "matched" | "locked";
 
@@ -66,6 +70,12 @@ export interface Work {
   originalTitle: string | null;
   sortTitle: string | null;
   year: number | null;
+  releaseYear: number | null;
+  dateAdded: string | null;
+  reading: string | null;
+  countryType: CountryType;
+  mediaCategory: MediaCategory;
+  genreText: string | null;
   country: string | null;
   synopsis: string | null;
   runtimeSec: number | null;
@@ -101,11 +111,14 @@ export interface WorkPart {
 export interface UserStats {
   workId: number;
   userRating: number | null;   // 1–5
+  myRating: number | null;
   playCount: number;
   lastPlayedAt: string | null;
+  lastWatchedAt: string | null;
   resumePositionSec: number | null;
   isFavorite: boolean;
   watchStatus: WatchStatus;
+  watchedStatus: WatchStatus;
   personalNote: string | null;
   updatedAt: string;
 }

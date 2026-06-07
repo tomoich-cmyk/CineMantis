@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useLibraryStore } from "@/store/libraryStore";
-import { useWorkDetail, useWorkTags, useUpdateStats } from "@/hooks/useWorks";
+import { useWorkDetail, useWorkTags, useUpdateStats, useUpdateWorkLibraryFields } from "@/hooks/useWorks";
 import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
 import { useWorkPersons } from "@/hooks/usePersons";
 import { useOpenWorkFile, useSetWatchStatus, useUpdateResumePosition } from "@/hooks/useWatch";
@@ -64,7 +64,7 @@ const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
   unmatched:{ label: "未照合",   cls: "text-gray-600"   },
 };
 
-type WatchStatus = "unwatched" | "watching" | "watched" | "skipped";
+type WatchStatus = "unwatched" | "watching" | "watched" | "abandoned" | "skipped";
 
 const WATCH_PILLS: { value: WatchStatus; label: string; cls: string }[] = [
   { value: "unwatched", label: "未視聴", cls: "border-gray-700 text-gray-500 hover:text-gray-300" },
@@ -81,6 +81,7 @@ export function DetailPane() {
   const { data: tags = [] } = useWorkTags(selectedWorkId);
   const { data: persons = [] } = useWorkPersons(selectedWorkId);
   const { mutate: updateStats } = useUpdateStats();
+  const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: autoMatch, isPending: autoMatching } = useAutoMatchWork();
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
@@ -234,6 +235,61 @@ export function DetailPane() {
         </div>
 
         {/* ── あらすじ ── */}
+        <div className="px-4 py-3 border-t border-subtle">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1 text-xs text-gray-500">
+              よみ
+              <input
+                defaultValue={work.reading ?? ""}
+                onBlur={(e) => updateLibraryFields({ work_id: work.id, reading: e.target.value || null })}
+                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-500">
+              年
+              <input
+                type="number"
+                defaultValue={work.release_year ?? work.year ?? ""}
+                onBlur={(e) => updateLibraryFields({ work_id: work.id, release_year: e.target.value ? Number(e.target.value) : null })}
+                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-500">
+              種別
+              <select
+                defaultValue={work.media_category}
+                onChange={(e) => updateLibraryFields({ work_id: work.id, media_category: e.target.value })}
+                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+              >
+                <option value="movie">映画</option>
+                <option value="drama">ドラマ</option>
+                <option value="ova">OVA</option>
+                <option value="other">その他</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-500">
+              洋邦
+              <select
+                defaultValue={work.country_type}
+                onChange={(e) => updateLibraryFields({ work_id: work.id, country_type: e.target.value })}
+                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+              >
+                <option value="foreign">洋画</option>
+                <option value="domestic">邦画</option>
+                <option value="unknown">不明</option>
+              </select>
+            </label>
+            <label className="col-span-2 flex flex-col gap-1 text-xs text-gray-500">
+              ジャンル
+              <input
+                defaultValue={work.genre_text ?? ""}
+                onBlur={(e) => updateLibraryFields({ work_id: work.id, genre_text: e.target.value || null })}
+                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+              />
+            </label>
+          </div>
+        </div>
+
         {work.synopsis && (
           <div className="px-4 py-2 border-t border-subtle">
             <p className="text-xs text-gray-400 leading-relaxed line-clamp-6">
@@ -249,9 +305,9 @@ export function DetailPane() {
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-500">マイ評価</span>
               <StarRating
-                value={work.user_rating}
+                value={work.my_rating ?? work.user_rating}
                 size="sm"
-                onChange={(v) => updateStats({ work_id: work.id, user_rating: v })}
+                onChange={(v) => updateStats({ work_id: work.id, user_rating: v, my_rating: v })}
               />
             </div>
 
@@ -264,7 +320,7 @@ export function DetailPane() {
                     key={pill.value}
                     onClick={() => setStatus({ workId: work.id, status: pill.value })}
                     className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${
-                      work.watch_status === pill.value
+                      (work.watched_status ?? work.watch_status) === pill.value
                         ? pill.cls + " opacity-100 ring-1 ring-current/30"
                         : "border-transparent text-gray-700 hover:border-gray-700 hover:text-gray-500"
                     }`}
