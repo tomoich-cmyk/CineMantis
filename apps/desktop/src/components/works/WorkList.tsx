@@ -86,17 +86,14 @@ function yearSort(a: [string, number], b: [string, number]) {
   return countSort(a, b);
 }
 
-function playCountBucket(work: WorkSummary) {
-  const count = work.playCount ?? 0;
-  if (count <= 0) return "0回";
-  if (count === 1) return "1回";
-  if (count <= 4) return "2-4回";
-  if (count <= 9) return "5-9回";
-  return "10回以上";
+function ratingBucket(work: WorkSummary) {
+  const rating = work.myRating ?? work.userRating;
+  if (!rating) return "未評価";
+  return `${Math.round(rating)}★`;
 }
 
-function playCountSort(a: [string, number], b: [string, number]) {
-  const order = ["0回", "1回", "2-4回", "5-9回", "10回以上"];
+function ratingSort(a: [string, number], b: [string, number]) {
+  const order = ["5★", "4★", "3★", "2★", "1★", "未評価"];
   return order.indexOf(a[0]) - order.indexOf(b[0]);
 }
 
@@ -154,7 +151,7 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
     [works],
   );
   const decadeCounts = useMemo(() => makeCounts(works, (work) => [decadeOf(work)], yearSort), [works]);
-  const playCountCounts = useMemo(() => makeCounts(works, (work) => [playCountBucket(work)], playCountSort), [works]);
+  const ratingCounts = useMemo(() => makeCounts(works, (work) => [ratingBucket(work)], ratingSort), [works]);
   const genreCounts = useMemo(() => makeCounts(works, (work) => splitGenres(work.genreText)), [works]);
 
   useEffect(() => {
@@ -208,10 +205,10 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
           }}
         />
         <BrowserPane
-          title="再生回数"
-          items={playCountCounts}
-          active={null}
-          onPick={() => {}}
+          title="評価"
+          items={ratingCounts}
+          active={filters.minUserRating ? `${filters.minUserRating}★` : null}
+          onPick={(value) => setFilter("minUserRating", value && value !== "未評価" ? Number(value.replace("★", "")) : null)}
         />
         <BrowserPane
           title="ジャンル"
@@ -252,6 +249,7 @@ function VirtualList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const [columnMenuOpen, setColumnMenuOpen] = useState(false);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const {
     sortField,
     sortOrder,
@@ -333,6 +331,33 @@ function VirtualList({
     document.body.classList.add("cm-resizing");
   }
 
+  function toggleWorkSelection(id: number, shiftKey: boolean) {
+    const index = works.findIndex((work) => work.id === id);
+    if (index === -1) return;
+
+    if (shiftKey && lastSelectedIndex !== null) {
+      const start = Math.min(lastSelectedIndex, index);
+      const end = Math.max(lastSelectedIndex, index);
+      const rangeIds = works.slice(start, end + 1).map((work) => work.id);
+      const shouldSelect = !selectedWorkIds.includes(id);
+      const next = new Set(selectedWorkIds);
+      for (const rangeId of rangeIds) {
+        if (shouldSelect) {
+          next.add(rangeId);
+        } else {
+          next.delete(rangeId);
+        }
+      }
+      selectAllWorks(Array.from(next));
+    } else {
+      const next = selectedWorkIds.includes(id)
+        ? selectedWorkIds.filter((selectedId) => selectedId !== id)
+        : [...selectedWorkIds, id];
+      selectAllWorks(next);
+    }
+    setLastSelectedIndex(index);
+  }
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#070707]">
       <div className="h-8 flex items-center justify-between px-3 border-b border-[#151515] bg-[#0b0b0b]">
@@ -407,6 +432,7 @@ function VirtualList({
                   work={work}
                   selected={selectedWorkId === work.id}
                   onSelect={() => setSelectedWorkId(selectedWorkId === work.id ? null : work.id)}
+                  onToggleSelect={toggleWorkSelection}
                   gridTemplateColumns={gridTemplateColumns}
                   visibleColumns={visibleDefs.map((column) => column.key)}
                   top={vItem.start}
