@@ -31,6 +31,7 @@ interface Props {
   work: WorkSummary;
   selected: boolean;
   onSelect: () => void;
+  onToggleSelect?: (id: number, shiftKey: boolean) => void;
   gridTemplateColumns: string;
   visibleColumns: string[];
   top: number;
@@ -138,7 +139,7 @@ function renderCell(column: string, work: WorkSummary) {
   }
 }
 
-export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visibleColumns, top, height }: Props) {
+export function WorkRow({ work, selected, onSelect, onToggleSelect, gridTemplateColumns, visibleColumns, top, height }: Props) {
   const { isSelectMode, selectedWorkIds, toggleSelectWork } = useLibraryStore();
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: updateStats } = useUpdateStats();
@@ -146,9 +147,13 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
   const [draft, setDraft] = useState("");
   const isChecked = selectedWorkIds.includes(work.id);
 
-  function handleClick() {
+  function handleClick(event: React.MouseEvent) {
     if (isSelectMode) {
-      toggleSelectWork(work.id);
+      if (onToggleSelect) {
+        onToggleSelect(work.id, event.shiftKey);
+      } else {
+        toggleSelectWork(work.id);
+      }
     } else {
       onSelect();
     }
@@ -184,9 +189,16 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
     setDraft("");
   }
 
-  function commitEdit(column: string, value = draft) {
+  function targetWorkIds(bulk: boolean) {
+    if (!bulk) return [work.id];
+    const ids = selectedWorkIds.includes(work.id) ? selectedWorkIds : [work.id, ...selectedWorkIds];
+    return Array.from(new Set(ids));
+  }
+
+  function commitEdit(column: string, value = draft, bulk = false) {
     if (editingColumn !== column) return;
     const trimmed = value.trim();
+    const workIds = targetWorkIds(bulk);
     setEditingColumn(null);
     setDraft("");
 
@@ -199,29 +211,37 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
     if (column === "releaseYear") {
       const next = trimmed ? Number(trimmed) : null;
       if (next !== null && (!Number.isInteger(next) || next < 0)) return;
-      if (next === (work.releaseYear ?? work.year ?? null)) return;
-      updateLibraryFields({ work_id: work.id, release_year: next });
+      if (!bulk && next === (work.releaseYear ?? work.year ?? null)) return;
+      for (const workId of workIds) {
+        updateLibraryFields({ work_id: workId, release_year: next });
+      }
       return;
     }
 
     if (column === "countryType") {
-      if (value === work.countryType) return;
-      updateLibraryFields({ work_id: work.id, country_type: value });
+      if (!bulk && value === work.countryType) return;
+      for (const workId of workIds) {
+        updateLibraryFields({ work_id: workId, country_type: value });
+      }
       return;
     }
 
     if (column === "genreText") {
       const next = trimmed || null;
-      if (next === (work.genreText ?? null)) return;
-      updateLibraryFields({ work_id: work.id, genre_text: next });
+      if (!bulk && next === (work.genreText ?? null)) return;
+      for (const workId of workIds) {
+        updateLibraryFields({ work_id: workId, genre_text: next });
+      }
       return;
     }
 
     if (column === "myRating") {
       const next = trimmed ? Number(trimmed) : null;
       if (next !== null && (!Number.isFinite(next) || next < 1 || next > 5)) return;
-      if (next === (work.myRating ?? work.userRating ?? null)) return;
-      updateStats({ work_id: work.id, user_rating: next, my_rating: next });
+      if (!bulk && next === (work.myRating ?? work.userRating ?? null)) return;
+      for (const workId of workIds) {
+        updateStats({ work_id: workId, user_rating: next, my_rating: next });
+      }
     }
   }
 
@@ -229,7 +249,7 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
     if (!editingColumn) return;
     if (event.key === "Enter") {
       event.preventDefault();
-      commitEdit(editingColumn);
+      commitEdit(editingColumn, draft, event.shiftKey);
     }
     if (event.key === "Escape") {
       event.preventDefault();
@@ -248,7 +268,7 @@ export function WorkRow({ work, selected, onSelect, gridTemplateColumns, visible
           onBlur={() => commitEdit(column)}
           onChange={(event) => {
             setDraft(event.target.value);
-            commitEdit(column, event.target.value);
+            commitEdit(column, event.target.value, (event.nativeEvent as Event & { shiftKey?: boolean }).shiftKey ?? false);
           }}
           className={editorClass()}
         >
