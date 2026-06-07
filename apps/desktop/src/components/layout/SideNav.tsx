@@ -17,12 +17,8 @@ const NAV_ITEMS: NavItem[] = [
   { id: "all-drama", label: "ドラマ", icon: "📺", group: "ライブラリ" },
   { id: "series", label: "シリーズ", icon: "🗂", group: "ライブラリ" },
   { id: "persons", label: "人物", icon: "👤", group: "ライブラリ" },
-  { id: "tags", label: "タグ", icon: "🏷", group: "ライブラリ" },
   // Smart lists
   { id: "favorites",         label: "お気に入り", icon: "★",  group: "スマート" },
-  { id: "recently-added",    label: "最近追加",   icon: "🆕", group: "スマート" },
-  { id: "recently-played",   label: "最近視聴",   icon: "⏱",  group: "スマート" },
-  { id: "high-rated",        label: "高評価",     icon: "⭐", group: "スマート" },
   { id: "unorganized",       label: "未整理",     icon: "!",  group: "スマート" },
   { id: "needs-attention",   label: "要確認",     icon: "⚠",  group: "スマート" },
 ];

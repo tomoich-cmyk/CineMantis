@@ -115,6 +115,7 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "myRating",
   "playCount",
   "dateAdded",
+  "lastWatchedAt",
   "fileSize",
   "storagePath",
 ];
@@ -128,8 +129,8 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   myRating: 112,
   playCount: 88,
   watchedStatus: 100,
-  dateAdded: 132,
-  lastWatchedAt: 132,
+  dateAdded: 148,
+  lastWatchedAt: 148,
   fileSize: 96,
   storagePath: 280,
 };
@@ -221,7 +222,7 @@ export const useLibraryStore = create<LibraryStore>()(
       merge: (persisted, current) => {
         const state = persisted as Partial<LibraryStore>;
         const visibleColumns = (state.visibleColumns ?? current.visibleColumns)
-          .filter((column) => column !== "watchedStatus" && column !== "lastWatchedAt");
+          .filter((column) => column !== "watchedStatus");
         const withPlayCount = visibleColumns.includes("playCount")
           ? visibleColumns
           : [
@@ -229,12 +230,19 @@ export const useLibraryStore = create<LibraryStore>()(
               "playCount",
               ...(visibleColumns.includes("dateAdded") ? ["dateAdded"] : []),
             ];
-        const nextVisibleColumns = withPlayCount.includes("fileSize")
+        const withLastWatched = withPlayCount.includes("lastWatchedAt")
           ? withPlayCount
           : [
-              ...withPlayCount.filter((column) => column !== "storagePath"),
+              ...withPlayCount.filter((column) => column !== "fileSize" && column !== "storagePath"),
+              "lastWatchedAt",
+              ...withPlayCount.filter((column) => column === "fileSize" || column === "storagePath"),
+            ];
+        const nextVisibleColumns = withLastWatched.includes("fileSize")
+          ? withLastWatched
+          : [
+              ...withLastWatched.filter((column) => column !== "storagePath"),
               "fileSize",
-              ...(withPlayCount.includes("storagePath") ? ["storagePath"] : []),
+              ...(withLastWatched.includes("storagePath") ? ["storagePath"] : []),
             ];
         return {
           ...current,
@@ -246,6 +254,7 @@ export const useLibraryStore = create<LibraryStore>()(
                 watchStatus: null,
                 dateAddedFrom: null,
                 dateAddedTo: null,
+                tagIds: [],
               }
             : current.filters,
           visibleColumns: nextVisibleColumns,
