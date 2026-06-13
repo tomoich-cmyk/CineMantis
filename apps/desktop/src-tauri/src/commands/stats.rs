@@ -14,6 +14,7 @@ pub struct UpdateStatsPayload {
     pub is_favorite: Option<bool>,
     pub personal_note: Option<String>,
     pub resume_position_sec: Option<f64>,
+    pub play_count: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,10 +53,10 @@ pub fn update_user_stats(
     conn.execute(
         "INSERT INTO user_stats
            (work_id, user_rating, my_rating, watch_status, watched_status, last_watched_at,
-            is_favorite, personal_note, resume_position_sec)
+            is_favorite, personal_note, resume_position_sec, play_count)
          VALUES
            (?1, ?2, ?3, COALESCE(?4, 'unwatched'), COALESCE(?5, 'unwatched'), ?6,
-            COALESCE(?7, 0), ?8, ?9)
+            COALESCE(?7, 0), ?8, ?9, COALESCE(?10, 0))
          ON CONFLICT(work_id) DO UPDATE SET
            user_rating         = CASE WHEN ?3 IS NULL THEN user_rating ELSE ?2 END,
            my_rating           = COALESCE(?3, my_rating),
@@ -64,7 +65,8 @@ pub fn update_user_stats(
            last_watched_at     = COALESCE(?6, last_watched_at),
            is_favorite         = COALESCE(?7, is_favorite),
            personal_note       = COALESCE(?8, personal_note),
-           resume_position_sec = COALESCE(?9, resume_position_sec)",
+           resume_position_sec = COALESCE(?9, resume_position_sec),
+           play_count          = COALESCE(?10, play_count)",
         rusqlite::params![
             payload.work_id,
             legacy_rating,
@@ -75,6 +77,7 @@ pub fn update_user_stats(
             payload.is_favorite.map(|b| b as i64),
             payload.personal_note,
             payload.resume_position_sec,
+            payload.play_count,
         ],
     )
     .map_err(|e| e.to_string())?;
