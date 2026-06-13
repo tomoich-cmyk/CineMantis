@@ -160,7 +160,7 @@ export function DetailPane() {
       <aside className="w-72 flex-shrink-0 flex flex-col border-l border-subtle bg-surface-elevated overflow-y-auto">
 
         {/* ── ヘッダー ── */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-subtle flex-shrink-0">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-subtle flex-shrink-0">
           <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">詳細</span>
           <button
             onClick={() => setSelectedWorkId(null)}
@@ -171,7 +171,7 @@ export function DetailPane() {
         </div>
 
         {/* ── ポスター / サムネイル ── */}
-        <div className="mx-4 mt-4 aspect-[2/3] bg-surface rounded overflow-hidden flex-shrink-0 relative group/poster">
+        <div className="mx-auto mt-2 w-32 aspect-[2/3] bg-surface rounded overflow-hidden flex-shrink-0 relative group/poster">
           <WorkImage
             src={work.poster_path ?? work.thumb_path}
             alt={work.title}
@@ -183,18 +183,18 @@ export function DetailPane() {
             className="absolute inset-0 flex items-center justify-center
                        opacity-0 group-hover/poster:opacity-100 transition-opacity bg-black/30"
           >
-            <span className="w-12 h-12 flex items-center justify-center rounded-full bg-black/70 text-white text-2xl hover:scale-110 transition-transform">
+            <span className="w-9 h-9 flex items-center justify-center rounded-full bg-black/70 text-white text-lg hover:scale-110 transition-transform">
               {opening ? "…" : "▶"}
             </span>
           </button>
         </div>
 
         {/* ── 再生ボタン ── */}
-        <div className="px-4 pt-3">
+        <div className="px-3 pt-2">
           <button
             onClick={() => openFile(work.id)}
             disabled={opening}
-            className="w-full py-2 flex items-center justify-center gap-2 text-sm font-medium
+            className="w-full py-1.5 flex items-center justify-center gap-2 text-sm font-medium
                        bg-mantis-700/30 border border-mantis-700/60 text-mantis-300 rounded
                        hover:bg-mantis-700/50 transition-colors disabled:opacity-40"
           >
@@ -205,7 +205,7 @@ export function DetailPane() {
 
         {/* ── 再生進捗 / 再開位置インジケータ ── */}
         {progress !== null && work.resume_position_sec !== null && (
-          <div className="px-4 pt-2">
+          <div className="px-3 pt-1.5">
             <div className="w-full h-1 bg-surface rounded-full overflow-hidden">
               <div
                 className="h-full bg-blue-500 rounded-full transition-all"
@@ -242,8 +242,8 @@ export function DetailPane() {
         )}
 
         {/* ── タイトル / 年 / 尺 ── */}
-        <div className="px-4 py-3 flex flex-col gap-1">
-          <h2 className="text-base font-semibold text-gray-100 leading-snug">
+        <div className="px-3 py-2 flex flex-col gap-1">
+          <h2 className="text-sm font-semibold text-gray-100 leading-snug">
             {work.title}
           </h2>
           {work.original_title && work.original_title !== work.title && (
@@ -253,8 +253,8 @@ export function DetailPane() {
             {work.year         && <span>{work.year}</span>}
             {work.runtime_sec  && <><span>·</span><span>{formatRuntime(work.runtime_sec)}</span></>}
             {formatBytes(work.file_size) && <><span>·</span><span>{formatBytes(work.file_size)}</span></>}
-            {work.external_rating && (
-              <><span>·</span><span className="text-yellow-500">★ {work.external_rating.toFixed(1)}</span></>
+            {work.external_rating !== null && (
+              <><span>·</span><span className="text-yellow-500">TMDb ★ {work.external_rating.toFixed(1)}</span></>
             )}
           </div>
 
@@ -271,14 +271,14 @@ export function DetailPane() {
         </div>
 
         {/* ── あらすじ ── */}
-        <div className="px-4 py-3 border-t border-subtle">
-          <div className="grid grid-cols-2 gap-2">
+        <div className="px-3 py-2 border-t border-subtle">
+          <div className="grid grid-cols-2 gap-1.5">
             <label className="flex flex-col gap-1 text-xs text-gray-500">
               よみ
               <input
                 defaultValue={work.reading ?? ""}
                 onBlur={(e) => updateLibraryFields({ work_id: work.id, reading: e.target.value || null })}
-                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+                className="bg-surface border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600"
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-gray-500">
@@ -287,7 +287,7 @@ export function DetailPane() {
                 type="number"
                 defaultValue={work.release_year ?? work.year ?? ""}
                 onBlur={(e) => updateLibraryFields({ work_id: work.id, release_year: e.target.value ? Number(e.target.value) : null })}
-                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+                className="bg-surface border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600"
               />
             </label>
             <label className="flex flex-col gap-1 text-xs text-gray-500">
@@ -295,7 +295,7 @@ export function DetailPane() {
               <select
                 defaultValue={work.country_type}
                 onChange={(e) => updateLibraryFields({ work_id: work.id, country_type: e.target.value })}
-                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+                className="bg-surface border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600"
               >
                 <option value="foreign">洋画</option>
                 <option value="domestic">邦画</option>
@@ -307,23 +307,23 @@ export function DetailPane() {
               <input
                 defaultValue={work.genre_text ?? ""}
                 onBlur={(e) => updateLibraryFields({ work_id: work.id, genre_text: e.target.value || null })}
-                className="bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 outline-none focus:border-mantis-600"
+                className="bg-surface border border-subtle rounded px-2 py-0.5 text-xs text-gray-300 outline-none focus:border-mantis-600"
               />
             </label>
           </div>
         </div>
 
         {work.synopsis && (
-          <div className="px-4 py-2 border-t border-subtle">
-            <p className="text-xs text-gray-400 leading-relaxed line-clamp-6">
+          <div className="px-3 py-1.5 border-t border-subtle">
+            <p className="text-[11px] text-gray-400 leading-relaxed line-clamp-3">
               {work.synopsis}
             </p>
           </div>
         )}
 
         {/* ── ユーザー統計 ── */}
-        <div className="px-4 py-2 border-t border-subtle">
-          <div className="flex flex-col gap-2.5">
+        <div className="px-3 py-1.5 border-t border-subtle">
+          <div className="flex flex-col gap-1.5">
             {/* 評価 */}
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-500">マイ評価</span>
@@ -383,7 +383,7 @@ export function DetailPane() {
 
         {/* ── タグ ── */}
         {tags.length > 0 && (
-          <div className="px-4 py-2 border-t border-subtle">
+          <div className="px-3 py-1.5 border-t border-subtle">
             <div className="flex flex-wrap gap-1">
               {tags.map((tag) => <TagBadge key={tag.id} tag={tag} />)}
             </div>
@@ -392,7 +392,7 @@ export function DetailPane() {
 
         {/* ── 人物（監督・脚本・出演） ── */}
         {persons.length > 0 && (
-          <div className="px-4 py-2 border-t border-subtle">
+          <div className="px-3 py-1.5 border-t border-subtle">
             {(["director", "writer", "cast"] as const).map((role) => {
               const group = persons.filter((p) => p.role === role);
               if (group.length === 0) return null;
@@ -423,20 +423,20 @@ export function DetailPane() {
         )}
 
         {/* ── メモ ── */}
-        <div className="px-4 py-3 border-t border-subtle">
+        <div className="px-3 py-1.5 border-t border-subtle">
           <textarea
             placeholder="メモ…"
             value={work.personal_note ?? ""}
             onChange={(e) => updateStats({ work_id: work.id, personal_note: e.target.value })}
-            rows={3}
-            className="w-full bg-surface border border-subtle rounded px-2 py-1.5 text-xs text-gray-300 placeholder-gray-700 outline-none focus:border-mantis-600 resize-none"
+            rows={2}
+            className="w-full bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 outline-none focus:border-mantis-600 resize-none"
           />
         </div>
 
         {/* ── 外部情報 / 照合 ── */}
-        <div className="px-4 py-3 border-t border-subtle mt-auto">
+        <div className="px-3 py-2 border-t border-subtle mt-auto">
           {/* 照合状態 */}
-          <div className="flex items-center justify-between text-xs mb-2">
+          <div className="flex items-center justify-between text-xs mb-1.5">
             <span className="text-gray-500">照合状態</span>
             <div className="flex items-center gap-1.5">
               {isLocked && <span className="text-yellow-500 text-[10px]">🔒</span>}
@@ -449,7 +449,7 @@ export function DetailPane() {
 
           {/* TMDb ID */}
           {work.tmdb_id && (
-            <div className="flex items-center justify-between text-xs mb-3">
+            <div className="flex items-center justify-between text-xs mb-1.5">
               <span className="text-gray-600">TMDb ID</span>
               <a
                 href={`https://www.themoviedb.org/${work.tmdb_media_type ?? "movie"}/${work.tmdb_id}`}

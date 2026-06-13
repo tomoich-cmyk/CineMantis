@@ -148,7 +148,7 @@ async fn apply_match_internal(
     // 詳細取得
     let mut movie_collection: Option<crate::models::tmdb::TmdbCollection> = None;
 
-    let (title, overview, release_date, genres_json, country_json, poster_remote, runtime_sec, imdb_id) =
+    let (title, overview, release_date, genres_json, country_json, poster_remote, runtime_sec, imdb_id, external_rating) =
         if media_type == "movie" {
             let d = client.get_movie_detail(tmdb_id).await?;
             movie_collection = d.belongs_to_collection.clone();
@@ -163,6 +163,7 @@ async fn apply_match_internal(
                 d.poster_path,
                 d.runtime.map(|r| r as f64 * 60.0),
                 d.imdb_id,
+                d.vote_average,
             )
         } else {
             let d = client.get_tv_detail(tmdb_id).await?;
@@ -184,6 +185,7 @@ async fn apply_match_internal(
                 d.poster_path,
                 ep_runtime,
                 None,
+                d.vote_average,
             )
         };
 
@@ -216,15 +218,17 @@ async fn apply_match_internal(
                imdb_id          = COALESCE(?10, imdb_id),
                poster_path      = COALESCE(?11, poster_path),
                media_kind       = ?9,
-               match_status     = ?12,
-               match_confidence = ?13,
+               external_rating  = ?12,
+               external_rating_source = 'tmdb',
+               match_status     = ?13,
+               match_confidence = ?14,
                metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-             WHERE id = ?14",
+             WHERE id = ?15",
             rusqlite::params![
                 title, overview, year, release_date, genres_json, country_json,
                 runtime_sec, tmdb_id, media_type,
                 imdb_id, poster_local_path,
-                new_match_status, confidence, work_id,
+                external_rating, new_match_status, confidence, work_id,
             ],
         )
         .map_err(|e| e.to_string())?;
