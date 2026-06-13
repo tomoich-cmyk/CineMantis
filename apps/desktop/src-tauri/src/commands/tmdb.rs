@@ -48,13 +48,16 @@ fn get_work_for_match(db: &DbState, work_id: i64) -> Result<Option<WorkForMatch>
 async fn fetch_candidates(
     client: &TmdbClient,
     work: &WorkForMatch,
-) -> Vec<TmdbCandidate> {
+) -> Result<Vec<TmdbCandidate>, String> {
     // 検索に使うタイトルを決定
     let raw_title = work.title_guess.as_deref().unwrap_or(&work.title);
     let parsed = parse_title(raw_title);
     let year = work.year.or(parsed.year_hint);
 
     let mut all: Vec<TmdbCandidate> = Vec::new();
+    let mut attempted = 0usize;
+    let mut succeeded = 0usize;
+    let mut errors = Vec::new();
 
     // media_kind に応じて検索種別を決める
     let search_movie = work.media_kind != "tv";
@@ -62,9 +65,11 @@ async fn fetch_candidates(
 
     // 映画検索
     if search_movie {
+        attempted += 1;
         eprintln!("[TMDb] search_movie: '{}' year={:?}", &parsed.normalized_title, year);
         match client.search_movie(&parsed.normalized_title, year).await {
             Ok(results) => {
+                succeeded += 1;
                 eprintln!("[TMDb] got {} movie results", results.len());
                 for r in &results {
                     let c = score_movie(r, &parsed);
@@ -83,15 +88,20 @@ async fn fetch_candidates(
                     }
                 }
             }
-            Err(e) => eprintln!("[TMDb] movie search error: {}", e),
+            Err(e) => {
+                eprintln!("[TMDb] movie search error: {}", e);
+                errors.push(format!("movie search: {e}"));
+            }
         }
     }
 
     // TV 検索
     if search_tv {
+        attempted += 1;
         eprintln!("[TMDb] search_tv: '{}' year={:?}", &parsed.normalized_title, year);
         match client.search_tv(&parsed.normalized_title, year).await {
             Ok(results) => {
+                succeeded += 1;
                 eprintln!("[TMDb] got {} tv results", results.len());
                 for r in &results {
                     let c = score_tv(r, &parsed);
@@ -99,11 +109,18 @@ async fn fetch_candidates(
                     all.push(c);
                 }
             }
-            Err(e) => eprintln!("[TMDb] tv search error: {}", e),
+            Err(e) => {
+                eprintln!("[TMDb] tv search error: {}", e);
+                errors.push(format!("tv search: {e}"));
+            }
         }
     }
 
-    merge_and_rank(all)
+    if attempted > 0 && succeeded == 0 {
+        return Err(format!("TMDb search failed: {}", errors.join(" / ")));
+    }
+
+    Ok(merge_and_rank(all))
 }
 
 /// 詳細取得 + DB 更新 + ポスター保存（movie / tv 共通）
@@ -114,7 +131,8 @@ async fn apply_match_internal(
     work_id: i64,
     tmdb_id: i64,
     media_type: &str,
-    new_match_status: &str,  // "matched" | "locked"
+    new_match_status: &str,
+    confidence: i32,
 ) -> Result<AutoMatchResult, String> {
     // シリーズ解析用に照合前のオリジナルタイトルを先取り
     let orig_work_title: String = {
@@ -199,13 +217,14 @@ async fn apply_match_internal(
                poster_path      = COALESCE(?11, poster_path),
                media_kind       = ?9,
                match_status     = ?12,
+               match_confidence = ?13,
                metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-             WHERE id = ?13",
+             WHERE id = ?14",
             rusqlite::params![
                 title, overview, year, release_date, genres_json, country_json,
                 runtime_sec, tmdb_id, media_type,
                 imdb_id, poster_local_path,
-                new_match_status, work_id,
+                new_match_status, confidence, work_id,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -262,7 +281,7 @@ async fn apply_match_internal(
         work_id,
         matched: true,
         status: new_match_status.to_string(),
-        confidence: 100, // 手動適用は 100
+        confidence,
         tmdb_id: Some(tmdb_id),
         title: Some(title),
         poster_local_path,
@@ -300,7 +319,7 @@ pub async fn search_tmdb_candidates(
         }
     }
 
-    Ok(fetch_candidates(&client, &work).await)
+    fetch_candidates(&client, &work).await
 }
 
 /// locked → manual に変更（固定解除）
@@ -346,7 +365,7 @@ pub async fn auto_match_work(
         });
     }
 
-    let candidates = fetch_candidates(&client, &work).await;
+    let candidates = fetch_candidates(&client, &work).await?;
 
     match best_candidate(&candidates) {
         None => {
@@ -369,7 +388,7 @@ pub async fn auto_match_work(
         Some(best) => {
             let result = apply_match_internal(
                 &app, &state, &client,
-                work_id, best.tmdb_id, &best.media_type, "matched",
+                work_id, best.tmdb_id, &best.media_type, "auto", best.confidence,
             )
             .await?;
             Ok(AutoMatchResult {
@@ -403,7 +422,7 @@ pub async fn apply_tmdb_match(
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
     let match_status = if lock { "locked" } else { "matched" };
-    apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, match_status).await
+    apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, match_status, 100).await
 }
 
 /// 既に tmdb_id がある作品のメタデータを再取得
@@ -428,7 +447,7 @@ pub async fn refresh_tmdb_metadata(
         .ok_or_else(|| "tmdb_id not set".to_string())?
     };
 
-    apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, "matched").await
+    apply_match_internal(&app, &state, &client, work_id, tmdb_id, &media_type, "matched", 100).await
 }
 
 /// 照合を解除する（poster 削除・match_status を unmatched に戻す）
@@ -529,7 +548,21 @@ pub async fn auto_match_source_inner(
 
     for (work_id, title, title_guess, media_kind, year) in targets {
         let work = WorkForMatch { id: work_id, title: title.clone(), title_guess, media_kind, year, match_status: "unmatched".to_string() };
-        let candidates = fetch_candidates(&client, &work).await;
+        let candidates = match fetch_candidates(&client, &work).await {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                eprintln!("[TMDb] search error for \"{}\": {}", title, error);
+                last_error = Some(format!("\"{title}\": {error}"));
+                failed += 1;
+                processed += 1;
+                let _ = app.emit("metadata:batch_progress", MetadataBatchProgress {
+                    source_id, processed, total, matched, skipped, failed,
+                    last_error: last_error.clone(),
+                });
+                tokio::time::sleep(std::time::Duration::from_millis(260)).await;
+                continue;
+            }
+        };
 
         match best_candidate(&candidates) {
             None => {
@@ -557,7 +590,7 @@ pub async fn auto_match_source_inner(
                 eprintln!("[TMDb] MATCH: \"{}\" → \"{}\" ({})", title, best.title, best.confidence);
                 match apply_match_internal(
                     app, db, &client,
-                    work_id, best.tmdb_id, &best.media_type, "matched",
+                    work_id, best.tmdb_id, &best.media_type, "auto", best.confidence,
                 )
                 .await
                 {
