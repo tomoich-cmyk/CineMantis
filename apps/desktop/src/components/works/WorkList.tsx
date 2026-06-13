@@ -536,7 +536,7 @@ function VirtualList({
               <button key={rating} onClick={() => setRating(rating)} className="border border-[#333] py-1 hover:bg-[#303030]">{rating}</button>
             ))}
           </div>
-          <button onClick={() => setRating(null)} className="w-full px-3 py-1.5 text-left text-gray-500 hover:bg-[#303030]">未評価に戻す</button>
+          <button onClick={() => setRating(0)} className="w-full px-3 py-1.5 text-left text-gray-500 hover:bg-[#303030]">0（未評価）に戻す</button>
         </div>
       )}
     </div>

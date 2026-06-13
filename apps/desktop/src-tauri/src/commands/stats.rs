@@ -6,8 +6,8 @@ use tauri::State;
 #[derive(Debug, Deserialize)]
 pub struct UpdateStatsPayload {
     pub work_id: i64,
-    pub user_rating: Option<i64>,
-    pub my_rating: Option<i64>,
+    pub user_rating: Option<f64>,
+    pub my_rating: Option<f64>,
     pub watch_status: Option<String>,
     pub watched_status: Option<String>,
     pub last_watched_at: Option<String>,
@@ -19,8 +19,8 @@ pub struct UpdateStatsPayload {
 #[derive(Debug, Serialize)]
 pub struct UserStatsRow {
     pub work_id: i64,
-    pub user_rating: Option<i64>,
-    pub my_rating: Option<i64>,
+    pub user_rating: Option<f64>,
+    pub my_rating: Option<f64>,
     pub play_count: i64,
     pub last_played_at: Option<String>,
     pub last_watched_at: Option<String>,
@@ -44,6 +44,9 @@ pub fn update_user_stats(
     let watched_status = payload.watched_status.clone().or(payload.watch_status.clone());
     let watch_status = legacy_watch_status(watched_status.as_ref());
     let rating = payload.my_rating.or(payload.user_rating);
+    let legacy_rating = rating.and_then(|value| {
+        (value >= 1.0 && value <= 5.0 && value.fract() == 0.0).then_some(value)
+    });
 
     // Upsert user_stats row
     conn.execute(
@@ -51,19 +54,20 @@ pub fn update_user_stats(
            (work_id, user_rating, my_rating, watch_status, watched_status, last_watched_at,
             is_favorite, personal_note, resume_position_sec)
          VALUES
-           (?1, ?2, ?2, COALESCE(?3, 'unwatched'), COALESCE(?4, 'unwatched'), ?5,
-            COALESCE(?6, 0), ?7, ?8)
+           (?1, ?2, ?3, COALESCE(?4, 'unwatched'), COALESCE(?5, 'unwatched'), ?6,
+            COALESCE(?7, 0), ?8, ?9)
          ON CONFLICT(work_id) DO UPDATE SET
-           user_rating         = COALESCE(?2, user_rating),
-           my_rating           = COALESCE(?2, my_rating),
-           watch_status        = COALESCE(?3, watch_status),
-           watched_status      = COALESCE(?4, watched_status),
-           last_watched_at     = COALESCE(?5, last_watched_at),
-           is_favorite         = COALESCE(?6, is_favorite),
-           personal_note       = COALESCE(?7, personal_note),
-           resume_position_sec = COALESCE(?8, resume_position_sec)",
+           user_rating         = CASE WHEN ?3 IS NULL THEN user_rating ELSE ?2 END,
+           my_rating           = COALESCE(?3, my_rating),
+           watch_status        = COALESCE(?4, watch_status),
+           watched_status      = COALESCE(?5, watched_status),
+           last_watched_at     = COALESCE(?6, last_watched_at),
+           is_favorite         = COALESCE(?7, is_favorite),
+           personal_note       = COALESCE(?8, personal_note),
+           resume_position_sec = COALESCE(?9, resume_position_sec)",
         rusqlite::params![
             payload.work_id,
+            legacy_rating,
             rating,
             watch_status,
             watched_status,
