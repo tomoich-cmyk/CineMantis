@@ -215,7 +215,7 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
 
     if (column === "myRating") {
       const next = trimmed ? Number(trimmed) : null;
-      if (next !== null && (!Number.isFinite(next) || next < 0.5 || next > 5 || !Number.isInteger(next * 2))) return;
+      if (next !== null && (!Number.isFinite(next) || next < 0 || next > 5 || !Number.isInteger(next * 2))) return;
       if (!bulk && next === (work.myRating ?? work.userRating ?? null)) return;
       for (const workId of workIds) {
         updateStats({ work_id: workId, user_rating: next, my_rating: next });
@@ -259,7 +259,7 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
       <input
         autoFocus
         type={column === "releaseYear" || column === "myRating" ? "number" : "text"}
-        min={column === "myRating" ? 0.5 : undefined}
+        min={column === "myRating" ? 0 : undefined}
         max={column === "myRating" ? 5 : undefined}
         step={column === "myRating" ? 0.5 : undefined}
         value={draft}

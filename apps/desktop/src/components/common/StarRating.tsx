@@ -22,8 +22,25 @@ export function StarRating({ value, max = 5, size = "sm", readonly, onChange }: 
             <span className="absolute inset-0 overflow-hidden text-yellow-400" style={{ width: `${fill}%` }}>★</span>
             {!readonly && (
               <span className="absolute inset-0 flex">
-                <button type="button" aria-label={`${star - 0.5} 点`} onClick={() => onChange?.(star - 0.5)} className="h-full w-1/2" />
-                <button type="button" aria-label={`${star} 点`} onClick={() => onChange?.(star)} className="h-full w-1/2" />
+                <button
+                  type="button"
+                  aria-label={`${star - 0.5} 点`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const next = star - 0.5;
+                    onChange?.(rating === next ? 0 : next);
+                  }}
+                  className="h-full w-1/2"
+                />
+                <button
+                  type="button"
+                  aria-label={`${star} 点`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onChange?.(rating === star ? 0 : star);
+                  }}
+                  className="h-full w-1/2"
+                />
               </span>
             )}
           </span>
