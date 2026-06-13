@@ -388,7 +388,7 @@ pub async fn auto_match_work(
         Some(best) => {
             let result = apply_match_internal(
                 &app, &state, &client,
-                work_id, best.tmdb_id, &best.media_type, "auto", best.confidence,
+                work_id, best.tmdb_id, &best.media_type, "matched", best.confidence,
             )
             .await?;
             Ok(AutoMatchResult {
@@ -590,7 +590,7 @@ pub async fn auto_match_source_inner(
                 eprintln!("[TMDb] MATCH: \"{}\" → \"{}\" ({})", title, best.title, best.confidence);
                 match apply_match_internal(
                     app, db, &client,
-                    work_id, best.tmdb_id, &best.media_type, "auto", best.confidence,
+                    work_id, best.tmdb_id, &best.media_type, "matched", best.confidence,
                 )
                 .await
                 {
