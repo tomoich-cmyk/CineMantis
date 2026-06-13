@@ -88,6 +88,7 @@ function toSummary(r: WorkSummaryRow): WorkSummary {
     workType: r.work_type as WorkSummary["workType"],
     mediaCategory: r.media_category,
     countryType: r.country_type,
+    reading: r.reading,
     genreText: r.genre_text,
     dateAdded: r.date_added,
     lastWatchedAt: r.last_watched_at,

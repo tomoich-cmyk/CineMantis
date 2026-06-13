@@ -10,24 +10,25 @@ interface Props {
 
 export function StarRating({ value, max = 5, size = "sm", readonly, onChange }: Props) {
   const sizeClass = size === "xs" ? "text-xs" : size === "sm" ? "text-sm" : "text-base";
+  const rating = value ?? 0;
 
   return (
     <div className={clsx("flex items-center gap-0.5", sizeClass)}>
-      {Array.from({ length: max }, (_, i) => i + 1).map((star) => (
-        <button
-          key={star}
-          type="button"
-          disabled={readonly}
-          onClick={() => onChange?.(star)}
-          className={clsx(
-            "leading-none transition-colors",
-            readonly ? "cursor-default" : "hover:scale-110",
-            (value ?? 0) >= star ? "text-yellow-400" : "text-gray-700"
-          )}
-        >
-          ★
-        </button>
-      ))}
+      {Array.from({ length: max }, (_, i) => i + 1).map((star) => {
+        const fill = Math.max(0, Math.min(1, rating - (star - 1))) * 100;
+        return (
+          <span key={star} className="relative inline-block leading-none">
+            <span className="text-gray-700">★</span>
+            <span className="absolute inset-0 overflow-hidden text-yellow-400" style={{ width: `${fill}%` }}>★</span>
+            {!readonly && (
+              <span className="absolute inset-0 flex">
+                <button type="button" aria-label={`${star - 0.5} 点`} onClick={() => onChange?.(star - 0.5)} className="h-full w-1/2" />
+                <button type="button" aria-label={`${star} 点`} onClick={() => onChange?.(star)} className="h-full w-1/2" />
+              </span>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }

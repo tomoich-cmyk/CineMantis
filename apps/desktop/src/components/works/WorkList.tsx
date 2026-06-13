@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useLibraryStore, DEFAULT_COLUMN_WIDTHS, DEFAULT_VISIBLE_COLUMNS } from "@/store/libraryStore";
 import type { Density } from "@/store/libraryStore";
-import { useWorkList } from "@/hooks/useWorks";
+import { useUpdateStats, useUpdateWorkLibraryFields, useWorkList } from "@/hooks/useWorks";
 import { WorkCard } from "./WorkCard";
 import { WorkRow } from "./WorkRow";
 import { BulkActionBar } from "./BulkActionBar";
@@ -25,7 +25,8 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "releaseYear", label: "年", sort: "release_year" },
   { key: "countryType", label: "洋邦", sort: "country_type" },
   { key: "genreText", label: "ジャンル" },
-  { key: "myRating", label: "評価", sort: "my_rating" },
+  { key: "myRating", label: "マイ評価", sort: "my_rating" },
+  { key: "externalRating", label: "TMDb", sort: "external_rating" },
   { key: "playCount", label: "再生回数", sort: "play_count" },
   { key: "dateAdded", label: "登録日時", sort: "date_added" },
   { key: "lastWatchedAt", label: "再生日時", sort: "last_watched_at" },
@@ -89,12 +90,13 @@ function yearSort(a: [string, number], b: [string, number]) {
 function ratingBucket(work: WorkSummary) {
   const rating = work.myRating ?? work.userRating;
   if (!rating) return "未評価";
-  return `${Math.round(rating)}★`;
+  return `${rating.toFixed(1)}★`;
 }
 
 function ratingSort(a: [string, number], b: [string, number]) {
-  const order = ["5★", "4★", "3★", "2★", "1★", "未評価"];
-  return order.indexOf(a[0]) - order.indexOf(b[0]);
+  if (a[0] === "未評価") return 1;
+  if (b[0] === "未評価") return -1;
+  return Number.parseFloat(b[0]) - Number.parseFloat(a[0]);
 }
 
 function BrowserPane({
@@ -250,6 +252,9 @@ function VirtualList({
   const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const [columnMenuOpen, setColumnMenuOpen] = useState(false);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [editMenu, setEditMenu] = useState<{ x: number; y: number; work: WorkSummary; workIds: number[] } | null>(null);
+  const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
+  const { mutate: updateStats } = useUpdateStats();
   const {
     sortField,
     sortOrder,
@@ -298,6 +303,22 @@ function VirtualList({
       window.removeEventListener("mouseup", onUp);
     };
   }, [setColumnWidth]);
+
+  useEffect(() => {
+    if (!editMenu) return;
+    const close = () => setEditMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", close);
+    };
+  }, [editMenu]);
 
   const items = virtualizer.getVirtualItems();
   const allIds = works.map((w) => w.id);
@@ -356,6 +377,52 @@ function VirtualList({
       selectAllWorks(next);
     }
     setLastSelectedIndex(index);
+  }
+
+  function openEditMenu(event: React.MouseEvent, work: WorkSummary) {
+    const workIds = selectedWorkIds.includes(work.id) && selectedWorkIds.length > 0
+      ? selectedWorkIds
+      : [work.id];
+    setSelectedWorkId(work.id);
+    setEditMenu({
+      x: Math.min(event.clientX, window.innerWidth - 230),
+      y: Math.min(event.clientY, window.innerHeight - 330),
+      work,
+      workIds,
+    });
+  }
+
+  function editTextField(field: "reading" | "genre_text" | "release_year") {
+    if (!editMenu) return;
+    const current = field === "reading"
+      ? editMenu.work.reading ?? ""
+      : field === "genre_text"
+        ? editMenu.work.genreText ?? ""
+        : String(editMenu.work.releaseYear ?? editMenu.work.year ?? "");
+    const labels = { reading: "よみ", genre_text: "ジャンル", release_year: "年" };
+    const input = window.prompt(`${labels[field]}を入力`, current);
+    if (input === null) return;
+    const next = input.trim();
+    if (field === "release_year") {
+      const year = next ? Number(next) : null;
+      if (year !== null && (!Number.isInteger(year) || year < 0)) return;
+      for (const workId of editMenu.workIds) updateLibraryFields({ work_id: workId, release_year: year });
+    } else {
+      for (const workId of editMenu.workIds) updateLibraryFields({ work_id: workId, [field]: next || null });
+    }
+    setEditMenu(null);
+  }
+
+  function setCountry(countryType: "foreign" | "domestic" | "unknown") {
+    if (!editMenu) return;
+    for (const workId of editMenu.workIds) updateLibraryFields({ work_id: workId, country_type: countryType });
+    setEditMenu(null);
+  }
+
+  function setRating(rating: number | null) {
+    if (!editMenu) return;
+    for (const workId of editMenu.workIds) updateStats({ work_id: workId, user_rating: rating, my_rating: rating });
+    setEditMenu(null);
   }
 
   return (
@@ -433,6 +500,7 @@ function VirtualList({
                   selected={selectedWorkId === work.id}
                   onSelect={() => setSelectedWorkId(selectedWorkId === work.id ? null : work.id)}
                   onToggleSelect={toggleWorkSelection}
+                  onShiftContextMenu={openEditMenu}
                   gridTemplateColumns={gridTemplateColumns}
                   visibleColumns={visibleDefs.map((column) => column.key)}
                   top={vItem.start}
@@ -443,6 +511,34 @@ function VirtualList({
           </div>
         </div>
       </div>
+      {editMenu && (
+        <div
+          onPointerDown={(event) => event.stopPropagation()}
+          className="fixed z-[80] w-56 border border-[#333] bg-[#171717] py-1 text-xs text-gray-200 shadow-2xl"
+          style={{ left: editMenu.x, top: editMenu.y }}
+        >
+          <div className="border-b border-[#2b2b2b] px-3 py-1.5 text-[11px] text-gray-500">
+            編集 {editMenu.workIds.length > 1 ? `(${editMenu.workIds.length}件)` : ""}
+          </div>
+          <button onClick={() => editTextField("reading")} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">よみを編集…</button>
+          <button onClick={() => editTextField("release_year")} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">年を編集…</button>
+          <button onClick={() => editTextField("genre_text")} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">ジャンルを編集…</button>
+          <div className="my-1 border-t border-[#2b2b2b]" />
+          <div className="px-3 py-1 text-[10px] text-gray-500">洋邦</div>
+          <div className="grid grid-cols-3 gap-1 px-2 pb-1">
+            <button onClick={() => setCountry("foreign")} className="border border-[#333] py-1 hover:bg-[#303030]">洋画</button>
+            <button onClick={() => setCountry("domestic")} className="border border-[#333] py-1 hover:bg-[#303030]">邦画</button>
+            <button onClick={() => setCountry("unknown")} className="border border-[#333] py-1 hover:bg-[#303030]">不明</button>
+          </div>
+          <div className="px-3 py-1 text-[10px] text-gray-500">マイ評価</div>
+          <div className="grid grid-cols-5 gap-1 px-2 pb-1">
+            {Array.from({ length: 10 }, (_, index) => (index + 1) / 2).map((rating) => (
+              <button key={rating} onClick={() => setRating(rating)} className="border border-[#333] py-1 hover:bg-[#303030]">{rating}</button>
+            ))}
+          </div>
+          <button onClick={() => setRating(null)} className="w-full px-3 py-1.5 text-left text-gray-500 hover:bg-[#303030]">未評価に戻す</button>
+        </div>
+      )}
     </div>
   );
 }

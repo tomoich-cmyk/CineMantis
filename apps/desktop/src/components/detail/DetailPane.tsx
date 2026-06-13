@@ -4,7 +4,7 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats, useUpdateWorkLibraryFields, useDeleteWorkFiles } from "@/hooks/useWorks";
 import { useAutoMatchWork, useClearTmdbMatch, useRefreshTmdbMetadata, useUnlockTmdbMatch } from "@/hooks/useTmdb";
 import { useWorkPersons } from "@/hooks/usePersons";
-import { useOpenWorkFile, useSetWatchStatus, useUpdateResumePosition } from "@/hooks/useWatch";
+import { useOpenWorkFile, useUpdateResumePosition } from "@/hooks/useWatch";
 import { StarRating } from "@/components/common/StarRating";
 import { TagBadge } from "@/components/common/TagBadge";
 import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
@@ -76,15 +76,6 @@ const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
   unmatched:{ label: "未照合",   cls: "text-gray-600"   },
 };
 
-type WatchStatus = "unwatched" | "watching" | "watched" | "abandoned" | "skipped";
-
-const WATCH_PILLS: { value: WatchStatus; label: string; cls: string }[] = [
-  { value: "unwatched", label: "未視聴", cls: "border-gray-700 text-gray-500 hover:text-gray-300" },
-  { value: "watching",  label: "視聴中", cls: "border-blue-800/60 text-blue-400 hover:bg-blue-900/20" },
-  { value: "watched",   label: "視聴済", cls: "border-mantis-700/60 text-mantis-400 hover:bg-mantis-900/20" },
-  { value: "skipped",   label: "スキップ", cls: "border-gray-700 text-gray-600 hover:text-gray-400" },
-];
-
 // ─── コンポーネント ───────────────────────────────────────────────────────────
 
 export function DetailPane() {
@@ -106,7 +97,6 @@ export function DetailPane() {
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
   const { mutate: unlockMatch, isPending: unlocking } = useUnlockTmdbMatch();
   const { mutate: openFile, isPending: opening } = useOpenWorkFile();
-  const { mutate: setStatus } = useSetWatchStatus();
   const { mutate: savePosition } = useUpdateResumePosition();
   const [showCandidates, setShowCandidates] = useState(false);
   const [positionInput, setPositionInput] = useState("");
@@ -332,26 +322,6 @@ export function DetailPane() {
                 size="sm"
                 onChange={(v) => updateStats({ work_id: work.id, user_rating: v, my_rating: v })}
               />
-            </div>
-
-            {/* 視聴状態 — クイックピル */}
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-gray-500">視聴状態</span>
-              <div className="flex gap-1 flex-wrap">
-                {WATCH_PILLS.map((pill) => (
-                  <button
-                    key={pill.value}
-                    onClick={() => setStatus({ workId: work.id, status: pill.value })}
-                    className={`px-2.5 py-0.5 text-xs rounded-full border transition-colors ${
-                      (work.watched_status ?? work.watch_status) === pill.value
-                        ? pill.cls + " opacity-100 ring-1 ring-current/30"
-                        : "border-transparent text-gray-700 hover:border-gray-700 hover:text-gray-500"
-                    }`}
-                  >
-                    {pill.label}
-                  </button>
-                ))}
-              </div>
             </div>
 
             {/* お気に入り */}

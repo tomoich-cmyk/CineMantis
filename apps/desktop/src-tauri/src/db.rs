@@ -37,5 +37,15 @@ pub fn init(path: &Path) -> Result<()> {
             }
         }
     }
+    let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
+    let works = stmt
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    for (work_id, title) in works {
+        if let Some(reading) = crate::services::reading::infer_reading(&title) {
+            conn.execute("UPDATE works SET reading = ?1 WHERE id = ?2", rusqlite::params![reading, work_id])?;
+        }
+    }
     Ok(())
 }

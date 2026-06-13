@@ -106,6 +106,7 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "countryType",
   "genreText",
   "myRating",
+  "externalRating",
   "playCount",
   "dateAdded",
   "lastWatchedAt",
@@ -119,6 +120,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   countryType: 78,
   genreText: 170,
   myRating: 112,
+  externalRating: 88,
   playCount: 88,
   watchedStatus: 100,
   dateAdded: 148,
@@ -215,12 +217,19 @@ export const useLibraryStore = create<LibraryStore>()(
         const state = persisted as Partial<LibraryStore>;
         const visibleColumns = (state.visibleColumns ?? current.visibleColumns)
           .filter((column) => column !== "watchedStatus" && column !== "mediaCategory");
-        const withPlayCount = visibleColumns.includes("playCount")
+        const withExternalRating = visibleColumns.includes("externalRating")
           ? visibleColumns
           : [
-              ...visibleColumns.filter((column) => column !== "dateAdded"),
+              ...visibleColumns.filter((column) => column !== "playCount"),
+              "externalRating",
+              ...(visibleColumns.includes("playCount") ? ["playCount"] : []),
+            ];
+        const withPlayCount = withExternalRating.includes("playCount")
+          ? withExternalRating
+          : [
+              ...withExternalRating.filter((column) => column !== "dateAdded"),
               "playCount",
-              ...(visibleColumns.includes("dateAdded") ? ["dateAdded"] : []),
+              ...(withExternalRating.includes("dateAdded") ? ["dateAdded"] : []),
             ];
         const withLastWatched = withPlayCount.includes("lastWatchedAt")
           ? withPlayCount
