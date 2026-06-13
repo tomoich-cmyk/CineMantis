@@ -24,6 +24,7 @@ export interface UpdateStatsPayload {
   is_favorite?: boolean | null;
   personal_note?: string | null;
   resume_position_sec?: number | null;
+  play_count?: number | null;
 }
 
 export async function getUserStats(workId: number): Promise<UserStatsRow | null> {

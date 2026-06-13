@@ -425,6 +425,16 @@ function VirtualList({
     setEditMenu(null);
   }
 
+  function editPlayCount() {
+    if (!editMenu) return;
+    const input = window.prompt("再生回数を入力", String(editMenu.work.playCount));
+    if (input === null) return;
+    const playCount = Number(input.trim());
+    if (!Number.isInteger(playCount) || playCount < 0) return;
+    for (const workId of editMenu.workIds) updateStats({ work_id: workId, play_count: playCount });
+    setEditMenu(null);
+  }
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#070707]">
       <div className="h-8 flex items-center justify-between px-3 border-b border-[#151515] bg-[#0b0b0b]">
@@ -523,6 +533,7 @@ function VirtualList({
           <button onClick={() => editTextField("reading")} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">よみを編集…</button>
           <button onClick={() => editTextField("release_year")} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">年を編集…</button>
           <button onClick={() => editTextField("genre_text")} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">ジャンルを編集…</button>
+          <button onClick={editPlayCount} className="w-full px-3 py-1.5 text-left hover:bg-[#303030]">再生回数を編集…</button>
           <div className="my-1 border-t border-[#2b2b2b]" />
           <div className="px-3 py-1 text-[10px] text-gray-500">洋邦</div>
           <div className="grid grid-cols-3 gap-1 px-2 pb-1">

@@ -17,7 +17,7 @@ const COUNTRY_OPTIONS = [
   ["unknown", "不明"],
 ] as const;
 
-const EDITABLE_COLUMNS = new Set(["title", "releaseYear", "countryType", "genreText", "myRating"]);
+const EDITABLE_COLUMNS = new Set(["title", "releaseYear", "countryType", "genreText", "myRating", "playCount"]);
 
 interface Props {
   work: WorkSummary;
@@ -149,6 +149,8 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
         return formatGenres(work.genreText);
       case "myRating":
         return String(work.myRating ?? work.userRating ?? "");
+      case "playCount":
+        return String(work.playCount);
       default:
         return "";
     }
@@ -220,6 +222,16 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
       for (const workId of workIds) {
         updateStats({ work_id: workId, user_rating: next, my_rating: next });
       }
+      return;
+    }
+
+    if (column === "playCount") {
+      const next = Number(trimmed);
+      if (!Number.isInteger(next) || next < 0) return;
+      if (!bulk && next === work.playCount) return;
+      for (const workId of workIds) {
+        updateStats({ work_id: workId, play_count: next });
+      }
     }
   }
 
@@ -258,10 +270,10 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
     return (
       <input
         autoFocus
-        type={column === "releaseYear" || column === "myRating" ? "number" : "text"}
-        min={column === "myRating" ? 0 : undefined}
+        type={column === "releaseYear" || column === "myRating" || column === "playCount" ? "number" : "text"}
+        min={column === "myRating" || column === "playCount" ? 0 : undefined}
         max={column === "myRating" ? 5 : undefined}
-        step={column === "myRating" ? 0.5 : undefined}
+        step={column === "myRating" ? 0.5 : column === "playCount" ? 1 : undefined}
         value={draft}
         onClick={(event) => event.stopPropagation()}
         onChange={(event) => setDraft(event.target.value)}
