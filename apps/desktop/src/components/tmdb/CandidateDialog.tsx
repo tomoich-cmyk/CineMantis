@@ -22,28 +22,29 @@ function CandidateCard({
   onClick: () => void;
 }) {
   const posterUrl = c.poster_path ? tmdbPosterUrl(c.poster_path) : null;
+  const [posterFailed, setPosterFailed] = useState(false);
 
   return (
     <div
       onClick={onClick}
       className={clsx(
-        "flex gap-3 p-3 rounded cursor-pointer border transition-all",
+        "flex gap-4 p-3 rounded cursor-pointer border transition-all",
         selected
           ? "border-mantis-500 bg-mantis-900/20"
           : "border-surface-border hover:border-gray-600 bg-surface"
       )}
     >
       {/* Poster */}
-      <div className="w-12 flex-shrink-0 rounded overflow-hidden bg-surface-hover flex items-center justify-center" style={{ minHeight: 72 }}>
-        {posterUrl ? (
+      <div className="w-24 aspect-[2/3] flex-shrink-0 rounded overflow-hidden bg-surface-hover flex items-center justify-center">
+        {posterUrl && !posterFailed ? (
           <img
             src={posterUrl}
             alt={c.title}
-            className="w-full object-cover"
-            style={{ minHeight: 72 }}
+            className="w-full h-full object-cover"
+            onError={() => setPosterFailed(true)}
           />
         ) : (
-          <span className="text-xl opacity-20">🎬</span>
+          <span className="text-xs text-gray-700 text-center px-2">画像なし</span>
         )}
       </div>
 
@@ -97,7 +98,7 @@ function CandidateCard({
         </div>
 
         {c.overview && (
-          <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">
+          <p className="text-xs text-gray-600 line-clamp-3 leading-relaxed">
             {c.overview}
           </p>
         )}
@@ -186,7 +187,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-surface-elevated border border-subtle rounded-lg w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl">
+      <div className="bg-surface-elevated border border-subtle rounded-lg w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl">
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-subtle flex-shrink-0">

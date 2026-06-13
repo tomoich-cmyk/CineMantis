@@ -42,7 +42,7 @@ export interface MetadataUpdatedEvent {
 }
 
 export function tmdbPosterUrl(path: string): string {
-  return `https://image.tmdb.org/t/p/w300${path}`;
+  return `https://image.tmdb.org/t/p/w500${path}`;
 }
 
 export async function searchTmdbCandidates(
