@@ -133,7 +133,7 @@ pub struct TmdbCandidate {
 pub struct AutoMatchResult {
     pub work_id: i64,
     pub matched: bool,
-    pub status: String,      // "auto" | "unmatched"
+    pub status: String,      // "matched" | "manual" | "locked" | "unmatched"
     pub confidence: i32,
     pub tmdb_id: Option<i64>,
     pub title: Option<String>,
