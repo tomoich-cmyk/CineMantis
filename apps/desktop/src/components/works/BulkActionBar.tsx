@@ -3,14 +3,11 @@ import { clsx } from "clsx";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useTags } from "@/hooks/useTags";
 import {
-  useBulkSetWatchStatus,
   useBulkSetFavorite,
   useBulkAddTag,
   useBulkRemoveTag,
   useBulkSetMatchStatus,
 } from "@/hooks/useBulk";
-
-type WatchStatus = "unwatched" | "watching" | "watched" | "skipped";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -20,7 +17,6 @@ export function BulkActionBar() {
   const count = selectedWorkIds.length;
 
   const { data: allTags = [] } = useTags();
-  const { mutate: setWatchStatus, isPending: settingStatus } = useBulkSetWatchStatus();
   const { mutate: setFavorite,    isPending: settingFav }    = useBulkSetFavorite();
   const { mutate: addTag,         isPending: addingTag }     = useBulkAddTag();
   const { mutate: removeTag,      isPending: removingTag }   = useBulkRemoveTag();
@@ -29,19 +25,7 @@ export function BulkActionBar() {
   const [tagMenuOpen, setTagMenuOpen]       = useState(false);
   const [matchMenuOpen, setMatchMenuOpen]   = useState(false);
 
-  const isPending = settingStatus || settingFav || addingTag || removingTag || settingMatch;
-
-  const WATCH_BTNS: { value: WatchStatus; label: string }[] = [
-    { value: "unwatched", label: "未視聴" },
-    { value: "watching",  label: "視聴中" },
-    { value: "watched",   label: "視聴済" },
-    { value: "skipped",   label: "スキップ" },
-  ];
-
-  function fireWatchStatus(status: WatchStatus) {
-    if (!count) return;
-    setWatchStatus({ workIds: selectedWorkIds, status });
-  }
+  const isPending = settingFav || addingTag || removingTag || settingMatch;
 
   function fireFavorite(on: boolean) {
     if (!count) return;
@@ -86,23 +70,6 @@ export function BulkActionBar() {
         >
           選択終了
         </button>
-      </div>
-
-      <div className="w-px h-4 bg-gray-700 mx-1" />
-
-      {/* 視聴状態 */}
-      <div className="flex gap-1 items-center">
-        <span className="text-gray-600">状態:</span>
-        {WATCH_BTNS.map((b) => (
-          <button
-            key={b.value}
-            disabled={!count || isPending}
-            onClick={() => fireWatchStatus(b.value)}
-            className="px-2 py-0.5 border border-gray-700 rounded text-gray-400 hover:text-gray-100 hover:border-gray-500 transition-colors disabled:opacity-30"
-          >
-            {b.label}
-          </button>
-        ))}
       </div>
 
       <div className="w-px h-4 bg-gray-700 mx-1" />

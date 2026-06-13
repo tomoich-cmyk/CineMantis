@@ -327,14 +327,16 @@ pub async fn scan_source(
                     }
                 };
                 let country_type = infer_country_type_from_path(file_path, root);
+                let reading = crate::services::reading::infer_reading(&title);
                 conn.execute(
-                    "INSERT INTO works (work_type, media_kind, title, sort_title, date_added, media_category, country_type)
-                     VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?5, ?6)",
+                    "INSERT INTO works (work_type, media_kind, title, sort_title, reading, date_added, media_category, country_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?6, ?7)",
                     rusqlite::params![
                         work_type,
                         work_media_kind,
                         title,
                         title.to_lowercase(),
+                        reading,
                         if ["movie", "drama", "ova"].contains(&work_type.as_str()) { work_type.as_str() } else { "other" },
                         country_type,
                     ],

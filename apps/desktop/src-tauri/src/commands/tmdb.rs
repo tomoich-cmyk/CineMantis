@@ -193,6 +193,7 @@ async fn apply_match_internal(
         .as_deref()
         .and_then(|d| d.split('-').next())
         .and_then(|y| y.parse::<i32>().ok());
+    let inferred_reading = crate::services::reading::infer_reading(&title);
 
     // ポスター保存
     let poster_local_path = if let Some(ref rp) = poster_remote {
@@ -220,15 +221,16 @@ async fn apply_match_internal(
                media_kind       = ?9,
                external_rating  = ?12,
                external_rating_source = 'tmdb',
-               match_status     = ?13,
-               match_confidence = ?14,
+               reading          = COALESCE(reading, ?13),
+               match_status     = ?14,
+               match_confidence = ?15,
                metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-             WHERE id = ?15",
+             WHERE id = ?16",
             rusqlite::params![
                 title, overview, year, release_date, genres_json, country_json,
                 runtime_sec, tmdb_id, media_type,
                 imdb_id, poster_local_path,
-                external_rating, new_match_status, confidence, work_id,
+                external_rating, inferred_reading, new_match_status, confidence, work_id,
             ],
         )
         .map_err(|e| e.to_string())?;

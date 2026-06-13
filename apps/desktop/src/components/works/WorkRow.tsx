@@ -5,14 +5,6 @@ import { StarRating } from "@/components/common/StarRating";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useUpdateStats, useUpdateWorkLibraryFields } from "@/hooks/useWorks";
 
-const STATUS_LABEL: Record<string, string> = {
-  unwatched: "未視聴",
-  watching: "視聴中",
-  watched: "視聴済",
-  abandoned: "中止",
-  skipped: "中止",
-};
-
 const COUNTRY_LABEL: Record<string, string> = {
   foreign: "洋画",
   domestic: "邦画",
@@ -32,6 +24,7 @@ interface Props {
   selected: boolean;
   onSelect: () => void;
   onToggleSelect?: (id: number, shiftKey: boolean) => void;
+  onShiftContextMenu?: (event: React.MouseEvent, work: WorkSummary) => void;
   gridTemplateColumns: string;
   visibleColumns: string[];
   top: number;
@@ -90,14 +83,7 @@ function editorClass(extra = "") {
 function renderCell(column: string, work: WorkSummary) {
   switch (column) {
     case "title":
-      return (
-        <div className="min-w-0">
-          <div className="truncate text-gray-200">{work.title || "(無題)"}</div>
-          {work.watchedStatus === "watching" && work.resumePositionSec !== null && work.runtimeSec !== null && work.runtimeSec > 0 && (
-            <div className="text-[10px] text-blue-400">{Math.round((work.resumePositionSec / work.runtimeSec) * 100)}%</div>
-          )}
-        </div>
-      );
+      return <div className="truncate text-gray-200">{work.title || "(無題)"}</div>;
     case "releaseYear":
       return work.releaseYear ?? work.year ?? "";
     case "countryType":
@@ -110,22 +96,14 @@ function renderCell(column: string, work: WorkSummary) {
       ) : (
         <span className="text-gray-700">未評価</span>
       );
+    case "externalRating":
+      return work.externalRating !== null ? (
+        <span className="font-mono text-yellow-500">★ {work.externalRating.toFixed(1)}</span>
+      ) : (
+        <span className="text-gray-700">—</span>
+      );
     case "playCount":
       return <span className="font-mono text-gray-500">{work.playCount.toLocaleString("ja-JP")}</span>;
-    case "watchedStatus":
-      return (
-        <span
-          className={clsx(
-            "text-[11px] px-1.5 py-0.5",
-            work.watchedStatus === "watched" && "text-mantis-300",
-            work.watchedStatus === "watching" && "text-blue-300",
-            work.watchedStatus === "abandoned" && "text-orange-300",
-            work.watchedStatus === "unwatched" && "text-gray-600",
-          )}
-        >
-          {STATUS_LABEL[work.watchedStatus] ?? work.watchedStatus}
-        </span>
-      );
     case "dateAdded":
       return formatDateTime(work.dateAdded);
     case "lastWatchedAt":
@@ -139,7 +117,7 @@ function renderCell(column: string, work: WorkSummary) {
   }
 }
 
-export function WorkRow({ work, selected, onSelect, onToggleSelect, gridTemplateColumns, visibleColumns, top, height }: Props) {
+export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftContextMenu, gridTemplateColumns, visibleColumns, top, height }: Props) {
   const { isSelectMode, selectedWorkIds, toggleSelectWork } = useLibraryStore();
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: updateStats } = useUpdateStats();
@@ -237,7 +215,7 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, gridTemplate
 
     if (column === "myRating") {
       const next = trimmed ? Number(trimmed) : null;
-      if (next !== null && (!Number.isFinite(next) || next < 1 || next > 5)) return;
+      if (next !== null && (!Number.isFinite(next) || next < 0.5 || next > 5 || !Number.isInteger(next * 2))) return;
       if (!bulk && next === (work.myRating ?? work.userRating ?? null)) return;
       for (const workId of workIds) {
         updateStats({ work_id: workId, user_rating: next, my_rating: next });
@@ -281,8 +259,9 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, gridTemplate
       <input
         autoFocus
         type={column === "releaseYear" || column === "myRating" ? "number" : "text"}
-        min={column === "myRating" ? 1 : undefined}
+        min={column === "myRating" ? 0.5 : undefined}
         max={column === "myRating" ? 5 : undefined}
+        step={column === "myRating" ? 0.5 : undefined}
         value={draft}
         onClick={(event) => event.stopPropagation()}
         onChange={(event) => setDraft(event.target.value)}
@@ -296,6 +275,12 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, gridTemplate
   return (
     <div
       onClick={handleClick}
+      onContextMenu={(event) => {
+        if (!event.shiftKey || !onShiftContextMenu) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onShiftContextMenu(event, work);
+      }}
       className={clsx(
         "absolute left-0 right-0 grid text-xs border-b border-[#101010] cursor-default",
         isSelectMode && isChecked

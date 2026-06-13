@@ -51,6 +51,7 @@ export interface WorkSummary {
   workType: WorkType;
   mediaCategory: string;
   countryType: string;
+  reading: string | null;
   genreText: string | null;
   dateAdded: string | null;
   lastWatchedAt: string | null;
