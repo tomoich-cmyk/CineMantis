@@ -15,7 +15,7 @@ export interface TmdbCandidate {
 export interface AutoMatchResult {
   work_id: number;
   matched: boolean;
-  status: "auto" | "manual" | "locked" | "unmatched";
+  status: "auto" | "matched" | "manual" | "locked" | "pending" | "unmatched";
   confidence: number;
   tmdb_id: number | null;
   title: string | null;

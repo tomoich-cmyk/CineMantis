@@ -216,3 +216,14 @@ fn parse_year_from_date(date: Option<&str>) -> Option<i32> {
         .and_then(|y| y.parse::<i32>().ok())
         .filter(|&y| (1888..=2099).contains(&y))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_japanese_movie_title_reaches_auto_threshold() {
+        let score = title_match_score("アルマゲドン", "アルマゲドン") + 15;
+        assert!(score >= THRESHOLD_AUTO);
+    }
+}

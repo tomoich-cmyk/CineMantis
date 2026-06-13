@@ -95,7 +95,12 @@ export function DetailPane() {
   const { mutate: updateStats } = useUpdateStats();
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: deleteFiles, isPending: deletingFiles } = useDeleteWorkFiles();
-  const { mutate: autoMatch, isPending: autoMatching } = useAutoMatchWork();
+  const {
+    mutate: autoMatch,
+    data: autoMatchResult,
+    error: autoMatchError,
+    isPending: autoMatching,
+  } = useAutoMatchWork();
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
   const { mutate: unlockMatch, isPending: unlocking } = useUnlockTmdbMatch();
@@ -458,6 +463,20 @@ export function DetailPane() {
             {isPending && (
               <p className="text-[11px] text-orange-400/70 leading-relaxed">
                 一括照合で候補が見つかりませんでした。「候補を探す」で別のキーワードを試すか、「自動照合」で再試行できます。
+              </p>
+            )}
+
+            {autoMatchError && (
+              <p className="text-[11px] text-red-400 leading-relaxed break-words">
+                自動照合に失敗しました: {String(autoMatchError)}
+              </p>
+            )}
+
+            {autoMatchResult && !autoMatchResult.matched && !autoMatchError && (
+              <p className="text-[11px] text-orange-400/80 leading-relaxed">
+                自動採用できる候補がありませんでした
+                {autoMatchResult.confidence > 0 ? `（最高 ${autoMatchResult.confidence}%）` : ""}。
+                「候補を探す」から確認できます。
               </p>
             )}
 
