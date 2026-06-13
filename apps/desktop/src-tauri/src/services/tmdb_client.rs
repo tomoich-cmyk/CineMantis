@@ -1,5 +1,5 @@
 use crate::models::tmdb::*;
-use reqwest::Client;
+use reqwest::{Client, Response};
 
 pub const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p/w500";
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
@@ -36,19 +36,7 @@ impl TmdbClient {
             url.push_str(&format!("&year={y}"));
         }
 
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if !resp.status().is_success() {
-            return Err(format!("TMDb HTTP {}", resp.status()));
-        }
-
-        let data: TmdbSearchResponse<TmdbSearchMovie> =
-            resp.json().await.map_err(|e| e.to_string())?;
+        let data: TmdbSearchResponse<TmdbSearchMovie> = self.fetch_json(&url).await?;
         Ok(data.results)
     }
 
@@ -66,19 +54,7 @@ impl TmdbClient {
             url.push_str(&format!("&first_air_date_year={y}"));
         }
 
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if !resp.status().is_success() {
-            return Err(format!("TMDb HTTP {}", resp.status()));
-        }
-
-        let data: TmdbSearchResponse<TmdbSearchTv> =
-            resp.json().await.map_err(|e| e.to_string())?;
+        let data: TmdbSearchResponse<TmdbSearchTv> = self.fetch_json(&url).await?;
         Ok(data.results)
     }
 
@@ -86,16 +62,40 @@ impl TmdbClient {
 
     /// 汎用 JSON GET ヘルパー
     async fn fetch_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, String> {
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let resp = self.send_with_retry(url).await?;
         if !resp.status().is_success() {
             return Err(format!("TMDb HTTP {}", resp.status()));
         }
-        resp.json::<T>().await.map_err(|e| e.to_string())
+        resp.json::<T>()
+            .await
+            .map_err(|_| "TMDb response could not be decoded".to_string())
+    }
+
+    async fn send_with_retry(&self, url: &str) -> Result<Response, String> {
+        let mut last_kind = "request failed";
+        for attempt in 0..3 {
+            match self.client.get(url).send().await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    last_kind = if error.is_timeout() {
+                        "connection timed out"
+                    } else if error.is_connect() {
+                        "connection could not be established"
+                    } else if error.is_request() {
+                        "connection was interrupted"
+                    } else {
+                        "request failed"
+                    };
+                    if attempt < 2 {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            400 * (attempt + 1) as u64,
+                        ))
+                        .await;
+                    }
+                }
+            }
+        }
+        Err(format!("TMDb {last_kind} after 3 attempts"))
     }
 
     pub async fn get_movie_detail(&self, tmdb_id: i64) -> Result<TmdbMovieDetail, String> {
@@ -137,19 +137,14 @@ impl TmdbClient {
     /// poster_path = "/abc123.jpg"（TMDb relative）
     pub async fn download_poster(&self, poster_path: &str) -> Result<Vec<u8>, String> {
         let url = format!("{TMDB_IMAGE_BASE}{poster_path}");
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let resp = self.send_with_retry(&url).await?;
         if !resp.status().is_success() {
             return Err(format!("poster download HTTP {}", resp.status()));
         }
         resp.bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| e.to_string())
+            .map_err(|_| "poster response could not be read".to_string())
     }
 }
 

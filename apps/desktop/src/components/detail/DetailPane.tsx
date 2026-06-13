@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useWorkDetail, useWorkTags, useUpdateStats, useUpdateWorkLibraryFields, useDeleteWorkFiles } from "@/hooks/useWorks";
@@ -100,6 +100,7 @@ export function DetailPane() {
     data: autoMatchResult,
     error: autoMatchError,
     isPending: autoMatching,
+    reset: resetAutoMatch,
   } = useAutoMatchWork();
   const { mutate: clearMatch } = useClearTmdbMatch();
   const { mutate: refreshMeta, isPending: refreshing } = useRefreshTmdbMetadata();
@@ -109,6 +110,10 @@ export function DetailPane() {
   const { mutate: savePosition } = useUpdateResumePosition();
   const [showCandidates, setShowCandidates] = useState(false);
   const [positionInput, setPositionInput] = useState("");
+
+  useEffect(() => {
+    resetAutoMatch();
+  }, [selectedWorkId, resetAutoMatch]);
 
   function navigateToPerson(personId: number) {
     setSelectedPersonId(personId);
