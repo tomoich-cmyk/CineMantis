@@ -61,6 +61,10 @@ export async function syncMissingPersons(): Promise<PersonsSyncResult> {
   return invoke<PersonsSyncResult>("repair_fetch_all_persons");
 }
 
+export async function localizePersonNames(): Promise<PersonsSyncResult> {
+  return invoke<PersonsSyncResult>("localize_person_names");
+}
+
 export async function getPersonWorks(
   personId: number,
   roleFilter?: string | null,

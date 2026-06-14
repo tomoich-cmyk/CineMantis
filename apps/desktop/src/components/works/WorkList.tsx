@@ -28,6 +28,7 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "genreText", label: "ジャンル" },
   { key: "myRating", label: "マイ評価", sort: "my_rating" },
   { key: "externalRating", label: "TMDb", sort: "external_rating" },
+  { key: "runtime", label: "時間" },
   { key: "matchLocked", label: "固定" },
   { key: "playCount", label: "再生回数", sort: "play_count" },
   { key: "dateAdded", label: "登録日時", sort: "date_added" },

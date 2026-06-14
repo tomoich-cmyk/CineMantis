@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { clsx } from "clsx";
-import { usePersonsList, useSyncMissingPersons } from "@/hooks/usePersons";
+import { useLocalizePersonNames, usePersonsList, useSyncMissingPersons } from "@/hooks/usePersons";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { PersonSummary } from "@/api/persons";
 
@@ -68,6 +68,7 @@ export function PersonsScreen() {
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const { mutate: syncPersons, data: syncResult, isPending: syncing, error: syncError } = useSyncMissingPersons();
+  const { mutate: localizeNames, data: localizeResult, isPending: localizing, error: localizeError } = useLocalizePersonNames();
 
   const { data: persons = [], isLoading } = usePersonsList(roleFilter);
 
@@ -85,7 +86,9 @@ export function PersonsScreen() {
           <h1 className="text-sm font-semibold text-gray-200">人物</h1>
           <div className="flex items-center gap-3">
             {syncResult && <span className="text-[11px] text-gray-500">{syncResult.succeeded}/{syncResult.total}作品を同期</span>}
+            {localizeResult && <span className="text-[11px] text-gray-500">日本語名 {localizeResult.succeeded}/{localizeResult.total}件</span>}
             {syncError && <span className="max-w-64 truncate text-[11px] text-red-400">{String(syncError)}</span>}
+            {localizeError && <span className="max-w-64 truncate text-[11px] text-red-400">{String(localizeError)}</span>}
             <span className="text-xs text-gray-600">{filtered.length} 件</span>
             <button
               onClick={() => syncPersons()}
@@ -93,6 +96,13 @@ export function PersonsScreen() {
               className="border border-mantis-800/60 px-2.5 py-1 text-xs text-mantis-400 hover:bg-mantis-900/20 disabled:opacity-40"
             >
               {syncing ? "人物情報を同期中…" : "照合済み作品から同期"}
+            </button>
+            <button
+              onClick={() => localizeNames()}
+              disabled={localizing}
+              className="border border-gray-700 px-2.5 py-1 text-xs text-gray-400 hover:bg-white/5 disabled:opacity-40"
+            >
+              {localizing ? "日本語名を取得中…" : "日本語名を取得"}
             </button>
           </div>
         </div>

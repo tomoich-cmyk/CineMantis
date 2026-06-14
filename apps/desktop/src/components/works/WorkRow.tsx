@@ -57,6 +57,14 @@ function formatBytes(value: number | null) {
   return `${size.toFixed(unit >= 3 ? 1 : 0)} ${units[unit]}`;
 }
 
+function formatRuntime(value: number | null) {
+  if (!value || value <= 0) return "";
+  const totalMinutes = Math.round(value / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}時間${minutes}分` : `${minutes}分`;
+}
+
 function formatGenres(value: string | null) {
   if (!value) return "";
   try {
@@ -103,6 +111,8 @@ function renderCell(column: string, work: WorkSummary) {
       ) : (
         <span className="text-gray-700">—</span>
       );
+    case "runtime":
+      return <span className="font-mono text-gray-500">{formatRuntime(work.runtimeSec)}</span>;
     case "playCount":
       return <span className="font-mono text-gray-500">{work.playCount.toLocaleString("ja-JP")}</span>;
     case "dateAdded":

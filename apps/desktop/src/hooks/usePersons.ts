@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { listPersons, getPerson, getWorkPersons, getPersonWorks, syncMissingPersons } from "@/api/persons";
+import { listPersons, getPerson, getWorkPersons, getPersonWorks, localizePersonNames, syncMissingPersons } from "@/api/persons";
 
 // ─── Query key factory ───────────────────────────────────────────────────────
 
@@ -51,6 +51,17 @@ export function useSyncMissingPersons() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: syncMissingPersons,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: personKeys.all });
+      queryClient.invalidateQueries({ queryKey: ["works"] });
+    },
+  });
+}
+
+export function useLocalizePersonNames() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: localizePersonNames,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: personKeys.all });
       queryClient.invalidateQueries({ queryKey: ["works"] });
