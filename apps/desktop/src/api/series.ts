@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkSummary } from "@cinemantis/shared-types";
+import type { PersonsSyncResult } from "./persons";
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
@@ -103,4 +104,8 @@ export async function removeFromSeries(seriesId: number, workId: number): Promis
 
 export async function deleteSeries(seriesId: number): Promise<void> {
   return invoke("delete_series", { seriesId });
+}
+
+export async function syncMovieCollections(): Promise<PersonsSyncResult> {
+  return invoke<PersonsSyncResult>("repair_fetch_all_movie_collections");
 }

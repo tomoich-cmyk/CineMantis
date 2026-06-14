@@ -227,11 +227,12 @@ pub fn store_credits(db: &DbState, work_id: i64, credits: &TmdbCredits) -> Resul
         };
 
         let person_id = upsert_person(&conn, member.id, &member.name, member.profile_path.as_deref())?;
+        let legacy_role = if role == "writer" { "screenplay" } else { role };
 
         conn.execute(
-            "INSERT OR IGNORE INTO work_persons (work_id, person_id, role, display_order)
-             VALUES (?1, ?2, ?3, 0)",
-            rusqlite::params![work_id, person_id, role],
+            "INSERT OR IGNORE INTO work_persons (work_id, person_id, role, role_type, display_order, billing_order)
+             VALUES (?1, ?2, ?3, ?4, 0, 0)",
+            rusqlite::params![work_id, person_id, role, legacy_role],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -243,8 +244,8 @@ pub fn store_credits(db: &DbState, work_id: i64, credits: &TmdbCredits) -> Resul
 
         conn.execute(
             "INSERT OR IGNORE INTO work_persons
-                 (work_id, person_id, role, character_name, display_order)
-             VALUES (?1, ?2, 'cast', ?3, ?4)",
+                 (work_id, person_id, role, role_type, character_name, display_order, billing_order)
+             VALUES (?1, ?2, 'cast', 'cast', ?3, ?4, ?4)",
             rusqlite::params![work_id, person_id, member.character.as_deref(), order as i64],
         )
         .map_err(|e| e.to_string())?;
@@ -261,10 +262,12 @@ fn upsert_person(
     profile_path: Option<&str>,
 ) -> Result<i64, String> {
     conn.execute(
-        "INSERT INTO persons (tmdb_id, name, profile_path) VALUES (?1, ?2, ?3)
+        "INSERT INTO persons (tmdb_id, tmdb_person_id, name, profile_path, thumb_path) VALUES (?1, ?1, ?2, ?3, ?3)
          ON CONFLICT(tmdb_id) DO UPDATE SET
            name = excluded.name,
-           profile_path = COALESCE(excluded.profile_path, persons.profile_path)",
+           tmdb_person_id = excluded.tmdb_id,
+           profile_path = COALESCE(excluded.profile_path, persons.profile_path),
+           thumb_path = COALESCE(excluded.profile_path, persons.thumb_path)",
         rusqlite::params![tmdb_id, name, profile_path],
     )
     .map_err(|e| e.to_string())?;

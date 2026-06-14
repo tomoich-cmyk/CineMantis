@@ -7,6 +7,7 @@ import {
   addToSeries,
   removeFromSeries,
   deleteSeries,
+  syncMovieCollections,
 } from "@/api/series";
 
 // ─── Query key factory ───────────────────────────────────────────────────────
@@ -95,5 +96,13 @@ export function useRemoveFromSeries() {
       qc.invalidateQueries({ queryKey: seriesKeys.works(vars.seriesId) });
       qc.invalidateQueries({ queryKey: seriesKeys.list() });
     },
+  });
+}
+
+export function useSyncMovieCollections() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: syncMovieCollections,
+    onSuccess: () => qc.invalidateQueries({ queryKey: seriesKeys.all }),
   });
 }

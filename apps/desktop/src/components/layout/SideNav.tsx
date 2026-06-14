@@ -14,7 +14,6 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   // Library
   { id: "all-movies", label: "映画", icon: "🎬", group: "ライブラリ" },
-  { id: "all-drama", label: "ドラマ", icon: "📺", group: "ライブラリ" },
   { id: "series", label: "シリーズ", icon: "🗂", group: "ライブラリ" },
   { id: "persons", label: "人物", icon: "👤", group: "ライブラリ" },
   // Smart lists
