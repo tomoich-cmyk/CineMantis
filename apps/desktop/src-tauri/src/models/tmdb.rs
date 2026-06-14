@@ -112,19 +112,26 @@ pub struct TmdbCrewMember {
     pub profile_path: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct TmdbPersonDetail {
+    pub name: String,
+    #[serde(default)]
+    pub also_known_as: Vec<String>,
+}
+
 // ─── アプリ内ビュー型（Tauri command が返す） ──────────────────────────────────
 
 /// 候補1件。スコアリング済み
 #[derive(Debug, Serialize, Clone)]
 pub struct TmdbCandidate {
     pub tmdb_id: i64,
-    pub media_type: String,  // "movie" | "tv"
+    pub media_type: String, // "movie" | "tv"
     pub title: String,
     pub original_title: Option<String>,
     pub year: Option<i32>,
-    pub poster_path: Option<String>,  // TMDb 相対パス (/abc.jpg)
+    pub poster_path: Option<String>, // TMDb 相対パス (/abc.jpg)
     pub overview: Option<String>,
-    pub confidence: i32,              // 0–100
+    pub confidence: i32, // 0–100
     pub reasons: Vec<String>,
 }
 
@@ -133,7 +140,7 @@ pub struct TmdbCandidate {
 pub struct AutoMatchResult {
     pub work_id: i64,
     pub matched: bool,
-    pub status: String,      // "matched" | "manual" | "locked" | "unmatched"
+    pub status: String, // "matched" | "manual" | "locked" | "unmatched"
     pub confidence: i32,
     pub tmdb_id: Option<i64>,
     pub title: Option<String>,

@@ -132,6 +132,14 @@ impl TmdbClient {
         self.fetch_json(&url).await
     }
 
+    pub async fn get_person_detail(&self, tmdb_id: i64) -> Result<TmdbPersonDetail, String> {
+        let url = format!(
+            "{TMDB_API_BASE}/person/{tmdb_id}?api_key={}&language=ja-JP",
+            self.api_key
+        );
+        self.fetch_json(&url).await
+    }
+
     // ─── 画像ダウンロード ──────────────────────────────────────────────────
 
     /// poster_path = "/abc123.jpg"（TMDb relative）

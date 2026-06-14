@@ -107,6 +107,7 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "genreText",
   "myRating",
   "externalRating",
+  "runtime",
   "matchLocked",
   "playCount",
   "dateAdded",
@@ -122,6 +123,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   genreText: 170,
   myRating: 112,
   externalRating: 88,
+  runtime: 92,
   matchLocked: 64,
   playCount: 88,
   watchedStatus: 100,
@@ -226,12 +228,19 @@ export const useLibraryStore = create<LibraryStore>()(
               "externalRating",
               ...(visibleColumns.includes("playCount") ? ["playCount"] : []),
             ];
-        const withPlayCount = withExternalRating.includes("playCount")
+        const withRuntime = withExternalRating.includes("runtime")
           ? withExternalRating
           : [
-              ...withExternalRating.filter((column) => column !== "dateAdded"),
+              ...withExternalRating.filter((column) => column !== "matchLocked" && column !== "playCount"),
+              "runtime",
+              ...withExternalRating.filter((column) => column === "matchLocked" || column === "playCount"),
+            ];
+        const withPlayCount = withRuntime.includes("playCount")
+          ? withRuntime
+          : [
+              ...withRuntime.filter((column) => column !== "dateAdded"),
               "playCount",
-              ...(withExternalRating.includes("dateAdded") ? ["dateAdded"] : []),
+              ...(withRuntime.includes("dateAdded") ? ["dateAdded"] : []),
             ];
         const withMatchLocked = withPlayCount.includes("matchLocked")
           ? withPlayCount

@@ -1,9 +1,9 @@
 mod cache;
+mod commands;
 mod db;
 mod ffmpeg_path;
 mod models;
 mod services;
-mod commands;
 
 use tauri::Manager;
 
@@ -106,6 +106,7 @@ pub fn run() {
             // TMDb repair
             commands::tmdb::repair_fetch_persons,
             commands::tmdb::repair_fetch_all_persons,
+            commands::tmdb::localize_person_names,
             commands::tmdb::repair_fetch_all_movie_collections,
             // Platform
             commands::platform::create_desktop_shortcut,
