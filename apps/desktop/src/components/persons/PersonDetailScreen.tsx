@@ -179,7 +179,6 @@ function PersonWorkRow({
     >
       <td className="px-4 py-2">
         <div className="flex items-center gap-2">
-          {work.isFavorite && <span className="text-xs">⭐</span>}
           <span className="font-medium">{work.title}</span>
         </div>
       </td>

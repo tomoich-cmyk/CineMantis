@@ -17,7 +17,6 @@ export function useActiveFilterCount(): number {
   if (filters.personId !== null) count++;
   if (filters.seriesId !== null) count++;
   if (filters.minUserRating !== null) count++;
-  if (filters.isFavorite) count++;
   if (filters.unorganizedOnly) count++;
   return count;
 }
@@ -122,18 +121,6 @@ export function FilterBar() {
           )}
         >
           未整理
-        </button>
-
-        <button
-          onClick={() => setFilter("isFavorite", !filters.isFavorite)}
-          className={clsx(
-            "px-2.5 py-0.5 text-xs rounded border transition-colors",
-            filters.isFavorite
-              ? "bg-yellow-900/30 border-yellow-700/60 text-yellow-400"
-              : "border-subtle text-gray-500 hover:text-gray-300",
-          )}
-        >
-          お気に入り
         </button>
 
         <div className="flex-1" />

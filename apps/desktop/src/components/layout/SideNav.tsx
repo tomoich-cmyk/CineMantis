@@ -18,7 +18,6 @@ const NAV_ITEMS: NavItem[] = [
   { id: "series", label: "シリーズ", icon: "🗂", group: "ライブラリ" },
   { id: "persons", label: "人物", icon: "👤", group: "ライブラリ" },
   // Smart lists
-  { id: "favorites",         label: "お気に入り", icon: "★",  group: "スマート" },
   { id: "unorganized",       label: "未整理",     icon: "!",  group: "スマート" },
   { id: "needs-attention",   label: "要確認",     icon: "⚠",  group: "スマート" },
 ];
