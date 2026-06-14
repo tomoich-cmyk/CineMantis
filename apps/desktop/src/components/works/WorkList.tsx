@@ -371,14 +371,14 @@ function VirtualList({
     event.dataTransfer.setData("text/plain", key);
   }
 
-  function moveColumn(targetKey: string) {
-    if (!draggedColumn || draggedColumn === targetKey) return;
-    const from = visibleColumns.indexOf(draggedColumn);
+  function moveColumn(sourceKey: string, targetKey: string) {
+    if (!sourceKey || sourceKey === targetKey) return;
+    const from = visibleColumns.indexOf(sourceKey);
     const to = visibleColumns.indexOf(targetKey);
     if (from === -1 || to === -1) return;
     const next = [...visibleColumns];
     next.splice(from, 1);
-    next.splice(to, 0, draggedColumn);
+    next.splice(to, 0, sourceKey);
     setVisibleColumns(next);
   }
 
@@ -524,7 +524,8 @@ function VirtualList({
                 }}
                 onDrop={(event) => {
                   event.preventDefault();
-                  moveColumn(column.key);
+                  const sourceKey = event.dataTransfer.getData("text/plain") || draggedColumn || "";
+                  moveColumn(sourceKey, column.key);
                   finishColumnDrag();
                 }}
                 onDragEnd={finishColumnDrag}
@@ -569,7 +570,7 @@ function VirtualList({
                   onToggleSelect={toggleWorkSelection}
                   onShiftContextMenu={openEditMenu}
                   onToggleMatchLock={(workId, locked) =>
-                    setWorkMatchStatus({ workId, status: locked ? "locked" : "manual" })
+                    setWorkMatchStatus({ workId, status: locked ? "locked" : "matched" })
                   }
                   gridTemplateColumns={gridTemplateColumns}
                   visibleColumns={visibleDefs.map((column) => column.key)}

@@ -105,7 +105,7 @@ export function useBulkSetMatchStatus() {
       status,
     }: {
       workIds: number[];
-      status: "locked" | "manual" | "unmatched";
+      status: "locked" | "matched" | "manual" | "unmatched";
     }) => bulkSetMatchStatus(workIds, status),
     onSuccess: () => {
       invalidate();
@@ -117,7 +117,7 @@ export function useBulkSetMatchStatus() {
 export function useSetWorkMatchStatus() {
   const invalidate = useInvalidateAll();
   return useMutation({
-    mutationFn: ({ workId, status }: { workId: number; status: "locked" | "manual" }) =>
+    mutationFn: ({ workId, status }: { workId: number; status: "locked" | "matched" }) =>
       bulkSetMatchStatus([workId], status),
     onSuccess: invalidate,
   });

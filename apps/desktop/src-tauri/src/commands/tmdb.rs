@@ -217,7 +217,7 @@ async fn apply_match_internal(
                tmdb_id          = ?8,
                tmdb_media_type  = ?9,
                imdb_id          = COALESCE(?10, imdb_id),
-               poster_path      = COALESCE(?11, poster_path),
+               poster_path      = ?11,
                media_kind       = ?9,
                external_rating  = ?12,
                external_rating_source = 'tmdb',
@@ -328,7 +328,7 @@ pub async fn search_tmdb_candidates(
     fetch_candidates(&client, &work).await
 }
 
-/// locked → manual に変更（固定解除）
+/// locked → matched に変更（固定解除）
 /// メタデータはそのまま保持し、locked フラグだけ外す
 #[tauri::command]
 pub fn unlock_tmdb_match(
@@ -337,7 +337,7 @@ pub fn unlock_tmdb_match(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "UPDATE works SET match_status = 'manual',
+        "UPDATE works SET match_status = 'matched',
             metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
          WHERE id = ?1 AND match_status = 'locked'",
         rusqlite::params![work_id],
