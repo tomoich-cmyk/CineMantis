@@ -252,6 +252,7 @@ function VirtualList({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+  const columnDragRef = useRef<{ sourceKey: string; targetKey: string; startX: number; active: boolean } | null>(null);
   const [columnMenuOpen, setColumnMenuOpen] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
   const [columnDropTarget, setColumnDropTarget] = useState<string | null>(null);
@@ -313,6 +314,60 @@ function VirtualList({
   }, [setColumnWidth]);
 
   useEffect(() => {
+    function onMove(event: MouseEvent) {
+      const current = columnDragRef.current;
+      if (!current) return;
+      if (!current.active && Math.abs(event.clientX - current.startX) < 5) return;
+
+      current.active = true;
+      event.preventDefault();
+      setDraggedColumn(current.sourceKey);
+
+      const headers = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-library-column-key]"),
+      );
+      const target = headers.find((header) => {
+        const rect = header.getBoundingClientRect();
+        return event.clientX >= rect.left && event.clientX <= rect.right;
+      });
+      const targetKey = target?.dataset.libraryColumnKey;
+      if (targetKey) {
+        current.targetKey = targetKey;
+        setColumnDropTarget(targetKey);
+      }
+    }
+
+    function onUp() {
+      const current = columnDragRef.current;
+      columnDragRef.current = null;
+      if (!current?.active) return;
+
+      const from = visibleColumns.indexOf(current.sourceKey);
+      const to = visibleColumns.indexOf(current.targetKey);
+      if (from !== -1 && to !== -1 && from !== to) {
+        const next = [...visibleColumns];
+        next.splice(from, 1);
+        next.splice(to, 0, current.sourceKey);
+        setVisibleColumns(next);
+      }
+
+      suppressHeaderClickRef.current = true;
+      window.setTimeout(() => {
+        suppressHeaderClickRef.current = false;
+      }, 0);
+      setDraggedColumn(null);
+      setColumnDropTarget(null);
+    }
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [setVisibleColumns, visibleColumns]);
+
+  useEffect(() => {
     if (!editMenu) return;
     const close = () => setEditMenu(null);
     const onKeyDown = (event: KeyboardEvent) => {
@@ -364,31 +419,14 @@ function VirtualList({
     document.body.classList.add("cm-resizing");
   }
 
-  function startColumnDrag(event: React.DragEvent, key: string) {
-    setDraggedColumn(key);
-    setColumnDropTarget(key);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", key);
-  }
-
-  function moveColumn(sourceKey: string, targetKey: string) {
-    if (!sourceKey || sourceKey === targetKey) return;
-    const from = visibleColumns.indexOf(sourceKey);
-    const to = visibleColumns.indexOf(targetKey);
-    if (from === -1 || to === -1) return;
-    const next = [...visibleColumns];
-    next.splice(from, 1);
-    next.splice(to, 0, sourceKey);
-    setVisibleColumns(next);
-  }
-
-  function finishColumnDrag() {
-    suppressHeaderClickRef.current = true;
-    window.setTimeout(() => {
-      suppressHeaderClickRef.current = false;
-    }, 0);
-    setDraggedColumn(null);
-    setColumnDropTarget(null);
+  function prepareColumnDrag(event: React.MouseEvent, key: string) {
+    if (event.button !== 0) return;
+    columnDragRef.current = {
+      sourceKey: key,
+      targetKey: key,
+      startX: event.clientX,
+      active: false,
+    };
   }
 
   function toggleWorkSelection(id: number, shiftKey: boolean, additive: boolean) {
@@ -515,26 +553,14 @@ function VirtualList({
             {visibleDefs.map((column) => (
               <div
                 key={column.key}
-                draggable
-                onDragStart={(event) => startColumnDrag(event, column.key)}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                  setColumnDropTarget(column.key);
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const sourceKey = event.dataTransfer.getData("text/plain") || draggedColumn || "";
-                  moveColumn(sourceKey, column.key);
-                  finishColumnDrag();
-                }}
-                onDragEnd={finishColumnDrag}
+                data-library-column-key={column.key}
                 className={`relative flex items-center border-r border-[#1b1b1b] ${
                   draggedColumn === column.key ? "opacity-40" : ""
                 } ${columnDropTarget === column.key && draggedColumn !== column.key ? "before:absolute before:inset-y-0 before:left-0 before:w-px before:bg-mantis-400" : ""}`}
               >
                 <button
                   type="button"
+                  onMouseDown={(event) => prepareColumnDrag(event, column.key)}
                   onClick={() => toggleSort(column.sort)}
                   className={`w-full h-full px-2 text-left truncate cursor-grab active:cursor-grabbing ${column.sort ? "hover:text-gray-200" : ""}`}
                   title="左右にドラッグして列を移動"
