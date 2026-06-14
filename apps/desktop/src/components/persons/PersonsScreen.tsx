@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { clsx } from "clsx";
-import { usePersonsList } from "@/hooks/usePersons";
+import { usePersonsList, useSyncMissingPersons } from "@/hooks/usePersons";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { PersonSummary } from "@/api/persons";
 
@@ -32,15 +32,19 @@ function PersonCard({
     .split(",")
     .filter(Boolean)
     .map((r) => ROLE_LABELS[r] ?? r);
+  const profileUrl = person.profile_path
+    ? person.profile_path.startsWith("http")
+      ? person.profile_path
+      : `https://image.tmdb.org/t/p/w185${person.profile_path}`
+    : null;
 
   return (
     <div
       onClick={onClick}
       className="group flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-surface-hover transition-colors border-b border-surface-border"
     >
-      {/* Avatar placeholder */}
       <div className="w-9 h-9 flex-shrink-0 rounded-full bg-surface flex items-center justify-center text-gray-600 text-sm font-medium overflow-hidden">
-        {person.name.slice(0, 1)}
+        {profileUrl ? <img src={profileUrl} alt="" className="h-full w-full object-cover" /> : person.name.slice(0, 1)}
       </div>
 
       {/* Info */}
@@ -63,6 +67,7 @@ export function PersonsScreen() {
   const { setSelectedPersonId } = useLibraryStore();
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const { mutate: syncPersons, data: syncResult, isPending: syncing, error: syncError } = useSyncMissingPersons();
 
   const { data: persons = [], isLoading } = usePersonsList(roleFilter);
 
@@ -78,7 +83,18 @@ export function PersonsScreen() {
       <div className="flex flex-col gap-2 px-4 py-3 border-b border-subtle bg-surface-elevated flex-shrink-0">
         <div className="flex items-center justify-between">
           <h1 className="text-sm font-semibold text-gray-200">人物</h1>
-          <span className="text-xs text-gray-600">{filtered.length} 件</span>
+          <div className="flex items-center gap-3">
+            {syncResult && <span className="text-[11px] text-gray-500">{syncResult.succeeded}/{syncResult.total}作品を同期</span>}
+            {syncError && <span className="max-w-64 truncate text-[11px] text-red-400">{String(syncError)}</span>}
+            <span className="text-xs text-gray-600">{filtered.length} 件</span>
+            <button
+              onClick={() => syncPersons()}
+              disabled={syncing}
+              className="border border-mantis-800/60 px-2.5 py-1 text-xs text-mantis-400 hover:bg-mantis-900/20 disabled:opacity-40"
+            >
+              {syncing ? "人物情報を同期中…" : "照合済み作品から同期"}
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">

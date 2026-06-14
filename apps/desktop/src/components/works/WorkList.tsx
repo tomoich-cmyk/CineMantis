@@ -352,7 +352,7 @@ function VirtualList({
     document.body.classList.add("cm-resizing");
   }
 
-  function toggleWorkSelection(id: number, shiftKey: boolean) {
+  function toggleWorkSelection(id: number, shiftKey: boolean, additive: boolean) {
     const index = works.findIndex((work) => work.id === id);
     if (index === -1) return;
 
@@ -360,29 +360,24 @@ function VirtualList({
       const start = Math.min(lastSelectedIndex, index);
       const end = Math.max(lastSelectedIndex, index);
       const rangeIds = works.slice(start, end + 1).map((work) => work.id);
-      const shouldSelect = !selectedWorkIds.includes(id);
-      const next = new Set(selectedWorkIds);
-      for (const rangeId of rangeIds) {
-        if (shouldSelect) {
-          next.add(rangeId);
-        } else {
-          next.delete(rangeId);
-        }
-      }
+      const next = new Set(additive ? selectedWorkIds : []);
+      for (const rangeId of rangeIds) next.add(rangeId);
       selectAllWorks(Array.from(next));
-    } else {
+    } else if (additive || isSelectMode) {
       const next = selectedWorkIds.includes(id)
         ? selectedWorkIds.filter((selectedId) => selectedId !== id)
         : [...selectedWorkIds, id];
       selectAllWorks(next);
+    } else {
+      selectAllWorks([id]);
     }
+    setSelectedWorkId(id);
     setLastSelectedIndex(index);
   }
 
   function openEditMenu(event: React.MouseEvent, work: WorkSummary) {
-    const workIds = selectedWorkIds.includes(work.id) && selectedWorkIds.length > 0
-      ? selectedWorkIds
-      : [work.id];
+    const workIds = selectedWorkIds.includes(work.id) ? selectedWorkIds : [work.id];
+    if (!selectedWorkIds.includes(work.id)) selectAllWorks([work.id]);
     setSelectedWorkId(work.id);
     setEditMenu({
       x: Math.min(event.clientX, window.innerWidth - 230),
@@ -508,7 +503,11 @@ function VirtualList({
                   key={work.id}
                   work={work}
                   selected={selectedWorkId === work.id}
-                  onSelect={() => setSelectedWorkId(selectedWorkId === work.id ? null : work.id)}
+                  onSelect={() => {
+                    clearSelection();
+                    setLastSelectedIndex(vItem.index);
+                    setSelectedWorkId(selectedWorkId === work.id ? null : work.id);
+                  }}
                   onToggleSelect={toggleWorkSelection}
                   onShiftContextMenu={openEditMenu}
                   gridTemplateColumns={gridTemplateColumns}

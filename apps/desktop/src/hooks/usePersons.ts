@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { listPersons, getPerson, getWorkPersons, getPersonWorks } from "@/api/persons";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { listPersons, getPerson, getWorkPersons, getPersonWorks, syncMissingPersons } from "@/api/persons";
 
 // ─── Query key factory ───────────────────────────────────────────────────────
 
@@ -44,5 +44,16 @@ export function usePersonWorks(personId: number | null, roleFilter?: string | nu
     queryKey: personKeys.personWorks(personId ?? -1, roleFilter),
     queryFn: () => getPersonWorks(personId!, roleFilter),
     enabled: personId !== null,
+  });
+}
+
+export function useSyncMissingPersons() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: syncMissingPersons,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: personKeys.all });
+      queryClient.invalidateQueries({ queryKey: ["works"] });
+    },
   });
 }
