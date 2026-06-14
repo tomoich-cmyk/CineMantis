@@ -53,7 +53,7 @@ export async function bulkRemoveTag(workIds: number[], tagId: number): Promise<v
 
 export async function bulkSetMatchStatus(
   workIds: number[],
-  status: "locked" | "manual" | "unmatched"
+  status: "locked" | "matched" | "manual" | "unmatched"
 ): Promise<void> {
   return invoke("bulk_set_match_status", {
     workIdsJson: toJson(workIds),

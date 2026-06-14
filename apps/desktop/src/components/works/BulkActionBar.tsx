@@ -37,7 +37,7 @@ export function BulkActionBar() {
     setTagMenuOpen(false);
   }
 
-  function fireMatchStatus(status: "locked" | "manual" | "unmatched") {
+  function fireMatchStatus(status: "locked" | "matched" | "unmatched") {
     if (!count) return;
     setMatchStatus({ workIds: selectedWorkIds, status });
     setMatchMenuOpen(false);
@@ -137,10 +137,10 @@ export function BulkActionBar() {
               🔒 ロック
             </button>
             <button
-              onClick={() => fireMatchStatus("manual")}
+              onClick={() => fireMatchStatus("matched")}
               className="w-full text-left px-3 py-1.5 text-xs text-blue-400 hover:bg-surface-hover transition-colors"
             >
-              ✏ 手動照合に変更
+              🔓 固定を解除
             </button>
             <div className="border-t border-subtle my-1" />
             <button

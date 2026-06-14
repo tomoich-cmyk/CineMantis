@@ -23,6 +23,7 @@ function toAssetUrl(path: string): string {
 
 function WorkImage({ src, alt }: { src: string | null; alt: string }) {
   const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
   if (!src || failed) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-surface">

@@ -127,7 +127,7 @@ pub fn bulk_remove_tag(
 
 // ─── bulk_set_match_status ────────────────────────────────────────────────────
 
-/// match_status を一括変更する（locked / manual / unmatched 等）
+/// match_status を一括変更する（locked / matched / unmatched 等）
 #[tauri::command]
 pub fn bulk_set_match_status(
     state: State<DbState>,
