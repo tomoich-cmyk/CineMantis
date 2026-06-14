@@ -23,7 +23,7 @@ interface Props {
   work: WorkSummary;
   selected: boolean;
   onSelect: () => void;
-  onToggleSelect?: (id: number, shiftKey: boolean) => void;
+  onToggleSelect?: (id: number, shiftKey: boolean, additive: boolean) => void;
   onShiftContextMenu?: (event: React.MouseEvent, work: WorkSummary) => void;
   gridTemplateColumns: string;
   visibleColumns: string[];
@@ -126,9 +126,9 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
   const isChecked = selectedWorkIds.includes(work.id);
 
   function handleClick(event: React.MouseEvent) {
-    if (isSelectMode) {
+    if (isSelectMode || event.shiftKey || event.ctrlKey || event.metaKey) {
       if (onToggleSelect) {
-        onToggleSelect(work.id, event.shiftKey);
+        onToggleSelect(work.id, event.shiftKey, event.ctrlKey || event.metaKey);
       } else {
         toggleSelectWork(work.id);
       }
@@ -288,14 +288,14 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
     <div
       onClick={handleClick}
       onContextMenu={(event) => {
-        if (!event.shiftKey || !onShiftContextMenu) return;
+        if (!onShiftContextMenu) return;
         event.preventDefault();
         event.stopPropagation();
         onShiftContextMenu(event, work);
       }}
       className={clsx(
         "absolute left-0 right-0 grid text-xs border-b border-[#101010] cursor-default",
-        isSelectMode && isChecked
+        isChecked
           ? "bg-blue-900/25 text-gray-100"
           : selected
             ? "bg-mantis-500/18 text-gray-100"

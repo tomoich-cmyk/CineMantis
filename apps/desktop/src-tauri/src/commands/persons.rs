@@ -199,7 +199,10 @@ pub fn get_person(
 // ─── 内部ヘルパー（tmdb.rs から呼ぶ） ─────────────────────────────────────────
 
 const DIRECTOR_JOBS: &[&str] = &["Director"];
-const WRITER_JOBS: &[&str]   = &["Screenplay", "Writer", "Story", "Novel", "Script"];
+const WRITER_JOBS: &[&str] = &[
+    "Screenplay", "Writer", "Story", "Novel", "Script", "Teleplay",
+    "Adaptation", "Characters", "Original Story", "Screenstory", "Creator",
+];
 const MAX_CAST: usize = 20;
 
 /// TMDb credits を受け取り、persons / work_persons に upsert する
@@ -255,11 +258,14 @@ fn upsert_person(
     conn: &rusqlite::Connection,
     tmdb_id: i64,
     name: &str,
-    _profile_path: Option<&str>,
+    profile_path: Option<&str>,
 ) -> Result<i64, String> {
     conn.execute(
-        "INSERT OR IGNORE INTO persons (tmdb_id, name) VALUES (?1, ?2)",
-        rusqlite::params![tmdb_id, name],
+        "INSERT INTO persons (tmdb_id, name, profile_path) VALUES (?1, ?2, ?3)
+         ON CONFLICT(tmdb_id) DO UPDATE SET
+           name = excluded.name,
+           profile_path = COALESCE(excluded.profile_path, persons.profile_path)",
+        rusqlite::params![tmdb_id, name, profile_path],
     )
     .map_err(|e| e.to_string())?;
 

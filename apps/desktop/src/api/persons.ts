@@ -21,6 +21,13 @@ export interface WorkPerson {
   display_order: number;
 }
 
+export interface PersonsSyncResult {
+  total: number;
+  succeeded: number;
+  failed: number;
+  last_error: string | null;
+}
+
 interface WorkSummaryRow {
   id: number;
   title: string;
@@ -48,6 +55,10 @@ export async function getPerson(personId: number): Promise<PersonSummary | null>
 
 export async function getWorkPersons(workId: number): Promise<WorkPerson[]> {
   return invoke<WorkPerson[]>("get_work_persons", { workId });
+}
+
+export async function syncMissingPersons(): Promise<PersonsSyncResult> {
+  return invoke<PersonsSyncResult>("repair_fetch_all_persons");
 }
 
 export async function getPersonWorks(

@@ -680,6 +680,71 @@ pub async fn repair_fetch_persons(
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct PersonsSyncResult {
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub last_error: Option<String>,
+}
+
+/// TMDb 照合済みで人物情報が未取得の作品をまとめて同期する。
+#[tauri::command]
+pub async fn repair_fetch_all_persons(
+    app: AppHandle,
+    state: State<'_, DbState>,
+) -> Result<PersonsSyncResult, String> {
+    let api_key = get_api_key_internal(&state)?;
+    let client = TmdbClient::new(api_key);
+    let targets: Vec<(i64, i64, String)> = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT w.id, w.tmdb_id, COALESCE(w.tmdb_media_type, 'movie')
+                 FROM works w
+                 WHERE w.tmdb_id IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM work_persons wp WHERE wp.work_id = w.id)
+                 ORDER BY w.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+
+    let total = targets.len();
+    let mut succeeded = 0;
+    let mut failed = 0;
+    let mut last_error = None;
+
+    for (work_id, tmdb_id, media_type) in targets {
+        let result = if media_type == "movie" {
+            client.get_movie_credits(tmdb_id).await
+        } else {
+            client.get_tv_credits(tmdb_id).await
+        };
+        match result {
+            Ok(credits) => match crate::commands::persons::store_credits(&state, work_id, &credits) {
+                Ok(()) => succeeded += 1,
+                Err(error) => {
+                    failed += 1;
+                    last_error = Some(error);
+                }
+            },
+            Err(error) => {
+                failed += 1;
+                last_error = Some(error);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(260)).await;
+    }
+
+    let _ = app.emit("metadata:updated", serde_json::json!({ "type": "persons-batch" }));
+    Ok(PersonsSyncResult { total, succeeded, failed, last_error })
+}
+
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
 fn genres_to_json(genres: Option<&[crate::models::tmdb::TmdbGenre]>) -> Option<String> {
