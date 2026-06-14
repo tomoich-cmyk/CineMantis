@@ -745,6 +745,62 @@ pub async fn repair_fetch_all_persons(
     Ok(PersonsSyncResult { total, succeeded, failed, last_error })
 }
 
+/// TMDb 照合済み映画からコレクション情報を再取得する。
+#[tauri::command]
+pub async fn repair_fetch_all_movie_collections(
+    app: AppHandle,
+    state: State<'_, DbState>,
+) -> Result<PersonsSyncResult, String> {
+    let api_key = get_api_key_internal(&state)?;
+    let client = TmdbClient::new(api_key);
+    let targets: Vec<(i64, i64)> = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, tmdb_id FROM works
+                 WHERE tmdb_id IS NOT NULL
+                   AND COALESCE(tmdb_media_type, 'movie') = 'movie'
+                   AND tmdb_collection_id IS NULL
+                 ORDER BY id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+
+    let total = targets.len();
+    let mut succeeded = 0;
+    let mut failed = 0;
+    let mut last_error = None;
+    for (work_id, tmdb_id) in targets {
+        match client.get_movie_detail(tmdb_id).await {
+            Ok(detail) => {
+                if let Some(collection) = detail.belongs_to_collection {
+                    let year = detail.release_date.as_deref()
+                        .and_then(|date| date.split('-').next())
+                        .and_then(|year| year.parse::<i32>().ok())
+                        .unwrap_or(0);
+                    match crate::commands::series::ensure_movie_collection(
+                        &state, collection.id, &collection.name, work_id, year,
+                    ) {
+                        Ok(()) => succeeded += 1,
+                        Err(error) => { failed += 1; last_error = Some(error); }
+                    }
+                }
+            }
+            Err(error) => { failed += 1; last_error = Some(error); }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(260)).await;
+    }
+
+    let _ = app.emit("metadata:updated", serde_json::json!({ "type": "series-batch" }));
+    Ok(PersonsSyncResult { total, succeeded, failed, last_error })
+}
+
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
 fn genres_to_json(genres: Option<&[crate::models::tmdb::TmdbGenre]>) -> Option<String> {

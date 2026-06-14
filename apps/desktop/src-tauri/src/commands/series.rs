@@ -33,7 +33,14 @@ pub fn list_series(state: State<'_, DbState>) -> Result<Vec<SeriesSummaryRow>, S
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT s.id, s.title, s.series_type, s.tmdb_id,
+            "SELECT s.id, s.title,
+                    CASE s.series_type
+                      WHEN 'collection' THEN 'movie_collection'
+                      WHEN 'movie_series' THEN 'manual'
+                      WHEN 'drama_series' THEN 'tv_show'
+                      ELSE s.series_type
+                    END,
+                    s.tmdb_id,
                     COALESCE(s.poster_path,
                         (SELECT COALESCE(w.poster_path, w.thumb_path)
                          FROM series_items si2
@@ -76,7 +83,14 @@ pub fn get_series(
 ) -> Result<Option<SeriesDetailRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.query_row(
-        "SELECT id, title, series_type, tmdb_id, poster_path, overview FROM series WHERE id = ?1",
+        "SELECT id, title,
+                CASE series_type
+                  WHEN 'collection' THEN 'movie_collection'
+                  WHEN 'movie_series' THEN 'manual'
+                  WHEN 'drama_series' THEN 'tv_show'
+                  ELSE series_type
+                END,
+                tmdb_id, poster_path, overview FROM series WHERE id = ?1",
         rusqlite::params![series_id],
         |row| {
             Ok(SeriesDetailRow {
@@ -165,8 +179,8 @@ pub fn create_series(
 ) -> Result<i64, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO series (title, sort_title, series_type) VALUES (?1, ?1, ?2)",
-        rusqlite::params![title, series_type.as_deref().unwrap_or("manual")],
+        "INSERT INTO series (title, name, sort_title, series_type) VALUES (?1, ?1, ?1, 'movie_series')",
+        rusqlite::params![title],
     )
     .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
@@ -232,8 +246,8 @@ pub fn ensure_movie_collection(
 
     // シリーズが存在しなければ INSERT IGNORE
     conn.execute(
-        "INSERT OR IGNORE INTO series (title, sort_title, series_type, tmdb_id)
-         VALUES (?1, ?1, 'movie_collection', ?2)",
+        "INSERT OR IGNORE INTO series (title, name, sort_title, series_type, tmdb_id)
+         VALUES (?1, ?1, ?1, 'collection', ?2)",
         rusqlite::params![collection_name, collection_id],
     )
     .map_err(|e| e.to_string())?;
@@ -241,7 +255,7 @@ pub fn ensure_movie_collection(
     // series_id 取得
     let series_id: i64 = conn
         .query_row(
-            "SELECT id FROM series WHERE tmdb_id = ?1 AND series_type = 'movie_collection'",
+            "SELECT id FROM series WHERE tmdb_id = ?1 AND series_type IN ('collection', 'movie_collection')",
             rusqlite::params![collection_id],
             |row| row.get(0),
         )
@@ -278,8 +292,8 @@ pub fn ensure_tv_series(
 
     // シリーズが存在しなければ INSERT IGNORE
     conn.execute(
-        "INSERT OR IGNORE INTO series (title, sort_title, series_type, tmdb_id, overview)
-         VALUES (?1, ?1, 'tv_show', ?2, ?3)",
+        "INSERT OR IGNORE INTO series (title, name, sort_title, series_type, tmdb_id, overview)
+         VALUES (?1, ?1, ?1, 'drama_series', ?2, ?3)",
         rusqlite::params![tv_title, tv_tmdb_id, overview],
     )
     .map_err(|e| e.to_string())?;
@@ -287,7 +301,7 @@ pub fn ensure_tv_series(
     // series_id 取得
     let series_id: i64 = conn
         .query_row(
-            "SELECT id FROM series WHERE tmdb_id = ?1 AND series_type = 'tv_show'",
+            "SELECT id FROM series WHERE tmdb_id = ?1 AND series_type IN ('drama_series', 'tv_show')",
             rusqlite::params![tv_tmdb_id],
             |row| row.get(0),
         )

@@ -106,6 +106,7 @@ pub fn run() {
             // TMDb repair
             commands::tmdb::repair_fetch_persons,
             commands::tmdb::repair_fetch_all_persons,
+            commands::tmdb::repair_fetch_all_movie_collections,
             // Platform
             commands::platform::create_desktop_shortcut,
         ])

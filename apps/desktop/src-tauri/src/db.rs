@@ -22,6 +22,7 @@ const MIGRATION_003: &str = include_str!("../../../../packages/db/migrations/003
 const MIGRATION_004: &str = include_str!("../../../../packages/db/migrations/004_persons.sql");
 const MIGRATION_005: &str = include_str!("../../../../packages/db/migrations/005_source_media_kind.sql");
 const MIGRATION_LIBRARY_FIELDS: &str = include_str!("../../../../packages/db/migrations/005_library_management_fields.sql");
+const MIGRATION_LEGACY_COMPAT: &str = include_str!("../../../../packages/db/migrations/006_legacy_schema_compat.sql");
 
 /// マイグレーション適用（起動時に一度だけ呼ぶ）
 pub fn init(path: &Path) -> Result<()> {
@@ -29,7 +30,7 @@ pub fn init(path: &Path) -> Result<()> {
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
     conn.execute_batch(MIGRATION_001)?;
     // 002-005: ALTER TABLE / CREATE TABLE が既存の場合はエラーを無視
-    for migration in [MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_LIBRARY_FIELDS] {
+    for migration in [MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_LIBRARY_FIELDS, MIGRATION_LEGACY_COMPAT] {
         for stmt in migration.split(';') {
             let trimmed = stmt.trim();
             if !trimmed.is_empty() {

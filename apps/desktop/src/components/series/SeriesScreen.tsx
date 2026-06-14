@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { clsx } from "clsx";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { useSeriesList, useCreateSeries, useDeleteSeries } from "@/hooks/useSeries";
+import { useSeriesList, useCreateSeries, useDeleteSeries, useSyncMovieCollections } from "@/hooks/useSeries";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { SeriesSummary } from "@/api/series";
 
@@ -74,17 +74,13 @@ function SeriesCard({
 
 export function SeriesScreen() {
   const { setSelectedSeriesId } = useLibraryStore();
-  const { data: seriesList = [], isLoading, isError } = useSeriesList();
+  const { data: seriesList = [], isLoading, isError, error } = useSeriesList();
   const { mutate: createSeries, isPending: creating } = useCreateSeries();
+  const { mutate: syncCollections, data: syncResult, isPending: syncing, error: syncError } = useSyncMovieCollections();
   useDeleteSeries();
 
   const [newTitle, setNewTitle] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
-  const [filter, setFilter] = useState<"all" | "movie_collection" | "tv_show" | "manual">("all");
-
-  const filtered =
-    filter === "all" ? seriesList : seriesList.filter((s) => s.series_type === filter);
-
   function handleCreate() {
     const t = newTitle.trim();
     if (!t) return;
@@ -108,38 +104,23 @@ export function SeriesScreen() {
           <span className="text-xs text-gray-600">{seriesList.length} 件</span>
         </div>
 
-        {/* Filter tabs */}
-        <div className="flex items-center gap-1">
-          {(
-            [
-              { value: "all",              label: "すべて" },
-              { value: "movie_collection", label: "映画" },
-              { value: "tv_show",          label: "TV" },
-              { value: "manual",           label: "手動" },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => setFilter(tab.value)}
-              className={clsx(
-                "px-2.5 py-0.5 text-xs rounded transition-colors",
-                filter === tab.value
-                  ? "bg-mantis-700/40 text-mantis-300"
-                  : "text-gray-500 hover:text-gray-300"
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {syncResult && <span className="text-[11px] text-gray-500">{syncResult.succeeded}/{syncResult.total}作品をシリーズ化</span>}
+          {syncError && <span className="max-w-64 truncate text-[11px] text-red-400">{String(syncError)}</span>}
+          <button
+            onClick={() => syncCollections()}
+            disabled={syncing}
+            className="border border-mantis-800/60 px-2.5 py-1 text-xs text-mantis-400 hover:bg-mantis-900/20 disabled:opacity-40"
+          >
+            {syncing ? "TMDbから同期中…" : "TMDbからシリーズ同期"}
+          </button>
+          <button
+            onClick={() => setShowNewForm((v) => !v)}
+            className="text-xs text-gray-500 hover:text-mantis-400 transition-colors px-2 py-1 border border-subtle"
+          >
+            ＋ 手動シリーズ
+          </button>
         </div>
-
-        {/* 手動シリーズ作成 */}
-        <button
-          onClick={() => setShowNewForm((v) => !v)}
-          className="text-xs text-gray-500 hover:text-mantis-400 transition-colors px-2 py-1 border border-subtle rounded"
-        >
-          ＋ 新規シリーズ
-        </button>
       </div>
 
       {/* New series form */}
@@ -177,26 +158,25 @@ export function SeriesScreen() {
             読み込み中…
           </div>
         ) : isError ? (
-          <div className="flex items-center justify-center h-40 text-red-500 text-sm">
-            読み込みに失敗しました
+          <div className="flex flex-col items-center justify-center h-40 gap-2 text-red-500 text-sm">
+            <span>読み込みに失敗しました</span>
+            <span className="max-w-xl break-all text-center text-xs text-red-700">{String(error)}</span>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : seriesList.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 gap-3 text-gray-600">
             <span className="text-4xl opacity-20">🗂</span>
             <p className="text-sm">
-              {seriesList.length === 0
-                ? "シリーズがありません"
-                : "該当するシリーズがありません"}
+              シリーズがありません
             </p>
             {seriesList.length === 0 && (
               <p className="text-xs text-gray-700 text-center max-w-xs">
-                TMDb と照合すると、映画コレクションや TV シリーズが自動で作成されます
+                TMDbコレクションから自動作成するか、手動で作品をまとめられます
               </p>
             )}
           </div>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-4">
-            {filtered.map((series) => (
+            {seriesList.map((series) => (
               <SeriesCard
                 key={series.id}
                 series={series}
