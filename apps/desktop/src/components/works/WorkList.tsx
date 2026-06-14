@@ -6,6 +6,7 @@ import { useUpdateStats, useUpdateWorkLibraryFields, useWorkList } from "@/hooks
 import { WorkCard } from "./WorkCard";
 import { WorkRow } from "./WorkRow";
 import { BulkActionBar } from "./BulkActionBar";
+import { useSetWorkMatchStatus } from "@/hooks/useBulk";
 import type { WorkSummary, SortField } from "@cinemantis/shared-types";
 
 const GRID_MIN_WIDTH: Record<Density, string> = {
@@ -27,6 +28,7 @@ export const COLUMN_DEFS: { key: string; label: string; sort?: SortField }[] = [
   { key: "genreText", label: "ジャンル" },
   { key: "myRating", label: "マイ評価", sort: "my_rating" },
   { key: "externalRating", label: "TMDb", sort: "external_rating" },
+  { key: "matchLocked", label: "固定" },
   { key: "playCount", label: "再生回数", sort: "play_count" },
   { key: "dateAdded", label: "登録日時", sort: "date_added" },
   { key: "lastWatchedAt", label: "再生日時", sort: "last_watched_at" },
@@ -255,6 +257,7 @@ function VirtualList({
   const [editMenu, setEditMenu] = useState<{ x: number; y: number; work: WorkSummary; workIds: number[] } | null>(null);
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: updateStats } = useUpdateStats();
+  const { mutate: setWorkMatchStatus } = useSetWorkMatchStatus();
   const {
     sortField,
     sortOrder,
@@ -510,6 +513,9 @@ function VirtualList({
                   }}
                   onToggleSelect={toggleWorkSelection}
                   onShiftContextMenu={openEditMenu}
+                  onToggleMatchLock={(workId, locked) =>
+                    setWorkMatchStatus({ workId, status: locked ? "locked" : "manual" })
+                  }
                   gridTemplateColumns={gridTemplateColumns}
                   visibleColumns={visibleDefs.map((column) => column.key)}
                   top={vItem.start}

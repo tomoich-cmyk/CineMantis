@@ -135,7 +135,6 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
   // 候補選択
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedMediaType, setSelectedMediaType] = useState<string>("");
-  const [lock, setLock] = useState(isLocked);
 
   // 直接 TMDb ID 指定
   const [showDirectId, setShowDirectId] = useState(false);
@@ -165,7 +164,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
   function handleApply() {
     if (!selected) return;
     applyMatch(
-      { workId, tmdbId: selected.tmdb_id, mediaType: selected.media_type, lock },
+      { workId, tmdbId: selected.tmdb_id, mediaType: selected.media_type, lock: false },
       { onSuccess: onClose }
     );
   }
@@ -174,7 +173,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
     const id = parseInt(directIdInput, 10);
     if (isNaN(id) || id <= 0) return;
     applyMatch(
-      { workId, tmdbId: id, mediaType: directMediaType, lock },
+      { workId, tmdbId: id, mediaType: directMediaType, lock: false },
       { onSuccess: onClose }
     );
   }
@@ -328,16 +327,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
         </div>
 
         {/* ── Footer ── */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-subtle flex-shrink-0">
-          <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={lock}
-              onChange={(e) => setLock(e.target.checked)}
-              className="accent-mantis-500"
-            />
-            この候補で固定する（再スキャンで変更しない）
-          </label>
+        <div className="flex items-center justify-end px-5 py-3 border-t border-subtle flex-shrink-0">
           <div className="flex gap-2">
             <button
               onClick={onClose}

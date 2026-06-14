@@ -113,3 +113,12 @@ export function useBulkSetMatchStatus() {
     },
   });
 }
+
+export function useSetWorkMatchStatus() {
+  const invalidate = useInvalidateAll();
+  return useMutation({
+    mutationFn: ({ workId, status }: { workId: number; status: "locked" | "manual" }) =>
+      bulkSetMatchStatus([workId], status),
+    onSuccess: invalidate,
+  });
+}

@@ -107,6 +107,7 @@ export const DEFAULT_VISIBLE_COLUMNS = [
   "genreText",
   "myRating",
   "externalRating",
+  "matchLocked",
   "playCount",
   "dateAdded",
   "lastWatchedAt",
@@ -121,6 +122,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   genreText: 170,
   myRating: 112,
   externalRating: 88,
+  matchLocked: 64,
   playCount: 88,
   watchedStatus: 100,
   dateAdded: 148,
@@ -231,12 +233,19 @@ export const useLibraryStore = create<LibraryStore>()(
               "playCount",
               ...(withExternalRating.includes("dateAdded") ? ["dateAdded"] : []),
             ];
-        const withLastWatched = withPlayCount.includes("lastWatchedAt")
+        const withMatchLocked = withPlayCount.includes("matchLocked")
           ? withPlayCount
           : [
-              ...withPlayCount.filter((column) => column !== "fileSize" && column !== "storagePath"),
+              ...withPlayCount.filter((column) => column !== "playCount"),
+              "matchLocked",
+              ...(withPlayCount.includes("playCount") ? ["playCount"] : []),
+            ];
+        const withLastWatched = withMatchLocked.includes("lastWatchedAt")
+          ? withMatchLocked
+          : [
+              ...withMatchLocked.filter((column) => column !== "fileSize" && column !== "storagePath"),
               "lastWatchedAt",
-              ...withPlayCount.filter((column) => column === "fileSize" || column === "storagePath"),
+              ...withMatchLocked.filter((column) => column === "fileSize" || column === "storagePath"),
             ];
         const nextVisibleColumns = withLastWatched.includes("fileSize")
           ? withLastWatched
