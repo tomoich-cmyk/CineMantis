@@ -3,7 +3,6 @@ import { clsx } from "clsx";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useTags } from "@/hooks/useTags";
 import {
-  useBulkSetFavorite,
   useBulkAddTag,
   useBulkRemoveTag,
   useBulkSetMatchStatus,
@@ -17,7 +16,6 @@ export function BulkActionBar() {
   const count = selectedWorkIds.length;
 
   const { data: allTags = [] } = useTags();
-  const { mutate: setFavorite,    isPending: settingFav }    = useBulkSetFavorite();
   const { mutate: addTag,         isPending: addingTag }     = useBulkAddTag();
   const { mutate: removeTag,      isPending: removingTag }   = useBulkRemoveTag();
   const { mutate: setMatchStatus, isPending: settingMatch }  = useBulkSetMatchStatus();
@@ -25,12 +23,7 @@ export function BulkActionBar() {
   const [tagMenuOpen, setTagMenuOpen]       = useState(false);
   const [matchMenuOpen, setMatchMenuOpen]   = useState(false);
 
-  const isPending = settingFav || addingTag || removingTag || settingMatch;
-
-  function fireFavorite(on: boolean) {
-    if (!count) return;
-    setFavorite({ workIds: selectedWorkIds, isFavorite: on });
-  }
+  const isPending = addingTag || removingTag || settingMatch;
 
   function fireAddTag(tagId: number) {
     if (!count) return;
@@ -73,26 +66,6 @@ export function BulkActionBar() {
       </div>
 
       <div className="w-px h-4 bg-gray-700 mx-1" />
-
-      {/* お気に入り */}
-      <div className="flex gap-1 items-center">
-        <button
-          disabled={!count || isPending}
-          onClick={() => fireFavorite(true)}
-          className="px-2 py-0.5 border border-yellow-900/60 rounded text-yellow-600 hover:text-yellow-400 hover:border-yellow-700 transition-colors disabled:opacity-30"
-          title="お気に入りON"
-        >
-          ★ ON
-        </button>
-        <button
-          disabled={!count || isPending}
-          onClick={() => fireFavorite(false)}
-          className="px-2 py-0.5 border border-gray-700 rounded text-gray-500 hover:text-gray-300 transition-colors disabled:opacity-30"
-          title="お気に入りOFF"
-        >
-          ★ OFF
-        </button>
-      </div>
 
       {/* タグ */}
       {allTags.length > 0 && (

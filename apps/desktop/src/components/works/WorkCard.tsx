@@ -146,11 +146,6 @@ export function WorkCard({ work, selected, onSelect }: Props) {
           </div>
         )}
 
-        {/* Overlay badges */}
-        {work.isFavorite && (
-          <span className="absolute top-1.5 right-1.5 text-xs drop-shadow pointer-events-none">⭐</span>
-        )}
-
         {/* 視聴進捗バー（resumePositionSec がある場合は詳細なプログレス） */}
         {progress !== null ? (
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/40 pointer-events-none">

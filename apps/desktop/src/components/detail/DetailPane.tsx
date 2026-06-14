@@ -99,11 +99,22 @@ export function DetailPane() {
   const { mutate: openFile, isPending: opening } = useOpenWorkFile();
   const { mutate: savePosition } = useUpdateResumePosition();
   const [showCandidates, setShowCandidates] = useState(false);
+  const [showSynopsis, setShowSynopsis] = useState(false);
   const [positionInput, setPositionInput] = useState("");
 
   useEffect(() => {
     resetAutoMatch();
+    setShowSynopsis(false);
   }, [selectedWorkId, resetAutoMatch]);
+
+  useEffect(() => {
+    if (!showSynopsis) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowSynopsis(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showSynopsis]);
 
   function navigateToPerson(personId: number) {
     setSelectedPersonId(personId);
@@ -305,9 +316,14 @@ export function DetailPane() {
 
         {work.synopsis && (
           <div className="px-3 py-1.5 border-t border-subtle">
-            <p className="text-[11px] text-gray-400 leading-relaxed line-clamp-3">
+            <button
+              type="button"
+              onClick={() => setShowSynopsis(true)}
+              className="block w-full text-left text-[11px] text-gray-400 leading-relaxed line-clamp-3 hover:text-gray-200 transition-colors"
+              title="クリックして全文を表示"
+            >
               {work.synopsis}
-            </p>
+            </button>
           </div>
         )}
 
@@ -322,17 +338,6 @@ export function DetailPane() {
                 size="sm"
                 onChange={(v) => updateStats({ work_id: work.id, user_rating: v, my_rating: v })}
               />
-            </div>
-
-            {/* お気に入り */}
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">お気に入り</span>
-              <button
-                onClick={() => updateStats({ work_id: work.id, is_favorite: !work.is_favorite })}
-                className={`text-lg transition-transform hover:scale-110 ${work.is_favorite ? "text-yellow-400" : "text-gray-700"}`}
-              >
-                ★
-              </button>
             </div>
 
             {/* 視聴回数 */}
@@ -391,17 +396,6 @@ export function DetailPane() {
             })}
           </div>
         )}
-
-        {/* ── メモ ── */}
-        <div className="px-3 py-1.5 border-t border-subtle">
-          <textarea
-            placeholder="メモ…"
-            value={work.personal_note ?? ""}
-            onChange={(e) => updateStats({ work_id: work.id, personal_note: e.target.value })}
-            rows={2}
-            className="w-full bg-surface border border-subtle rounded px-2 py-1 text-xs text-gray-300 placeholder-gray-700 outline-none focus:border-mantis-600 resize-none"
-          />
-        </div>
 
         {/* ── 外部情報 / 照合 ── */}
         <div className="px-3 py-2 border-t border-subtle mt-auto">
@@ -516,6 +510,29 @@ export function DetailPane() {
           </div>
         </div>
       </aside>
+
+      {showSynopsis && work.synopsis && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-6"
+          onMouseDown={() => setShowSynopsis(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${work.title}の説明`}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col border border-[#333] bg-[#171a20] shadow-2xl"
+          >
+            <header className="flex items-center justify-between border-b border-subtle px-4 py-3">
+              <h3 className="min-w-0 truncate text-sm font-medium text-gray-100">{work.title}</h3>
+              <button onClick={() => setShowSynopsis(false)} className="ml-4 text-xl leading-none text-gray-500 hover:text-gray-200">×</button>
+            </header>
+            <div className="overflow-y-auto px-5 py-4 text-sm leading-7 text-gray-300 whitespace-pre-wrap">
+              {work.synopsis}
+            </div>
+          </section>
+        </div>
+      )}
 
       {/* 候補ダイアログ */}
       {showCandidates && (
