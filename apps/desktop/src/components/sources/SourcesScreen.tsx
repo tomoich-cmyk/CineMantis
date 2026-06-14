@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useSourceList, useAddSource, useScanSource } from "@/hooks/useSources";
+import { useSourceList, useAddSource, useDeduplicateLibraryFiles, useDeleteSource, useScanSource } from "@/hooks/useSources";
 import type { Source } from "@cinemantis/shared-types";
 import { clsx } from "clsx";
 
@@ -20,10 +20,14 @@ function SourceCard({
   source,
   onScan,
   scanning,
+  onDelete,
+  deleting,
 }: {
   source: Source;
   onScan: (id: number) => void;
   scanning: boolean;
+  onDelete: (source: Source) => void;
+  deleting: boolean;
 }) {
   return (
     <div className="flex items-start gap-3 p-4 bg-surface rounded border border-subtle">
@@ -51,20 +55,30 @@ function SourceCard({
       </div>
 
       {/* Actions */}
-      <button
-        onClick={() => onScan(source.id)}
-        disabled={scanning || source.status === "offline"}
-        className={clsx(
-          "flex-shrink-0 px-3 py-1.5 text-xs rounded border transition-colors",
-          scanning
-            ? "border-mantis-700 text-mantis-600 animate-pulse cursor-wait"
-            : source.status === "offline"
-            ? "border-surface-border text-gray-700 cursor-not-allowed"
-            : "border-mantis-700 text-mantis-400 hover:bg-mantis-700/20"
-        )}
-      >
-        {scanning ? "スキャン中…" : "スキャン"}
-      </button>
+      <div className="flex flex-shrink-0 items-center gap-2">
+        <button
+          onClick={() => onScan(source.id)}
+          disabled={scanning || source.status === "offline"}
+          className={clsx(
+            "px-3 py-1.5 text-xs rounded border transition-colors",
+            scanning
+              ? "border-mantis-700 text-mantis-600 animate-pulse cursor-wait"
+              : source.status === "offline"
+              ? "border-surface-border text-gray-700 cursor-not-allowed"
+              : "border-mantis-700 text-mantis-400 hover:bg-mantis-700/20"
+          )}
+        >
+          {scanning ? "スキャン中…" : "スキャン"}
+        </button>
+        <button
+          onClick={() => onDelete(source)}
+          disabled={scanning || deleting}
+          className="px-2 py-1.5 text-xs text-red-500 border border-red-900/70 hover:bg-red-950/30 disabled:opacity-30"
+          title="ソース登録と、このソースだけに属するライブラリ項目を削除"
+        >
+          削除
+        </button>
+      </div>
     </div>
   );
 }
@@ -72,7 +86,7 @@ function SourceCard({
 function AddSourceDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
-  const { mutate: addSource, isPending } = useAddSource();
+  const { mutate: addSource, isPending, error } = useAddSource();
 
   async function pickFolder() {
     const selected = await open({ directory: true, multiple: false });
@@ -101,6 +115,7 @@ function AddSourceDialog({ onClose }: { onClose: () => void }) {
         className="bg-surface-elevated border border-subtle rounded-lg p-6 w-[420px] flex flex-col gap-4 shadow-xl"
       >
         <h2 className="text-base font-semibold text-gray-100">ソースを追加</h2>
+        {error && <div className="text-xs text-red-400">{String(error)}</div>}
 
         {/* Path */}
         <div className="flex flex-col gap-1.5">
@@ -170,6 +185,15 @@ export function SourcesScreen() {
     isSuccess: isScanSuccess,
   } = useScanSource();
   const [showAdd, setShowAdd] = useState(false);
+  const { mutate: deleteSource, variables: deletingId, isPending: deleting } = useDeleteSource();
+  const { mutate: deduplicate, data: deduplicateResult, isPending: deduplicating, error: deduplicateError } = useDeduplicateLibraryFiles();
+
+  function confirmDelete(source: Source) {
+    const ok = window.confirm(
+      `ソース「${source.name}」を削除します。\n\n元の動画ファイルは削除しません。このソースだけに属するライブラリ項目はDBから削除されます。`,
+    );
+    if (ok) deleteSource(source.id);
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -182,12 +206,22 @@ export function SourcesScreen() {
               動画ファイルの参照元フォルダを管理します
             </p>
           </div>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-mantis-700 hover:bg-mantis-600 text-white rounded transition-colors"
-          >
-            <span>＋</span> ソースを追加
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => deduplicate()}
+              disabled={deduplicating}
+              className="px-3 py-1.5 text-sm border border-gray-700 text-gray-400 hover:text-gray-200 disabled:opacity-40"
+              title="同じ実ファイルから作られた重複作品を整理"
+            >
+              {deduplicating ? "整理中…" : "重複を整理"}
+            </button>
+            <button
+              onClick={() => setShowAdd(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-mantis-700 hover:bg-mantis-600 text-white rounded transition-colors"
+            >
+              <span>＋</span> ソースを追加
+            </button>
+          </div>
         </div>
 
         {/* Scan result / error banner */}
@@ -201,6 +235,12 @@ export function SourcesScreen() {
             スキャン完了 — 新規: {scanResult.new_files} 件 / 更新: {scanResult.updated_files} 件 / 不明: {scanResult.missing_files} 件
           </div>
         )}
+        {deduplicateResult && (
+          <div className="text-xs text-mantis-400 bg-mantis-900/20 border border-mantis-800 rounded px-3 py-2">
+            重複整理完了 — ファイル: {deduplicateResult.removed_files}件 / 作品: {deduplicateResult.removed_works}件を整理
+          </div>
+        )}
+        {deduplicateError && <div className="text-xs text-red-400">重複整理失敗: {String(deduplicateError)}</div>}
 
         {/* Source list */}
         {isLoading ? (
@@ -224,6 +264,8 @@ export function SourcesScreen() {
                 source={source}
                 onScan={(id) => scanSource(id)}
                 scanning={scanning && scanningId === source.id}
+                onDelete={confirmDelete}
+                deleting={deleting && deletingId === source.id}
               />
             ))}
           </div>

@@ -60,3 +60,16 @@ export interface ScanResult {
 export async function scanSource(sourceId: number): Promise<ScanResult> {
   return invoke<ScanResult>("scan_source", { sourceId });
 }
+
+export async function deleteSource(sourceId: number): Promise<void> {
+  return invoke("delete_source", { sourceId });
+}
+
+export interface DeduplicateResult {
+  removed_files: number;
+  removed_works: number;
+}
+
+export async function deduplicateLibraryFiles(): Promise<DeduplicateResult> {
+  return invoke<DeduplicateResult>("deduplicate_library_files");
+}

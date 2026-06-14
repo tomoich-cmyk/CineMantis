@@ -2,6 +2,16 @@ use crate::db::DbState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+fn normalized_path(value: &str) -> String {
+    value.trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase()
+}
+
+fn paths_overlap(a: &str, b: &str) -> bool {
+    let a = normalized_path(a);
+    let b = normalized_path(b);
+    a == b || a.starts_with(&(b.clone() + "\\")) || b.starts_with(&(a + "\\"))
+}
+
 #[derive(Debug, Serialize)]
 pub struct SourceRow {
     pub id: i64,
@@ -70,12 +80,130 @@ pub fn add_source(state: State<DbState>, payload: AddSourcePayload) -> Result<i6
         _ => "unknown".to_string(),
     };
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let existing_paths = conn
+        .prepare("SELECT root_path FROM sources")
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if let Some(existing) = existing_paths.iter().find(|path| paths_overlap(path, &payload.root_path)) {
+        return Err(format!(
+            "登録済みソースと範囲が重複しています: {}。親または子のどちらか一方だけを登録してください",
+            existing
+        ));
+    }
     conn.execute(
         "INSERT INTO sources (name, root_path, source_type, media_kind) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![payload.name, payload.root_path, payload.source_type, media_kind],
     )
     .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn delete_source(state: State<DbState>, source_id: i64) -> Result<(), String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let work_ids: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT DISTINCT wp.work_id
+                 FROM work_parts wp JOIN files f ON f.id = wp.file_id
+                 WHERE f.source_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params![source_id], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    tx.execute("DELETE FROM sources WHERE id = ?1", rusqlite::params![source_id])
+        .map_err(|e| e.to_string())?;
+    for work_id in work_ids {
+        tx.execute(
+            "DELETE FROM works WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM work_parts WHERE work_id = ?1)",
+            rusqlite::params![work_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeduplicateResult {
+    pub removed_files: usize,
+    pub removed_works: usize,
+}
+
+#[tauri::command]
+pub fn deduplicate_library_files(state: State<DbState>) -> Result<DeduplicateResult, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let duplicate_paths: Vec<String> = {
+        let mut stmt = tx
+            .prepare("SELECT file_path FROM files GROUP BY lower(file_path) HAVING COUNT(*) > 1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    let mut removed_files = 0usize;
+    let mut removed_works = 0usize;
+
+    for path in duplicate_paths {
+        let rows: Vec<(i64, i64, i64, usize)> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT f.id, wp.work_id, f.source_id,
+                            (CASE WHEN w.tmdb_id IS NOT NULL THEN 100 ELSE 0 END +
+                             CASE WHEN w.match_status IN ('matched','locked') THEN 50 ELSE 0 END +
+                             CASE WHEN w.poster_path IS NOT NULL THEN 20 ELSE 0 END +
+                             CASE WHEN w.year IS NOT NULL THEN 10 ELSE 0 END +
+                             length(s.root_path)) AS score
+                     FROM files f
+                     JOIN work_parts wp ON wp.file_id = f.id
+                     JOIN works w ON w.id = wp.work_id
+                     JOIN sources s ON s.id = f.source_id
+                     WHERE lower(f.file_path) = lower(?1)
+                     ORDER BY score DESC, f.id ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(rusqlite::params![path], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)? as usize))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+            rows
+        };
+        let Some(&(keep_file, keep_work, _, _)) = rows.first() else { continue };
+        let preferred_source = rows
+            .iter()
+            .max_by_key(|(_, _, source_id, _)| {
+                tx.query_row("SELECT length(root_path) FROM sources WHERE id = ?1", [source_id], |r| r.get::<_, i64>(0)).unwrap_or(0)
+            })
+            .map(|row| row.2);
+        for &(file_id, work_id, _, _) in rows.iter().skip(1) {
+            tx.execute("DELETE FROM files WHERE id = ?1", [file_id]).map_err(|e| e.to_string())?;
+            removed_files += 1;
+            if work_id != keep_work {
+                removed_works += tx.execute(
+                    "DELETE FROM works WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM work_parts WHERE work_id = ?1)",
+                    [work_id],
+                ).map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(source_id) = preferred_source {
+            tx.execute("UPDATE files SET source_id = ?1 WHERE id = ?2", rusqlite::params![source_id, keep_file])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(DeduplicateResult { removed_files, removed_works })
 }
 
 #[tauri::command]

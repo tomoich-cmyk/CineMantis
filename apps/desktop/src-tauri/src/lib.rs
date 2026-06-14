@@ -34,6 +34,8 @@ pub fn run() {
             commands::source::list_sources,
             commands::source::add_source,
             commands::source::update_source_status,
+            commands::source::delete_source,
+            commands::source::deduplicate_library_files,
             // Works
             commands::work::list_works,
             commands::work::get_work,
