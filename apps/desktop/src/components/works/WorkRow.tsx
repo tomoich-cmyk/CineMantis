@@ -25,6 +25,7 @@ interface Props {
   onSelect: () => void;
   onToggleSelect?: (id: number, shiftKey: boolean, additive: boolean) => void;
   onShiftContextMenu?: (event: React.MouseEvent, work: WorkSummary) => void;
+  onToggleMatchLock?: (workId: number, locked: boolean) => void;
   gridTemplateColumns: string;
   visibleColumns: string[];
   top: number;
@@ -117,7 +118,7 @@ function renderCell(column: string, work: WorkSummary) {
   }
 }
 
-export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftContextMenu, gridTemplateColumns, visibleColumns, top, height }: Props) {
+export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftContextMenu, onToggleMatchLock, gridTemplateColumns, visibleColumns, top, height }: Props) {
   const { isSelectMode, selectedWorkIds, toggleSelectWork } = useLibraryStore();
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: updateStats } = useUpdateStats();
@@ -318,7 +319,19 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
           title={EDITABLE_COLUMNS.has(column) ? "ダブルクリックで編集" : undefined}
           className={cellClass(column === "title" ? "font-medium" : "")}
         >
-          {editingColumn === column ? renderEditor(column) : renderCell(column, work)}
+          {column === "matchLocked" ? (
+            <input
+              type="checkbox"
+              checked={work.matchStatus === "locked"}
+              disabled={work.matchStatus === "unmatched" || work.matchStatus === "pending"}
+              aria-label={`${work.title}の照合候補を固定`}
+              title={work.matchStatus === "unmatched" || work.matchStatus === "pending" ? "照合後に固定できます" : "再スキャンで照合候補を変更しない"}
+              className="mx-auto accent-mantis-500 disabled:opacity-25"
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onChange={(event) => onToggleMatchLock?.(work.id, event.target.checked)}
+            />
+          ) : editingColumn === column ? renderEditor(column) : renderCell(column, work)}
         </div>
       ))}
     </div>
