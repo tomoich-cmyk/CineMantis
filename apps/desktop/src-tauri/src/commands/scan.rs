@@ -3,6 +3,8 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // Video file extensions to scan
@@ -11,6 +13,32 @@ const VIDEO_EXTENSIONS: &[&str] = &[
     "mpg", "mpeg", "divx", "xvid", "vob", "iso", "rm", "rmvb",
     "webm", "3gp", "ogv",
 ];
+
+static ACTIVE_SCANS: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
+
+struct ScanGuard(i64);
+
+impl ScanGuard {
+    fn acquire(source_id: i64) -> Result<Self, String> {
+        let mut active = ACTIVE_SCANS
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if !active.is_empty() {
+            return Err("別のスキャンが実行中です。完了してから再度実行してください".to_string());
+        }
+        active.insert(source_id);
+        Ok(Self(source_id))
+    }
+}
+
+impl Drop for ScanGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_SCANS.get_or_init(|| Mutex::new(HashSet::new())).lock() {
+            active.remove(&self.0);
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Clone)]
 pub struct ScanProgress {
@@ -143,6 +171,7 @@ pub async fn scan_source(
     state: State<'_, DbState>,
     source_id: i64,
 ) -> Result<ScanResult, String> {
+    let _scan_guard = ScanGuard::acquire(source_id)?;
     let window = app.get_webview_window("main")
         .ok_or("main window not found")?;
     // 1. Get source root path + media_kind
@@ -242,19 +271,30 @@ pub async fn scan_source(
         let container = extension.to_string();
 
         // Check existing DB record (size + mtime で変更有無を判断)
-        let existing: Option<(i64, Option<i64>, Option<String>)> = {
+        let existing: Option<(i64, i64, String, Option<i64>, Option<String>)> = {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
             conn.query_row(
-                "SELECT id, file_size, mtime FROM files WHERE source_id = ?1 AND file_path = ?2",
-                rusqlite::params![source_id, path_str],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "SELECT f.id, f.source_id, s.root_path, f.file_size, f.mtime
+                 FROM files f JOIN sources s ON s.id = f.source_id
+                 WHERE lower(f.file_path) = lower(?1)
+                 ORDER BY length(s.root_path) DESC, f.id ASC LIMIT 1",
+                rusqlite::params![path_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .optional()
             .map_err(|e| e.to_string())?
         };
 
         match existing {
-            Some((file_id, db_size, db_mtime)) => {
+            Some((file_id, existing_source_id, existing_root, db_size, db_mtime)) => {
+                if existing_source_id != source_id && root_path.len() > existing_root.len() {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE files SET source_id = ?1 WHERE id = ?2",
+                        rusqlite::params![source_id, file_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
                 // ファイルが変化していなければ ffprobe をスキップ
                 let unchanged = db_size == file_size && db_mtime == mtime;
                 if unchanged {

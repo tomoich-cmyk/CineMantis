@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listSources, addSource, scanSource, type ScanResult } from "@/api/sources";
+import { listSources, addSource, deleteSource, deduplicateLibraryFiles, scanSource, type ScanResult } from "@/api/sources";
 
 export const sourceKeys = {
   all: ["sources"] as const,
@@ -31,6 +31,28 @@ export function useScanSource() {
     },
     onError: (err: unknown) => {
       console.error("Scan failed:", err);
+    },
+  });
+}
+
+export function useDeleteSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteSource,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: sourceKeys.all });
+      qc.invalidateQueries({ queryKey: ["works"] });
+    },
+  });
+}
+
+export function useDeduplicateLibraryFiles() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deduplicateLibraryFiles,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: sourceKeys.all });
+      qc.invalidateQueries({ queryKey: ["works"] });
     },
   });
 }
