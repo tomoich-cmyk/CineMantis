@@ -253,6 +253,9 @@ function VirtualList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const [columnMenuOpen, setColumnMenuOpen] = useState(false);
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
+  const [columnDropTarget, setColumnDropTarget] = useState<string | null>(null);
+  const suppressHeaderClickRef = useRef(false);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [editMenu, setEditMenu] = useState<{ x: number; y: number; work: WorkSummary; workIds: number[] } | null>(null);
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
@@ -269,7 +272,9 @@ function VirtualList({
     setColumnWidth,
   } = useLibraryStore();
 
-  const visibleDefs = COLUMN_DEFS.filter((c) => visibleColumns.includes(c.key));
+  const visibleDefs = visibleColumns
+    .map((key) => COLUMN_DEFS.find((column) => column.key === key))
+    .filter((column): column is (typeof COLUMN_DEFS)[number] => column !== undefined);
   const gridTemplateColumns = [
     ...(isSelectMode ? ["36px"] : []),
     ...visibleDefs.map((column) => `${columnWidths[column.key] ?? DEFAULT_COLUMN_WIDTHS[column.key] ?? 120}px`),
@@ -328,6 +333,10 @@ function VirtualList({
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedWorkIds.includes(id));
 
   function toggleSort(sort: SortField | undefined) {
+    if (suppressHeaderClickRef.current) {
+      suppressHeaderClickRef.current = false;
+      return;
+    }
     if (!sort) return;
     if (sortField === sort) {
       setSortOrder(sortOrder === "asc" ? "desc" : "asc");
@@ -353,6 +362,33 @@ function VirtualList({
       startWidth: columnWidths[key] ?? DEFAULT_COLUMN_WIDTHS[key] ?? 120,
     };
     document.body.classList.add("cm-resizing");
+  }
+
+  function startColumnDrag(event: React.DragEvent, key: string) {
+    setDraggedColumn(key);
+    setColumnDropTarget(key);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", key);
+  }
+
+  function moveColumn(targetKey: string) {
+    if (!draggedColumn || draggedColumn === targetKey) return;
+    const from = visibleColumns.indexOf(draggedColumn);
+    const to = visibleColumns.indexOf(targetKey);
+    if (from === -1 || to === -1) return;
+    const next = [...visibleColumns];
+    next.splice(from, 1);
+    next.splice(to, 0, draggedColumn);
+    setVisibleColumns(next);
+  }
+
+  function finishColumnDrag() {
+    suppressHeaderClickRef.current = true;
+    window.setTimeout(() => {
+      suppressHeaderClickRef.current = false;
+    }, 0);
+    setDraggedColumn(null);
+    setColumnDropTarget(null);
   }
 
   function toggleWorkSelection(id: number, shiftKey: boolean, additive: boolean) {
@@ -477,11 +513,30 @@ function VirtualList({
               </button>
             )}
             {visibleDefs.map((column) => (
-              <div key={column.key} className="relative flex items-center border-r border-[#1b1b1b]">
+              <div
+                key={column.key}
+                draggable
+                onDragStart={(event) => startColumnDrag(event, column.key)}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setColumnDropTarget(column.key);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  moveColumn(column.key);
+                  finishColumnDrag();
+                }}
+                onDragEnd={finishColumnDrag}
+                className={`relative flex items-center border-r border-[#1b1b1b] ${
+                  draggedColumn === column.key ? "opacity-40" : ""
+                } ${columnDropTarget === column.key && draggedColumn !== column.key ? "before:absolute before:inset-y-0 before:left-0 before:w-px before:bg-mantis-400" : ""}`}
+              >
                 <button
                   type="button"
                   onClick={() => toggleSort(column.sort)}
-                  className={`w-full h-full px-2 text-left truncate ${column.sort ? "hover:text-gray-200" : "cursor-default"}`}
+                  className={`w-full h-full px-2 text-left truncate cursor-grab active:cursor-grabbing ${column.sort ? "hover:text-gray-200" : ""}`}
+                  title="左右にドラッグして列を移動"
                 >
                   {column.label}
                   {column.sort && sortField === column.sort && (
