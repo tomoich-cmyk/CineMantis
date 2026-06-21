@@ -34,7 +34,8 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
         </div>
         {body && (
           <div className="flex gap-4 text-xs text-gray-500">
-            <span>作品 {body.registeredWorkCount}</span>
+            <span>カテゴリ {body.categoryCount}</span>
+            <span>登録作品 {body.registeredWorkCount}</span>
             <span className="text-yellow-400">受賞 {body.winnerCount}</span>
           </div>
         )}

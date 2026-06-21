@@ -38,7 +38,8 @@ export function AwardsScreen() {
                 <th className="border-b border-subtle px-3 py-2">英名</th>
                 <th className="w-28 border-b border-subtle px-3 py-2">種別</th>
                 <th className="w-20 border-b border-subtle px-3 py-2">国</th>
-                <th className="w-24 border-b border-subtle px-3 py-2 text-right">作品</th>
+                <th className="w-24 border-b border-subtle px-3 py-2 text-right">カテゴリ</th>
+                <th className="w-24 border-b border-subtle px-3 py-2 text-right">登録作品</th>
                 <th className="w-24 border-b border-subtle px-3 py-2 text-right">受賞</th>
               </tr>
             </thead>
@@ -56,6 +57,7 @@ export function AwardsScreen() {
                   <td className="truncate px-3 py-2 text-gray-500">{body.name}</td>
                   <td className="px-3 py-2 text-gray-500">{TYPE_LABELS[body.bodyType] ?? body.bodyType}</td>
                   <td className="px-3 py-2 text-gray-500">{body.country ?? "-"}</td>
+                  <td className="px-3 py-2 text-right text-mantis-300">{body.categoryCount}</td>
                   <td className="px-3 py-2 text-right text-gray-400">{body.registeredWorkCount}</td>
                   <td className="px-3 py-2 text-right text-yellow-400">{body.winnerCount}</td>
                 </tr>

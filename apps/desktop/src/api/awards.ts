@@ -23,6 +23,7 @@ interface AwardBodyRow {
   is_active: boolean;
   display_order: number;
   note: string | null;
+  category_count: number;
   registered_work_count: number;
   winner_count: number;
 }
@@ -208,6 +209,7 @@ function toAwardBody(r: AwardBodyRow): AwardBody {
     isActive: r.is_active,
     displayOrder: r.display_order,
     note: r.note,
+    categoryCount: r.category_count,
     registeredWorkCount: r.registered_work_count,
     winnerCount: r.winner_count,
   };

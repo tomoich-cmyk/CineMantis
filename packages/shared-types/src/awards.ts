@@ -60,6 +60,7 @@ export interface AwardBody {
   isActive: boolean;
   displayOrder: number;
   note: string | null;
+  categoryCount: number;
   registeredWorkCount: number;
   winnerCount: number;
 }

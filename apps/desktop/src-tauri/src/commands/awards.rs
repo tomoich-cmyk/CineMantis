@@ -19,6 +19,7 @@ pub struct AwardBodyRow {
     pub is_active: bool,
     pub display_order: i64,
     pub note: Option<String>,
+    pub category_count: i64,
     pub registered_work_count: i64,
     pub winner_count: i64,
 }
@@ -139,12 +140,23 @@ pub fn list_award_bodies(state: State<'_, DbState>) -> Result<Vec<AwardBodyRow>,
              ab.id, ab.name, ab.display_name_ja, ab.original_name, ab.sort_name,
              ab.body_type, ab.prestige_tier, ab.award_scope, ab.country, ab.city,
              ab.official_url, ab.is_active, ab.display_order, ab.note,
-             COUNT(DISTINCT war.work_id) AS registered_work_count,
-             SUM(CASE WHEN war.result_type = 'winner' THEN 1 ELSE 0 END) AS winner_count
+             COALESCE(cat.category_count, 0) AS category_count,
+             COALESCE(res.registered_work_count, 0) AS registered_work_count,
+             COALESCE(res.winner_count, 0) AS winner_count
          FROM award_bodies ab
-         LEFT JOIN work_award_results war ON war.award_body_id = ab.id
+         LEFT JOIN (
+             SELECT award_body_id, COUNT(*) AS category_count
+             FROM award_categories
+             GROUP BY award_body_id
+         ) cat ON cat.award_body_id = ab.id
+         LEFT JOIN (
+             SELECT award_body_id,
+                    COUNT(DISTINCT work_id) AS registered_work_count,
+                    SUM(CASE WHEN result_type = 'winner' THEN 1 ELSE 0 END) AS winner_count
+             FROM work_award_results
+             GROUP BY award_body_id
+         ) res ON res.award_body_id = ab.id
          WHERE ab.is_active = 1
-         GROUP BY ab.id
          ORDER BY
              CASE ab.prestige_tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END,
              ab.display_order ASC,
@@ -169,12 +181,24 @@ pub fn get_award_body_detail(
              ab.id, ab.name, ab.display_name_ja, ab.original_name, ab.sort_name,
              ab.body_type, ab.prestige_tier, ab.award_scope, ab.country, ab.city,
              ab.official_url, ab.is_active, ab.display_order, ab.note,
-             COUNT(DISTINCT war.work_id) AS registered_work_count,
-             SUM(CASE WHEN war.result_type = 'winner' THEN 1 ELSE 0 END) AS winner_count
+             COALESCE(cat.category_count, 0) AS category_count,
+             COALESCE(res.registered_work_count, 0) AS registered_work_count,
+             COALESCE(res.winner_count, 0) AS winner_count
          FROM award_bodies ab
-         LEFT JOIN work_award_results war ON war.award_body_id = ab.id
+         LEFT JOIN (
+             SELECT award_body_id, COUNT(*) AS category_count
+             FROM award_categories
+             GROUP BY award_body_id
+         ) cat ON cat.award_body_id = ab.id
+         LEFT JOIN (
+             SELECT award_body_id,
+                    COUNT(DISTINCT work_id) AS registered_work_count,
+                    SUM(CASE WHEN result_type = 'winner' THEN 1 ELSE 0 END) AS winner_count
+             FROM work_award_results
+             GROUP BY award_body_id
+         ) res ON res.award_body_id = ab.id
          WHERE ab.id = ?1
-         GROUP BY ab.id",
+         ",
         params![award_body_id],
         map_award_body_row,
     )
@@ -429,8 +453,9 @@ fn map_award_body_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AwardBodyRow>
         is_active: row.get::<_, i64>(11)? != 0,
         display_order: row.get(12)?,
         note: row.get(13)?,
-        registered_work_count: row.get(14)?,
-        winner_count: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
+        category_count: row.get(14)?,
+        registered_work_count: row.get(15)?,
+        winner_count: row.get(16)?,
     })
 }
 
