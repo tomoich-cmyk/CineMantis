@@ -1,5 +1,6 @@
 import { AwardTierBadge, ResultBadge } from "@/components/awards/AwardBadge";
-import { useAwardBodyDetail, useAwardWinningWorks } from "@/hooks/useAwards";
+import { WikidataImportPanel } from "@/components/awards/WikidataImportPanel";
+import { useAwardBodyDetail, useAwardCategories, useAwardWinningWorks } from "@/hooks/useAwards";
 import { useLibraryStore } from "@/store/libraryStore";
 
 function alertClass(status: string): string {
@@ -19,6 +20,7 @@ function alertClass(status: string): string {
 
 export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
   const { data: body, isLoading: bodyLoading } = useAwardBodyDetail(awardBodyId);
+  const { data: categories = [] } = useAwardCategories(awardBodyId);
   const { data: rows = [], isLoading: rowsLoading } = useAwardWinningWorks({ awardBodyId });
   const { setSelectedAwardBodyId, setActiveSection, setSelectedWorkId } = useLibraryStore();
 
@@ -70,6 +72,8 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
       )}
 
       {rowsLoading && <div className="p-5 text-sm text-gray-500">読み込み中...</div>}
+      {body && <WikidataImportPanel awardBody={body} categories={categories} />}
+
       {!rowsLoading && rows.length === 0 && (
         <div className="p-5 text-sm text-gray-600">この賞に紐づく作品はまだありません。</div>
       )}

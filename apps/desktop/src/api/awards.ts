@@ -197,6 +197,13 @@ export interface WorkSearchResult {
   sourcePath: string | null;
 }
 
+export interface BulkOperationResult {
+  approved: number;
+  rejected: number;
+  skipped: number;
+  errors: string[];
+}
+
 export async function listAwardBodies(): Promise<AwardBody[]> {
   const rows = await invoke<AwardBodyRow[]>("list_award_bodies");
   return rows.map(toAwardBody);
@@ -320,6 +327,25 @@ export async function searchWorksForAwardMatch(
   year?: number | null,
 ): Promise<WorkSearchResult[]> {
   return invoke<WorkSearchResult[]>("search_works_for_award_match", { query, year });
+}
+
+export async function addManualAwardMatchCandidate(
+  importItemId: number,
+  workId: number,
+): Promise<number> {
+  return invoke<number>("add_manual_award_match_candidate", { importItemId, workId });
+}
+
+export async function bulkApproveAwardImportItems(
+  importItemIds: number[],
+): Promise<BulkOperationResult> {
+  return invoke<BulkOperationResult>("bulk_approve_award_import_items", { importItemIds });
+}
+
+export async function bulkRejectAwardImportItems(
+  importItemIds: number[],
+): Promise<BulkOperationResult> {
+  return invoke<BulkOperationResult>("bulk_reject_award_import_items", { importItemIds });
 }
 
 function toAwardBody(r: AwardBodyRow): AwardBody {

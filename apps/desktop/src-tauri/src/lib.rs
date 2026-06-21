@@ -129,6 +129,9 @@ pub fn run() {
             commands::award_import::approve_award_import_item,
             commands::award_import::reject_award_import_item,
             commands::award_import::search_works_for_award_match,
+            commands::award_import::add_manual_award_match_candidate,
+            commands::award_import::bulk_approve_award_import_items,
+            commands::award_import::bulk_reject_award_import_items,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineMantis");

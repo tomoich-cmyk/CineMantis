@@ -93,6 +93,15 @@ pub struct WorkSearchResult {
     pub source_path: Option<String>,
 }
 
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkOperationResult {
+    pub approved: i64,
+    pub rejected: i64,
+    pub skipped: i64,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug)]
 struct ImportItemForMatching {
     id: i64,
@@ -288,6 +297,67 @@ pub fn search_works_for_award_match(
     year: Option<i32>,
 ) -> Result<Vec<WorkSearchResult>, String> {
     search_works_for_award_match_inner(&state, &query, year).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn add_manual_award_match_candidate(
+    state: State<'_, DbState>,
+    import_item_id: i64,
+    work_id: i64,
+) -> Result<i64, String> {
+    add_manual_award_match_candidate_inner(&state, import_item_id, work_id)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn bulk_approve_award_import_items(
+    state: State<'_, DbState>,
+    import_item_ids: Vec<i64>,
+) -> Result<BulkOperationResult, String> {
+    let mut result = BulkOperationResult::default();
+
+    for import_item_id in import_item_ids {
+        match approve_award_import_item_inner(&state, import_item_id) {
+            Ok(_) => result.approved += 1,
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("import item not found")
+                    || message.contains("already")
+                    || message.contains("辣ｧ蜷井ｽ懷刀")
+                    || message.contains("雉槭き繝")
+                    || message.contains("蟷ｴ蠎ｦ")
+                {
+                    result.skipped += 1;
+                } else {
+                    result.errors.push(format!("item {import_item_id}: {message}"));
+                }
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn bulk_reject_award_import_items(
+    state: State<'_, DbState>,
+    import_item_ids: Vec<i64>,
+) -> Result<BulkOperationResult, String> {
+    let conn = state.0.lock().map_err(|err| err.to_string())?;
+    let mut result = BulkOperationResult::default();
+
+    for import_item_id in import_item_ids {
+        match conn.execute(
+            "UPDATE award_import_items SET status = 'rejected' WHERE id = ?1 AND status = 'pending'",
+            params![import_item_id],
+        ) {
+            Ok(affected) if affected > 0 => result.rejected += 1,
+            Ok(_) => result.skipped += 1,
+            Err(err) => result.errors.push(format!("item {import_item_id}: {err}")),
+        }
+    }
+
+    Ok(result)
 }
 
 async fn fetch_wikidata_award_items_inner(
@@ -1291,6 +1361,54 @@ fn select_award_match_candidate_inner(
     update_import_item_match(&tx, import_item_id, &candidate)?;
     tx.commit()?;
     Ok(())
+}
+
+fn add_manual_award_match_candidate_inner(
+    db: &DbState,
+    import_item_id: i64,
+    work_id: i64,
+) -> Result<i64> {
+    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
+    let import_exists: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM award_import_items WHERE id = ?1",
+            params![import_item_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if import_exists.is_none() {
+        return Err(anyhow!("import item not found"));
+    }
+
+    let work_exists: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM works WHERE id = ?1",
+            params![work_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if work_exists.is_none() {
+        return Err(anyhow!("work not found"));
+    }
+
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM work_award_match_candidates WHERE import_item_id = ?1 AND work_id = ?2",
+            params![import_item_id, work_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(candidate_id) = existing {
+        return Ok(candidate_id);
+    }
+
+    conn.execute(
+        "INSERT INTO work_award_match_candidates
+             (import_item_id, work_id, match_score, match_method, is_selected)
+         VALUES (?1, ?2, 100.0, 'manual', 0)",
+        params![import_item_id, work_id],
+    )?;
+    Ok(conn.last_insert_rowid())
 }
 
 fn approve_award_import_item_inner(
