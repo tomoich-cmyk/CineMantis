@@ -2,6 +2,21 @@ import { AwardTierBadge, ResultBadge } from "@/components/awards/AwardBadge";
 import { useAwardBodyDetail, useAwardWinningWorks } from "@/hooks/useAwards";
 import { useLibraryStore } from "@/store/libraryStore";
 
+function alertClass(status: string): string {
+  switch (status) {
+    case "up_to_date":
+      return "border-mantis-700 bg-mantis-900/30 text-mantis-300";
+    case "data_stale":
+    case "result_season":
+      return "border-yellow-700 bg-yellow-900/20 text-yellow-300";
+    case "nomination_season":
+    case "nomination_soon":
+      return "border-blue-700 bg-blue-900/20 text-blue-300";
+    default:
+      return "border-subtle bg-surface text-gray-500";
+  }
+}
+
 export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
   const { data: body, isLoading: bodyLoading } = useAwardBodyDetail(awardBodyId);
   const { data: rows = [], isLoading: rowsLoading } = useAwardWinningWorks({ awardBodyId });
@@ -40,6 +55,19 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
           </div>
         )}
       </header>
+
+      {body && (
+        <div className="border-b border-subtle px-5 py-2 text-xs text-gray-500">
+          <span className={`inline-flex rounded border px-2 py-0.5 ${alertClass(body.alertStatus)}`}>
+            {body.alertLabel}
+          </span>
+          {body.dataSourceUrl && (
+            <span className="ml-3">
+              推奨ソース: <span className="text-gray-400">{body.wikidataEntityId ? "Wikidata" : body.dataSourceUrl}</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {rowsLoading && <div className="p-5 text-sm text-gray-500">読み込み中...</div>}
       {!rowsLoading && rows.length === 0 && (

@@ -26,6 +26,13 @@ interface AwardBodyRow {
   category_count: number;
   registered_work_count: number;
   winner_count: number;
+  current_edition_year: number;
+  current_data_complete: boolean;
+  alert_status: AwardBody["alertStatus"];
+  alert_label: string;
+  data_source_url: string | null;
+  wikidata_entity_id: string | null;
+  schedule_note: string | null;
 }
 
 interface AwardCategoryRow {
@@ -212,6 +219,13 @@ function toAwardBody(r: AwardBodyRow): AwardBody {
     categoryCount: r.category_count,
     registeredWorkCount: r.registered_work_count,
     winnerCount: r.winner_count,
+    currentEditionYear: r.current_edition_year,
+    currentDataComplete: r.current_data_complete,
+    alertStatus: r.alert_status,
+    alertLabel: r.alert_label,
+    dataSourceUrl: r.data_source_url,
+    wikidataEntityId: r.wikidata_entity_id,
+    scheduleNote: r.schedule_note,
   };
 }
 

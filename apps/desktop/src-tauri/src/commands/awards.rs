@@ -22,6 +22,13 @@ pub struct AwardBodyRow {
     pub category_count: i64,
     pub registered_work_count: i64,
     pub winner_count: i64,
+    pub current_edition_year: i64,
+    pub current_data_complete: bool,
+    pub alert_status: String,
+    pub alert_label: String,
+    pub data_source_url: Option<String>,
+    pub wikidata_entity_id: Option<String>,
+    pub schedule_note: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,14 +143,31 @@ pub struct AwardEditionRow {
 pub fn list_award_bodies(state: State<'_, DbState>) -> Result<Vec<AwardBodyRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(
-        "SELECT
+        "WITH now_values AS (
+             SELECT
+                 CAST(strftime('%Y', 'now', 'localtime') AS INTEGER) AS current_year,
+                 CAST(strftime('%m', 'now', 'localtime') AS INTEGER) AS current_month
+         )
+         SELECT
              ab.id, ab.name, ab.display_name_ja, ab.original_name, ab.sort_name,
              ab.body_type, ab.prestige_tier, ab.award_scope, ab.country, ab.city,
              ab.official_url, ab.is_active, ab.display_order, ab.note,
              COALESCE(cat.category_count, 0) AS category_count,
              COALESCE(res.registered_work_count, 0) AS registered_work_count,
-             COALESCE(res.winner_count, 0) AS winner_count
+             COALESCE(res.winner_count, 0) AS winner_count,
+             nv.current_year,
+             nv.current_month,
+             sr.nomination_month_start,
+             sr.nomination_month_end,
+             sr.result_month_start,
+             sr.result_month_end,
+             sr.ceremony_month,
+             sr.data_source_url,
+             sr.wikidata_entity_id,
+             sr.notes,
+             COALESCE(ds.is_data_complete, 0) AS current_data_complete
          FROM award_bodies ab
+         CROSS JOIN now_values nv
          LEFT JOIN (
              SELECT award_body_id, COUNT(*) AS category_count
              FROM award_categories
@@ -156,6 +180,9 @@ pub fn list_award_bodies(state: State<'_, DbState>) -> Result<Vec<AwardBodyRow>,
              FROM work_award_results
              GROUP BY award_body_id
          ) res ON res.award_body_id = ab.id
+         LEFT JOIN award_body_schedule_rules sr ON sr.award_body_id = ab.id
+         LEFT JOIN award_editions ae ON ae.award_body_id = ab.id AND ae.year = nv.current_year
+         LEFT JOIN award_edition_data_status ds ON ds.award_edition_id = ae.id
          WHERE ab.is_active = 1
          ORDER BY
              CASE ab.prestige_tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END,
@@ -177,14 +204,31 @@ pub fn get_award_body_detail(
 ) -> Result<Option<AwardBodyRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.query_row(
-        "SELECT
+        "WITH now_values AS (
+             SELECT
+                 CAST(strftime('%Y', 'now', 'localtime') AS INTEGER) AS current_year,
+                 CAST(strftime('%m', 'now', 'localtime') AS INTEGER) AS current_month
+         )
+         SELECT
              ab.id, ab.name, ab.display_name_ja, ab.original_name, ab.sort_name,
              ab.body_type, ab.prestige_tier, ab.award_scope, ab.country, ab.city,
              ab.official_url, ab.is_active, ab.display_order, ab.note,
              COALESCE(cat.category_count, 0) AS category_count,
              COALESCE(res.registered_work_count, 0) AS registered_work_count,
-             COALESCE(res.winner_count, 0) AS winner_count
+             COALESCE(res.winner_count, 0) AS winner_count,
+             nv.current_year,
+             nv.current_month,
+             sr.nomination_month_start,
+             sr.nomination_month_end,
+             sr.result_month_start,
+             sr.result_month_end,
+             sr.ceremony_month,
+             sr.data_source_url,
+             sr.wikidata_entity_id,
+             sr.notes,
+             COALESCE(ds.is_data_complete, 0) AS current_data_complete
          FROM award_bodies ab
+         CROSS JOIN now_values nv
          LEFT JOIN (
              SELECT award_body_id, COUNT(*) AS category_count
              FROM award_categories
@@ -197,6 +241,9 @@ pub fn get_award_body_detail(
              FROM work_award_results
              GROUP BY award_body_id
          ) res ON res.award_body_id = ab.id
+         LEFT JOIN award_body_schedule_rules sr ON sr.award_body_id = ab.id
+         LEFT JOIN award_editions ae ON ae.award_body_id = ab.id AND ae.year = nv.current_year
+         LEFT JOIN award_edition_data_status ds ON ds.award_edition_id = ae.id
          WHERE ab.id = ?1
          ",
         params![award_body_id],
@@ -438,6 +485,23 @@ pub fn list_award_winning_works(
 }
 
 fn map_award_body_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AwardBodyRow> {
+    let current_year: i64 = row.get(17)?;
+    let current_month: i64 = row.get(18)?;
+    let nomination_start: Option<i64> = row.get(19)?;
+    let nomination_end: Option<i64> = row.get(20)?;
+    let result_start: Option<i64> = row.get(21)?;
+    let result_end: Option<i64> = row.get(22)?;
+    let current_data_complete = row.get::<_, i64>(27)? != 0;
+    let (alert_status, alert_label) = award_alert(
+        current_year,
+        current_month,
+        current_data_complete,
+        nomination_start,
+        nomination_end,
+        result_start,
+        result_end,
+    );
+
     Ok(AwardBodyRow {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -456,7 +520,76 @@ fn map_award_body_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AwardBodyRow>
         category_count: row.get(14)?,
         registered_work_count: row.get(15)?,
         winner_count: row.get(16)?,
+        current_edition_year: current_year,
+        current_data_complete,
+        alert_status,
+        alert_label,
+        data_source_url: row.get(24)?,
+        wikidata_entity_id: row.get(25)?,
+        schedule_note: row.get(26)?,
     })
+}
+
+fn award_alert(
+    year: i64,
+    month: i64,
+    complete: bool,
+    nomination_start: Option<i64>,
+    nomination_end: Option<i64>,
+    result_start: Option<i64>,
+    result_end: Option<i64>,
+) -> (String, String) {
+    if complete {
+        return ("up_to_date".to_string(), format!("{year}年度データ登録済み"));
+    }
+
+    let Some(nomination_start) = nomination_start else {
+        return ("unscheduled".to_string(), "更新時期未設定".to_string());
+    };
+    let nomination_end = nomination_end.unwrap_or(nomination_start);
+    let result_start = result_start.unwrap_or(nomination_end);
+    let result_end = result_end.unwrap_or(result_start);
+
+    if month_in_range(month, result_start, result_end) {
+        return ("result_season".to_string(), format!("{year}年度の受賞結果発表時期"));
+    }
+    if month_after_range(month, result_start, result_end) {
+        return ("data_stale".to_string(), format!("{year}年度データ未登録"));
+    }
+    if month_in_range(month, nomination_start, nomination_end) {
+        return (
+            "nomination_season".to_string(),
+            format!("{year}年度のノミネート発表時期"),
+        );
+    }
+    if months_until(month, nomination_start) == 1 {
+        return (
+            "nomination_soon".to_string(),
+            format!("{year}年度のノミネート時期が近い"),
+        );
+    }
+
+    ("scheduled".to_string(), format!("{year}年度データ未登録"))
+}
+
+fn month_in_range(month: i64, start: i64, end: i64) -> bool {
+    if start <= end {
+        (start..=end).contains(&month)
+    } else {
+        month >= start || month <= end
+    }
+}
+
+fn months_until(current: i64, target: i64) -> i64 {
+    (target - current + 12) % 12
+}
+
+fn month_after_range(month: i64, start: i64, end: i64) -> bool {
+    if start <= end {
+        month > end
+    } else {
+        month > end && month < start
+    }
 }
 
 fn upsert_award_edition(

@@ -11,6 +11,21 @@ const TYPE_LABELS: Record<string, string> = {
   other: "その他",
 };
 
+function alertClass(status: string): string {
+  switch (status) {
+    case "up_to_date":
+      return "border-mantis-700 bg-mantis-900/30 text-mantis-300";
+    case "data_stale":
+    case "result_season":
+      return "border-yellow-700 bg-yellow-900/20 text-yellow-300";
+    case "nomination_season":
+    case "nomination_soon":
+      return "border-blue-700 bg-blue-900/20 text-blue-300";
+    default:
+      return "border-subtle bg-surface text-gray-500";
+  }
+}
+
 export function AwardsScreen() {
   const { data: bodies = [], isLoading, error } = useAwardBodies();
   const { setSelectedAwardBodyId } = useLibraryStore();
@@ -38,6 +53,7 @@ export function AwardsScreen() {
                 <th className="border-b border-subtle px-3 py-2">英名</th>
                 <th className="w-28 border-b border-subtle px-3 py-2">種別</th>
                 <th className="w-20 border-b border-subtle px-3 py-2">国</th>
+                <th className="w-48 border-b border-subtle px-3 py-2">更新</th>
                 <th className="w-24 border-b border-subtle px-3 py-2 text-right">カテゴリ</th>
                 <th className="w-24 border-b border-subtle px-3 py-2 text-right">登録作品</th>
                 <th className="w-24 border-b border-subtle px-3 py-2 text-right">受賞</th>
@@ -57,6 +73,11 @@ export function AwardsScreen() {
                   <td className="truncate px-3 py-2 text-gray-500">{body.name}</td>
                   <td className="px-3 py-2 text-gray-500">{TYPE_LABELS[body.bodyType] ?? body.bodyType}</td>
                   <td className="px-3 py-2 text-gray-500">{body.country ?? "-"}</td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-flex max-w-full rounded border px-2 py-0.5 text-[11px] ${alertClass(body.alertStatus)}`}>
+                      <span className="truncate">{body.alertLabel}</span>
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-right text-mantis-300">{body.categoryCount}</td>
                   <td className="px-3 py-2 text-right text-gray-400">{body.registeredWorkCount}</td>
                   <td className="px-3 py-2 text-right text-yellow-400">{body.winnerCount}</td>

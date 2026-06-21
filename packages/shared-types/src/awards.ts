@@ -45,6 +45,15 @@ export type AwardResultType =
   | "selection"
   | "unknown";
 
+export type AwardAlertStatus =
+  | "up_to_date"
+  | "data_stale"
+  | "result_season"
+  | "nomination_season"
+  | "nomination_soon"
+  | "scheduled"
+  | "unscheduled";
+
 export interface AwardBody {
   id: number;
   name: string;
@@ -63,6 +72,13 @@ export interface AwardBody {
   categoryCount: number;
   registeredWorkCount: number;
   winnerCount: number;
+  currentEditionYear: number;
+  currentDataComplete: boolean;
+  alertStatus: AwardAlertStatus;
+  alertLabel: string;
+  dataSourceUrl: string | null;
+  wikidataEntityId: string | null;
+  scheduleNote: string | null;
 }
 
 export interface AwardCategory {
