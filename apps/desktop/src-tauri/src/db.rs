@@ -24,6 +24,7 @@ const MIGRATION_005: &str = include_str!("../../../../packages/db/migrations/005
 const MIGRATION_LIBRARY_FIELDS: &str = include_str!("../../../../packages/db/migrations/005_library_management_fields.sql");
 const MIGRATION_LEGACY_COMPAT: &str = include_str!("../../../../packages/db/migrations/006_legacy_schema_compat.sql");
 const MIGRATION_AWARDS: &str = include_str!("../../../../packages/db/migrations/007_awards.sql");
+const MIGRATION_AWARD_CATEGORY_MASTER: &str = include_str!("../../../../packages/db/migrations/008_award_category_master.sql");
 
 /// マイグレーション適用（起動時に一度だけ呼ぶ）
 pub fn init(path: &Path) -> Result<()> {
@@ -40,6 +41,7 @@ pub fn init(path: &Path) -> Result<()> {
         }
     }
     conn.execute_batch(MIGRATION_AWARDS)?;
+    conn.execute_batch(MIGRATION_AWARD_CATEGORY_MASTER)?;
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
