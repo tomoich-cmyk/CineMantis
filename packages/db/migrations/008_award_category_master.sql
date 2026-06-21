@@ -1,0 +1,110 @@
+CREATE UNIQUE INDEX IF NOT EXISTS idx_award_categories_unique_body_name
+ON award_categories(award_body_id, name);
+
+INSERT INTO award_categories
+(
+  award_body_id,
+  name,
+  display_name_ja,
+  original_name,
+  category_type,
+  target_type,
+  is_top_prize,
+  is_major_category,
+  display_order
+)
+VALUES
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Best Picture', '作品賞', 'Best Picture', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Directing', '監督賞', 'Directing', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'International Feature Film', '国際長編映画賞', 'International Feature Film', 'international_feature', 'work', 0, 1, 100),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Original Screenplay', '脚本賞', 'Original Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Adapted Screenplay', '脚色賞', 'Adapted Screenplay', 'screenplay', 'work_and_person', 0, 1, 55),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Actor in a Leading Role', '主演男優賞', 'Actor in a Leading Role', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Actress in a Leading Role', '主演女優賞', 'Actress in a Leading Role', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Actor in a Supporting Role', '助演男優賞', 'Actor in a Supporting Role', 'supporting_actor', 'work_and_person', 0, 1, 80),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Actress in a Supporting Role', '助演女優賞', 'Actress in a Supporting Role', 'supporting_actress', 'work_and_person', 0, 1, 90),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Animated Feature Film', '長編アニメ映画賞', 'Animated Feature Film', 'animation', 'work', 0, 1, 110),
+((SELECT id FROM award_bodies WHERE name = 'Academy Awards'), 'Documentary Feature Film', '長編ドキュメンタリー賞', 'Documentary Feature Film', 'documentary', 'work', 0, 1, 120),
+
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Palme d''Or', 'パルムドール', 'Palme d''Or', 'grand_prize', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Grand Prix', 'グランプリ', 'Grand Prix', 'grand_prize', 'work', 0, 1, 20),
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Jury Prize', '審査員賞', 'Jury Prize', 'grand_prize', 'work', 0, 1, 30),
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Best Director', '監督賞', 'Best Director', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Best Screenplay', '脚本賞', 'Best Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Best Actor', '男優賞', 'Best Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Festival de Cannes'), 'Best Actress', '女優賞', 'Best Actress', 'actress', 'work_and_person', 0, 1, 70),
+
+((SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival'), 'Golden Lion', '金獅子賞', 'Golden Lion', 'grand_prize', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival'), 'Grand Jury Prize', '審査員大賞', 'Grand Jury Prize', 'grand_prize', 'work', 0, 1, 20),
+((SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival'), 'Silver Lion', '銀獅子賞', 'Silver Lion', 'grand_prize', 'work', 0, 1, 30),
+((SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival'), 'Volpi Cup for Best Actor', '男優賞', 'Volpi Cup for Best Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival'), 'Volpi Cup for Best Actress', '女優賞', 'Volpi Cup for Best Actress', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival'), 'Best Screenplay', '脚本賞', 'Best Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+
+((SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival'), 'Golden Bear', '金熊賞', 'Golden Bear', 'grand_prize', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival'), 'Silver Bear Grand Jury Prize', '銀熊審査員大賞', 'Silver Bear Grand Jury Prize', 'grand_prize', 'work', 0, 1, 20),
+((SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival'), 'Silver Bear Jury Prize', '銀熊審査員賞', 'Silver Bear Jury Prize', 'grand_prize', 'work', 0, 1, 30),
+((SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival'), 'Silver Bear for Best Director', '監督賞', 'Silver Bear for Best Director', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival'), 'Silver Bear for Best Leading Performance', '主演賞', 'Silver Bear for Best Leading Performance', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival'), 'Silver Bear for Best Screenplay', '脚本賞', 'Silver Bear for Best Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Film', '作品賞', 'Best Film', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Direction', '監督賞', 'Best Direction', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Leading Actor', '主演男優賞', 'Best Leading Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Leading Actress', '主演女優賞', 'Best Leading Actress', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Original Screenplay', '脚本賞', 'Best Original Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Adapted Screenplay', '脚色賞', 'Best Adapted Screenplay', 'screenplay', 'work_and_person', 0, 1, 55),
+((SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards'), 'Best Film Not in the English Language', '非英語映画賞', 'Best Film Not in the English Language', 'international_feature', 'work', 0, 1, 100),
+
+((SELECT id FROM award_bodies WHERE name = 'Cesar Awards'), 'Best Film', '作品賞', 'Best Film', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Cesar Awards'), 'Best Director', '監督賞', 'Best Director', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Cesar Awards'), 'Best Actor', '主演男優賞', 'Best Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Cesar Awards'), 'Best Actress', '主演女優賞', 'Best Actress', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'Cesar Awards'), 'Best Original Screenplay', '脚本賞', 'Best Original Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'Cesar Awards'), 'Best Foreign Film', '外国映画賞', 'Best Foreign Film', 'international_feature', 'work', 0, 1, 100),
+
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best Film', '作品賞', 'Best Film', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best Director', '監督賞', 'Best Director', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best Actor', '主演男優賞', 'Best Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best Actress', '主演女優賞', 'Best Actress', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best Original Screenplay', '脚本賞', 'Best Original Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best European Film', 'ヨーロッパ映画賞', 'Best European Film', 'international_feature', 'work', 0, 1, 100),
+((SELECT id FROM award_bodies WHERE name = 'Goya Awards'), 'Best Ibero-American Film', 'イベロアメリカ映画賞', 'Best Ibero-American Film', 'international_feature', 'work', 0, 1, 110),
+
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Picture of the Year', '最優秀作品賞', 'Picture of the Year', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Director of the Year', '最優秀監督賞', 'Director of the Year', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Outstanding Performance by an Actor in a Leading Role', '最優秀主演男優賞', 'Outstanding Performance by an Actor in a Leading Role', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Outstanding Performance by an Actress in a Leading Role', '最優秀主演女優賞', 'Outstanding Performance by an Actress in a Leading Role', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Screenplay of the Year', '最優秀脚本賞', 'Screenplay of the Year', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Foreign Language Film of the Year', '最優秀外国作品賞', 'Foreign Language Film of the Year', 'international_feature', 'work', 0, 1, 100),
+((SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize'), 'Animation of the Year', '最優秀アニメーション作品賞', 'Animation of the Year', 'animation', 'work', 0, 1, 110),
+
+((SELECT id FROM award_bodies WHERE name = 'Sundance Film Festival'), 'Grand Jury Prize: U.S. Dramatic', 'U.S. Dramatic グランプリ', 'Grand Jury Prize: U.S. Dramatic', 'grand_prize', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Sundance Film Festival'), 'Grand Jury Prize: U.S. Documentary', 'U.S. Documentary グランプリ', 'Grand Jury Prize: U.S. Documentary', 'documentary', 'work', 1, 1, 20),
+((SELECT id FROM award_bodies WHERE name = 'Sundance Film Festival'), 'Grand Jury Prize: World Cinema Dramatic', 'World Cinema Dramatic グランプリ', 'Grand Jury Prize: World Cinema Dramatic', 'grand_prize', 'work', 1, 1, 30),
+((SELECT id FROM award_bodies WHERE name = 'Sundance Film Festival'), 'Grand Jury Prize: World Cinema Documentary', 'World Cinema Documentary グランプリ', 'Grand Jury Prize: World Cinema Documentary', 'documentary', 'work', 1, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Sundance Film Festival'), 'Audience Award', '観客賞', 'Audience Award', 'audience', 'work', 0, 1, 130),
+
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Motion Picture - Drama', '作品賞 ドラマ部門', 'Best Motion Picture - Drama', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Motion Picture - Musical or Comedy', '作品賞 ミュージカル・コメディ部門', 'Best Motion Picture - Musical or Comedy', 'best_picture', 'work', 1, 1, 20),
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Director', '監督賞', 'Best Director', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Screenplay', '脚本賞', 'Best Screenplay', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Motion Picture - Non-English Language', '非英語映画賞', 'Best Motion Picture - Non-English Language', 'international_feature', 'work', 0, 1, 100),
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Actor', '主演男優賞', 'Best Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards'), 'Best Actress', '主演女優賞', 'Best Actress', 'actress', 'work_and_person', 0, 1, 70),
+
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Film', '作品賞', 'European Film', 'best_picture', 'work', 1, 1, 10),
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Director', '監督賞', 'European Director', 'director', 'work_and_person', 0, 1, 40),
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Actor', '主演男優賞', 'European Actor', 'actor', 'work_and_person', 0, 1, 60),
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Actress', '主演女優賞', 'European Actress', 'actress', 'work_and_person', 0, 1, 70),
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Screenwriter', '脚本賞', 'European Screenwriter', 'screenplay', 'work_and_person', 0, 1, 50),
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Documentary', 'ドキュメンタリー賞', 'European Documentary', 'documentary', 'work', 0, 1, 120),
+((SELECT id FROM award_bodies WHERE name = 'European Film Awards'), 'European Animated Feature Film', 'アニメーション映画賞', 'European Animated Feature Film', 'animation', 'work', 0, 1, 110)
+ON CONFLICT(award_body_id, name) DO UPDATE SET
+  display_name_ja = excluded.display_name_ja,
+  original_name = excluded.original_name,
+  category_type = excluded.category_type,
+  target_type = excluded.target_type,
+  is_top_prize = excluded.is_top_prize,
+  is_major_category = excluded.is_major_category,
+  display_order = excluded.display_order;
