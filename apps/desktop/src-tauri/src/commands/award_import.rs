@@ -614,7 +614,7 @@ fn build_sparql(ids: &WikidataIds, year: Option<i32>) -> String {
 
 fn build_sparql_category(category_qid: &str, year: Option<i32>) -> String {
     let year_filter = year
-        .map(|year| format!("FILTER(YEAR(?date) = {year})"))
+        .map(|year| format!("FILTER(!BOUND(?date) || YEAR(?date) = {year})"))
         .unwrap_or_default();
 
     format!(
@@ -623,6 +623,9 @@ SELECT DISTINCT
   ?film
   (SAMPLE(?titleJa) AS ?titleJa)
   (SAMPLE(?titleEn) AS ?titleEn)
+  ?award
+  (SAMPLE(?awardNameJa) AS ?awardNameJa)
+  (SAMPLE(?awardNameEn) AS ?awardNameEn)
   ?resultType
   ?year
   ?imdbId
@@ -635,20 +638,32 @@ WHERE {{
     (p:P166  ps:P166  "winner")
     (p:P1411 ps:P1411 "nominee")
   }}
-  ?film wdt:P31/wdt:P279* wd:Q11424 .
-  ?film ?prop ?stmt .
-  ?stmt ?propS wd:{category_qid} .
+  BIND(wd:{category_qid} AS ?award)
+  {{
+    ?film wdt:P31/wdt:P279* wd:Q11424 .
+    ?film ?prop ?stmt .
+    ?stmt ?propS ?award .
+  }}
+  UNION
+  {{
+    ?person ?prop ?stmt .
+    ?stmt ?propS ?award .
+    ?stmt pq:P1686 ?film .
+    ?film wdt:P31/wdt:P279* wd:Q11424 .
+  }}
   OPTIONAL {{
     ?stmt pq:P585 ?date .
     BIND(YEAR(?date) AS ?year)
-    {year_filter}
   }}
+  {year_filter}
   OPTIONAL {{ ?film wdt:P345 ?imdbId }}
   OPTIONAL {{ ?film wdt:P4947 ?tmdbId }}
   OPTIONAL {{ ?film rdfs:label ?titleJa . FILTER(LANG(?titleJa) = "ja") }}
   OPTIONAL {{ ?film rdfs:label ?titleEn . FILTER(LANG(?titleEn) = "en") }}
+  OPTIONAL {{ ?award rdfs:label ?awardNameJa . FILTER(LANG(?awardNameJa) = "ja") }}
+  OPTIONAL {{ ?award rdfs:label ?awardNameEn . FILTER(LANG(?awardNameEn) = "en") }}
 }}
-GROUP BY ?film ?resultType ?year ?imdbId ?tmdbId
+GROUP BY ?film ?award ?resultType ?year ?imdbId ?tmdbId
 ORDER BY DESC(?year) ?resultType
 "#
     )
@@ -1662,6 +1677,8 @@ mod tests {
         assert!(query.contains("p:P166"));
         assert!(query.contains("p:P1411"));
         assert!(query.contains("wd:Q11424"));
+        assert!(query.contains("pq:P1686"));
+        assert!(query.contains("BIND(wd:Q102427 AS ?award)"));
         assert!(query.contains("YEAR(?date) = 2026"));
     }
 
