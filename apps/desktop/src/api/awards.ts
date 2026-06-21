@@ -126,6 +126,15 @@ export interface AwardWorkFilter {
   resultType?: AwardResultType | null;
 }
 
+export interface AwardImportJobSummary {
+  jobId: number;
+  status: "done" | "error";
+  totalItems: number;
+  insertedItems: number;
+  skippedItems: number;
+  errorMessage?: string | null;
+}
+
 export async function listAwardBodies(): Promise<AwardBody[]> {
   const rows = await invoke<AwardBodyRow[]>("list_award_bodies");
   return rows.map(toAwardBody);
@@ -198,6 +207,18 @@ export async function listAwardWinningWorks(filter: AwardWorkFilter): Promise<Aw
     resultType: r.result_type,
     personName: r.person_name,
   }));
+}
+
+export async function fetchWikidataAwardItems(
+  awardBodyId: number,
+  awardCategoryId?: number | null,
+  year?: number | null,
+): Promise<AwardImportJobSummary> {
+  return invoke<AwardImportJobSummary>("fetch_wikidata_award_items", {
+    awardBodyId,
+    awardCategoryId,
+    year,
+  });
 }
 
 function toAwardBody(r: AwardBodyRow): AwardBody {
