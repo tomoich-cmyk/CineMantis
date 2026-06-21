@@ -43,8 +43,7 @@ pub fn list_persons(
              JOIN work_persons wp ON wp.person_id = p.id
              WHERE (?1 IS NULL OR wp.role = ?1)
              GROUP BY p.id
-             ORDER BY work_count DESC, p.name ASC
-             LIMIT 500",
+             ORDER BY work_count DESC, p.name ASC",
         )
         .map_err(|e| e.to_string())?;
 
