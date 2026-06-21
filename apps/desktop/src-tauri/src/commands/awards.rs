@@ -111,6 +111,26 @@ pub struct AwardWorkFilter {
     pub result_type: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOrCreateAwardEditionInput {
+    pub award_body_id: i64,
+    pub year: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AwardEditionRow {
+    pub id: i64,
+    pub award_body_id: i64,
+    pub year: i64,
+    pub edition_no: Option<i64>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub ceremony_date: Option<String>,
+    pub official_url: Option<String>,
+    pub note: Option<String>,
+}
+
 #[tauri::command]
 pub fn list_award_bodies(state: State<'_, DbState>) -> Result<Vec<AwardBodyRow>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -196,6 +216,35 @@ pub fn list_award_categories(
     .collect::<Result<Vec<_>, _>>()
     .map_err(|e| e.to_string())?;
     Ok(rows)
+}
+
+#[tauri::command]
+pub fn get_or_create_award_edition(
+    state: State<'_, DbState>,
+    input: GetOrCreateAwardEditionInput,
+) -> Result<AwardEditionRow, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let id = upsert_award_edition(&conn, input.award_body_id, input.year)?;
+    conn.query_row(
+        "SELECT id, award_body_id, year, edition_no, start_date, end_date, ceremony_date, official_url, note
+         FROM award_editions
+         WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(AwardEditionRow {
+                id: row.get(0)?,
+                award_body_id: row.get(1)?,
+                year: row.get(2)?,
+                edition_no: row.get(3)?,
+                start_date: row.get(4)?,
+                end_date: row.get(5)?,
+                ceremony_date: row.get(6)?,
+                official_url: row.get(7)?,
+                note: row.get(8)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

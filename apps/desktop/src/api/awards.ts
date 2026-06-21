@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AwardBody,
   AwardCategory,
+  AwardEdition,
   AwardResultType,
   AwardWork,
   WorkAwardResultView,
@@ -63,6 +64,18 @@ interface WorkAwardResultViewRow {
   person_name: string | null;
 }
 
+interface AwardEditionRow {
+  id: number;
+  award_body_id: number;
+  year: number;
+  edition_no: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  ceremony_date: string | null;
+  official_url: string | null;
+  note: string | null;
+}
+
 interface AwardWorkRow {
   result_id: number;
   work_id: number;
@@ -118,6 +131,26 @@ export async function getAwardBodyDetail(awardBodyId: number): Promise<AwardBody
 export async function listAwardCategories(awardBodyId: number): Promise<AwardCategory[]> {
   const rows = await invoke<AwardCategoryRow[]>("list_award_categories", { awardBodyId });
   return rows.map(toAwardCategory);
+}
+
+export async function getOrCreateAwardEdition(
+  awardBodyId: number,
+  year: number,
+): Promise<AwardEdition> {
+  const row = await invoke<AwardEditionRow>("get_or_create_award_edition", {
+    input: { awardBodyId, year },
+  });
+  return {
+    id: row.id,
+    awardBodyId: row.award_body_id,
+    year: row.year,
+    editionNo: row.edition_no,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    ceremonyDate: row.ceremony_date,
+    officialUrl: row.official_url,
+    note: row.note,
+  };
 }
 
 export async function listWorkAwards(workId: number): Promise<WorkAwardResultView[]> {
