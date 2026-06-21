@@ -135,6 +135,68 @@ export interface AwardImportJobSummary {
   errorMessage?: string | null;
 }
 
+export interface AwardImportMatchSummary {
+  jobId: number;
+  totalItems: number;
+  highConfidence: number;
+  needsReview: number;
+  lowConfidence: number;
+  unmatched: number;
+  alreadyMatched: number;
+}
+
+export interface MatchCandidateView {
+  id: number;
+  workId: number;
+  workTitle: string;
+  workOriginalTitle: string | null;
+  workYear: number | null;
+  workSourcePath: string | null;
+  workTmdbId: string | null;
+  workImdbId: string | null;
+  score: number;
+  matchMethod: string;
+  isSelected: boolean;
+}
+
+export interface AwardImportItemView {
+  id: number;
+  jobId: number;
+  awardBodyId: number;
+  awardBodyName: string;
+  awardCategoryId: number | null;
+  awardCategoryName: string | null;
+  rawYear: number | null;
+  rawResultType: string;
+  rawTitleJa: string | null;
+  rawTitleEn: string | null;
+  rawImdbId: string | null;
+  rawTmdbId: string | null;
+  rawSourceUrl: string | null;
+  rawAwardNameEn: string | null;
+  rawAwardNameJa: string | null;
+  matchedWorkId: number | null;
+  matchedWorkTitle: string | null;
+  matchedWorkYear: number | null;
+  matchedWorkTmdbId: string | null;
+  matchScore: number | null;
+  matchMethod: string | null;
+  status: string;
+  approvedAt: string | null;
+  alreadyConfirmed: boolean;
+  candidates: MatchCandidateView[];
+}
+
+export interface WorkSearchResult {
+  id: number;
+  title: string;
+  originalTitle: string | null;
+  year: number | null;
+  tmdbId: string | null;
+  imdbId: string | null;
+  sourcePath: string | null;
+}
+
 export async function listAwardBodies(): Promise<AwardBody[]> {
   const rows = await invoke<AwardBodyRow[]>("list_award_bodies");
   return rows.map(toAwardBody);
@@ -219,6 +281,45 @@ export async function fetchWikidataAwardItems(
     awardCategoryId,
     year,
   });
+}
+
+export async function matchAwardImportItems(jobId: number): Promise<AwardImportMatchSummary> {
+  return invoke<AwardImportMatchSummary>("match_award_import_items", { jobId });
+}
+
+export async function listAwardImportItems(options: {
+  jobId?: number | null;
+  status?: string | null;
+  onlyUnmatched?: boolean | null;
+} = {}): Promise<AwardImportItemView[]> {
+  return invoke<AwardImportItemView[]>("list_award_import_items", options);
+}
+
+export async function selectAwardMatchCandidate(
+  importItemId: number,
+  candidateId: number,
+): Promise<void> {
+  return invoke("select_award_match_candidate", { importItemId, candidateId });
+}
+
+export async function approveAwardImportItem(
+  importItemId: number,
+): Promise<WorkAwardResultView> {
+  const row = await invoke<WorkAwardResultViewRow>("approve_award_import_item", {
+    importItemId,
+  });
+  return toWorkAward(row);
+}
+
+export async function rejectAwardImportItem(importItemId: number): Promise<void> {
+  return invoke("reject_award_import_item", { importItemId });
+}
+
+export async function searchWorksForAwardMatch(
+  query: string,
+  year?: number | null,
+): Promise<WorkSearchResult[]> {
+  return invoke<WorkSearchResult[]>("search_works_for_award_match", { query, year });
 }
 
 function toAwardBody(r: AwardBodyRow): AwardBody {

@@ -1,8 +1,9 @@
 use crate::db::DbState;
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::Duration;
 use tauri::State;
@@ -20,6 +21,116 @@ pub struct AwardImportJobSummary {
     pub inserted_items: i64,
     pub skipped_items: i64,
     pub error_message: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwardImportMatchSummary {
+    pub job_id: i64,
+    pub total_items: i64,
+    pub high_confidence: i64,
+    pub needs_review: i64,
+    pub low_confidence: i64,
+    pub unmatched: i64,
+    pub already_matched: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwardImportItemView {
+    pub id: i64,
+    pub job_id: i64,
+    pub award_body_id: i64,
+    pub award_body_name: String,
+    pub award_category_id: Option<i64>,
+    pub award_category_name: Option<String>,
+    pub raw_year: Option<i32>,
+    pub raw_result_type: String,
+    pub raw_title_ja: Option<String>,
+    pub raw_title_en: Option<String>,
+    pub raw_imdb_id: Option<String>,
+    pub raw_tmdb_id: Option<String>,
+    pub raw_source_url: Option<String>,
+    pub raw_award_name_en: Option<String>,
+    pub raw_award_name_ja: Option<String>,
+    pub matched_work_id: Option<i64>,
+    pub matched_work_title: Option<String>,
+    pub matched_work_year: Option<i32>,
+    pub matched_work_tmdb_id: Option<String>,
+    pub match_score: Option<f64>,
+    pub match_method: Option<String>,
+    pub status: String,
+    pub approved_at: Option<String>,
+    pub already_confirmed: bool,
+    pub candidates: Vec<MatchCandidateView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchCandidateView {
+    pub id: i64,
+    pub work_id: i64,
+    pub work_title: String,
+    pub work_original_title: Option<String>,
+    pub work_year: Option<i32>,
+    pub work_source_path: Option<String>,
+    pub work_tmdb_id: Option<String>,
+    pub work_imdb_id: Option<String>,
+    pub score: f64,
+    pub match_method: String,
+    pub is_selected: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkSearchResult {
+    pub id: i64,
+    pub title: String,
+    pub original_title: Option<String>,
+    pub year: Option<i32>,
+    pub tmdb_id: Option<String>,
+    pub imdb_id: Option<String>,
+    pub source_path: Option<String>,
+}
+
+#[derive(Debug)]
+struct ImportItemForMatching {
+    id: i64,
+    raw_title_ja: Option<String>,
+    raw_title_en: Option<String>,
+    raw_imdb_id: Option<String>,
+    raw_tmdb_id: Option<String>,
+    raw_year: Option<i32>,
+}
+
+#[derive(Debug)]
+struct WorkForMatching {
+    id: i64,
+    title: String,
+    original_title: Option<String>,
+    title_guess: Option<String>,
+    release_year: Option<i32>,
+    tmdb_id: Option<i64>,
+    imdb_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ScoredCandidate {
+    work_id: i64,
+    score: f64,
+    match_method: String,
+}
+
+#[derive(Debug)]
+struct ImportItemForApproval {
+    id: i64,
+    award_body_id: i64,
+    matched_award_category_id: Option<i64>,
+    matched_work_id: Option<i64>,
+    raw_year: Option<i32>,
+    raw_result_type: String,
+    raw_source_url: Option<String>,
+    match_score: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -120,6 +231,63 @@ pub async fn fetch_wikidata_award_items(
     fetch_wikidata_award_items_inner(&state, award_body_id, award_category_id, year)
         .await
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn match_award_import_items(
+    state: State<'_, DbState>,
+    job_id: i64,
+) -> Result<AwardImportMatchSummary, String> {
+    match_award_import_items_inner(&state, job_id).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn list_award_import_items(
+    state: State<'_, DbState>,
+    job_id: Option<i64>,
+    status: Option<String>,
+    only_unmatched: Option<bool>,
+) -> Result<Vec<AwardImportItemView>, String> {
+    list_award_import_items_inner(&state, job_id, status, only_unmatched.unwrap_or(false))
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn select_award_match_candidate(
+    state: State<'_, DbState>,
+    import_item_id: i64,
+    candidate_id: i64,
+) -> Result<(), String> {
+    select_award_match_candidate_inner(&state, import_item_id, candidate_id)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn approve_award_import_item(
+    state: State<'_, DbState>,
+    import_item_id: i64,
+) -> Result<crate::commands::awards::WorkAwardResultViewRow, String> {
+    approve_award_import_item_inner(&state, import_item_id).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn reject_award_import_item(state: State<'_, DbState>, import_item_id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|err| err.to_string())?;
+    conn.execute(
+        "UPDATE award_import_items SET status = 'rejected' WHERE id = ?1",
+        params![import_item_id],
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn search_works_for_award_match(
+    state: State<'_, DbState>,
+    query: String,
+    year: Option<i32>,
+) -> Result<Vec<WorkSearchResult>, String> {
+    search_works_for_award_match_inner(&state, &query, year).map_err(|err| err.to_string())
 }
 
 async fn fetch_wikidata_award_items_inner(
@@ -636,6 +804,733 @@ fn insert_import_item(
     Ok(changed > 0)
 }
 
+fn match_award_import_items_inner(
+    db: &DbState,
+    job_id: i64,
+) -> Result<AwardImportMatchSummary> {
+    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
+    let items = fetch_pending_items_for_matching(&conn, job_id)?;
+    let works = fetch_all_works_for_matching(&conn)?;
+    let mut summary = AwardImportMatchSummary {
+        job_id,
+        total_items: items.len() as i64,
+        ..Default::default()
+    };
+
+    for item in &items {
+        if has_match_candidates(&conn, item.id)? {
+            summary.already_matched += 1;
+            continue;
+        }
+
+        let candidates = score_candidates(item, &works);
+        if candidates.is_empty() {
+            summary.unmatched += 1;
+            continue;
+        }
+
+        save_match_candidates(&conn, item.id, &candidates)?;
+        let best = &candidates[0];
+        update_import_item_match(&conn, item.id, best)?;
+
+        if best.score >= 90.0 {
+            summary.high_confidence += 1;
+        } else if best.score >= 70.0 {
+            summary.needs_review += 1;
+        } else {
+            summary.low_confidence += 1;
+        }
+    }
+
+    Ok(summary)
+}
+
+fn fetch_pending_items_for_matching(
+    conn: &Connection,
+    job_id: i64,
+) -> Result<Vec<ImportItemForMatching>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, raw_title_ja, raw_title_en, raw_imdb_id, raw_tmdb_id, raw_year
+         FROM award_import_items
+         WHERE job_id = ?1
+           AND status = 'pending'
+         ORDER BY raw_year DESC NULLS LAST, id ASC",
+    )?;
+    let rows = stmt.query_map(params![job_id], |row| {
+        Ok(ImportItemForMatching {
+            id: row.get(0)?,
+            raw_title_ja: row.get(1)?,
+            raw_title_en: row.get(2)?,
+            raw_imdb_id: row.get(3)?,
+            raw_tmdb_id: row.get(4)?,
+            raw_year: row.get(5)?,
+        })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn fetch_all_works_for_matching(conn: &Connection) -> Result<Vec<WorkForMatching>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, original_title, title_guess, COALESCE(release_year, year), tmdb_id, imdb_id
+         FROM works
+         WHERE work_type IN ('movie', 'other', 'special', 'ova')",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(WorkForMatching {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            original_title: row.get(2)?,
+            title_guess: row.get(3)?,
+            release_year: row.get(4)?,
+            tmdb_id: row.get(5)?,
+            imdb_id: row.get(6)?,
+        })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn has_match_candidates(conn: &Connection, import_item_id: i64) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM work_award_match_candidates WHERE import_item_id = ?1",
+        params![import_item_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn score_candidates(
+    item: &ImportItemForMatching,
+    works: &[WorkForMatching],
+) -> Vec<ScoredCandidate> {
+    let mut candidates: Vec<_> = works
+        .iter()
+        .filter_map(|work| score_single_candidate(item, work))
+        .filter(|candidate| candidate.score >= 40.0)
+        .collect();
+
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.work_id.cmp(&b.work_id))
+    });
+    candidates.truncate(10);
+    candidates
+}
+
+fn score_single_candidate(
+    item: &ImportItemForMatching,
+    work: &WorkForMatching,
+) -> Option<ScoredCandidate> {
+    if let (Some(raw_tmdb_id), Some(work_tmdb_id)) = (&item.raw_tmdb_id, work.tmdb_id) {
+        if raw_tmdb_id.parse::<i64>().ok() == Some(work_tmdb_id) {
+            return Some(ScoredCandidate {
+                work_id: work.id,
+                score: 100.0,
+                match_method: "tmdb_id".to_string(),
+            });
+        }
+    }
+
+    if let (Some(raw_imdb_id), Some(work_imdb_id)) = (&item.raw_imdb_id, &work.imdb_id) {
+        if normalize_imdb_id(raw_imdb_id) == normalize_imdb_id(work_imdb_id) {
+            return Some(ScoredCandidate {
+                work_id: work.id,
+                score: 98.0,
+                match_method: "imdb_id".to_string(),
+            });
+        }
+    }
+
+    let year_adjustment = year_adjustment(item.raw_year, work.release_year);
+    let mut best: Option<ScoredCandidate> = None;
+    let work_titles = [
+        Some(work.title.as_str()),
+        work.original_title.as_deref(),
+        work.title_guess.as_deref(),
+    ];
+    let raw_titles = [item.raw_title_ja.as_deref(), item.raw_title_en.as_deref()];
+
+    for raw_title in raw_titles.into_iter().flatten() {
+        for work_title in work_titles.into_iter().flatten() {
+            let (base_score, fuzzy) = score_title(raw_title, work_title)?;
+            let score = (base_score + year_adjustment).clamp(0.0, 100.0);
+            let candidate = ScoredCandidate {
+                work_id: work.id,
+                score,
+                match_method: if fuzzy {
+                    "title_fuzzy".to_string()
+                } else {
+                    "title_exact".to_string()
+                },
+            };
+            if best.as_ref().map(|existing| existing.score < candidate.score).unwrap_or(true) {
+                best = Some(candidate);
+            }
+        }
+    }
+
+    best
+}
+
+fn normalize_imdb_id(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("tt")
+        .trim_start_matches("TT")
+        .to_ascii_lowercase()
+}
+
+fn normalize_title(value: &str) -> String {
+    let mut normalized = String::new();
+    let lower = value.to_lowercase();
+    for ch in lower.chars() {
+        if ch.is_alphanumeric() || is_japanese_char(ch) {
+            normalized.push(ch);
+        } else if ch.is_whitespace() || matches!(ch, '-' | '_' | ':' | '/' | '／') {
+            normalized.push(' ');
+        }
+    }
+    normalized
+        .split_whitespace()
+        .filter(|token| !matches!(*token, "the" | "a" | "an"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_japanese_char(ch: char) -> bool {
+    ('\u{3040}'..='\u{30ff}').contains(&ch)
+        || ('\u{3400}'..='\u{9fff}').contains(&ch)
+        || ('\u{ff66}'..='\u{ff9f}').contains(&ch)
+}
+
+fn score_title(raw_title: &str, work_title: &str) -> Option<(f64, bool)> {
+    if raw_title.trim().eq_ignore_ascii_case(work_title.trim()) {
+        return Some((82.0, false));
+    }
+
+    let raw_norm = normalize_title(raw_title);
+    let work_norm = normalize_title(work_title);
+    if raw_norm.is_empty() || work_norm.is_empty() {
+        return None;
+    }
+
+    if raw_norm == work_norm {
+        return Some((75.0, false));
+    }
+
+    let similarity = title_similarity(&raw_norm, &work_norm);
+    if similarity >= 0.86 {
+        return Some((50.0 + similarity * 22.0, true));
+    }
+    None
+}
+
+fn title_similarity(a: &str, b: &str) -> f64 {
+    if a == b {
+        return 1.0;
+    }
+    let max_len = a.chars().count().max(b.chars().count());
+    if max_len == 0 {
+        return 1.0;
+    }
+    let distance = levenshtein(a, b);
+    1.0 - (distance as f64 / max_len as f64)
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut costs: Vec<usize> = (0..=b_chars.len()).collect();
+
+    for (i, ca) in a.chars().enumerate() {
+        let mut last = i;
+        costs[0] = i + 1;
+        for (j, cb) in b_chars.iter().enumerate() {
+            let old = costs[j + 1];
+            costs[j + 1] = if ca == *cb {
+                last
+            } else {
+                1 + last.min(costs[j]).min(old)
+            };
+            last = old;
+        }
+    }
+    costs[b_chars.len()]
+}
+
+fn year_adjustment(raw_year: Option<i32>, work_year: Option<i32>) -> f64 {
+    let (Some(raw_year), Some(work_year)) = (raw_year, work_year) else {
+        return 0.0;
+    };
+    match (raw_year - work_year).abs() {
+        0 => 10.0,
+        1 => -5.0,
+        2 => -10.0,
+        _ => -20.0,
+    }
+}
+
+fn save_match_candidates(
+    conn: &Connection,
+    import_item_id: i64,
+    candidates: &[ScoredCandidate],
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM work_award_match_candidates WHERE import_item_id = ?1",
+        params![import_item_id],
+    )?;
+    for (index, candidate) in candidates.iter().enumerate() {
+        conn.execute(
+            "INSERT OR IGNORE INTO work_award_match_candidates
+             (import_item_id, work_id, match_score, match_method, is_selected)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                import_item_id,
+                candidate.work_id,
+                candidate.score,
+                candidate.match_method,
+                if index == 0 { 1 } else { 0 },
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn update_import_item_match(
+    conn: &Connection,
+    import_item_id: i64,
+    candidate: &ScoredCandidate,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE award_import_items
+         SET matched_work_id = ?2,
+             match_score = ?3,
+             match_method = ?4
+         WHERE id = ?1",
+        params![
+            import_item_id,
+            candidate.work_id,
+            candidate.score,
+            candidate.match_method
+        ],
+    )?;
+    Ok(())
+}
+
+fn list_award_import_items_inner(
+    db: &DbState,
+    job_id: Option<i64>,
+    status: Option<String>,
+    only_unmatched: bool,
+) -> Result<Vec<AwardImportItemView>> {
+    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
+    let mut stmt = conn.prepare(
+        "SELECT
+             aii.id,
+             aii.job_id,
+             ab.id AS award_body_id,
+             ab.name AS award_body_name,
+             ac.id AS award_category_id,
+             ac.name AS award_category_name,
+             aii.raw_year,
+             aii.raw_result_type,
+             aii.raw_title_ja,
+             aii.raw_title_en,
+             aii.raw_imdb_id,
+             aii.raw_tmdb_id,
+             aii.raw_source_url,
+             aii.raw_award_name_en,
+             aii.raw_award_name_ja,
+             aii.matched_work_id,
+             w.title AS matched_work_title,
+             COALESCE(w.release_year, w.year) AS matched_work_year,
+             CAST(w.tmdb_id AS TEXT) AS matched_work_tmdb_id,
+             aii.match_score,
+             aii.match_method,
+             aii.status,
+             aii.approved_at,
+             CASE WHEN EXISTS (
+                 SELECT 1
+                 FROM work_award_results war
+                 JOIN award_editions ae ON ae.id = war.award_edition_id
+                 WHERE war.work_id = aii.matched_work_id
+                   AND war.award_category_id = aii.matched_award_category_id
+                   AND ae.year = aii.raw_year
+                   AND war.result_type = aii.raw_result_type
+             ) THEN 1 ELSE 0 END AS already_confirmed
+         FROM award_import_items aii
+         JOIN award_import_jobs aij ON aij.id = aii.job_id
+         JOIN award_bodies ab ON ab.id = aij.award_body_id
+         LEFT JOIN award_categories ac ON ac.id = aii.matched_award_category_id
+         LEFT JOIN works w ON w.id = aii.matched_work_id
+         WHERE (?1 IS NULL OR aii.job_id = ?1)
+           AND (?2 IS NULL OR aii.status = ?2)
+           AND (?3 = 0 OR aii.matched_work_id IS NULL OR COALESCE(aii.match_score, 0) < 70)
+         ORDER BY aii.raw_year DESC NULLS LAST,
+                  COALESCE(aii.match_score, -1) DESC,
+                  aii.id ASC",
+    )?;
+
+    let mut views = stmt
+        .query_map(params![job_id, status, if only_unmatched { 1 } else { 0 }], |row| {
+            Ok(AwardImportItemView {
+                id: row.get(0)?,
+                job_id: row.get(1)?,
+                award_body_id: row.get(2)?,
+                award_body_name: row.get(3)?,
+                award_category_id: row.get(4)?,
+                award_category_name: row.get(5)?,
+                raw_year: row.get(6)?,
+                raw_result_type: row.get(7)?,
+                raw_title_ja: row.get(8)?,
+                raw_title_en: row.get(9)?,
+                raw_imdb_id: row.get(10)?,
+                raw_tmdb_id: row.get(11)?,
+                raw_source_url: row.get(12)?,
+                raw_award_name_en: row.get(13)?,
+                raw_award_name_ja: row.get(14)?,
+                matched_work_id: row.get(15)?,
+                matched_work_title: row.get(16)?,
+                matched_work_year: row.get(17)?,
+                matched_work_tmdb_id: row.get(18)?,
+                match_score: row.get(19)?,
+                match_method: row.get(20)?,
+                status: row.get(21)?,
+                approved_at: row.get(22)?,
+                already_confirmed: row.get::<_, i64>(23)? != 0,
+                candidates: Vec::new(),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    for view in &mut views {
+        view.candidates = list_match_candidates(&conn, view.id)?;
+    }
+    Ok(views)
+}
+
+fn list_match_candidates(conn: &Connection, import_item_id: i64) -> Result<Vec<MatchCandidateView>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+             c.id,
+             w.id,
+             w.title,
+             w.original_title,
+             COALESCE(w.release_year, w.year),
+             (
+               SELECT s.root_path || CASE WHEN f.file_path IS NOT NULL THEN ' / ' || f.file_path ELSE '' END
+               FROM work_parts wp
+               JOIN files f ON f.id = wp.file_id
+               JOIN sources s ON s.id = f.source_id
+               WHERE wp.work_id = w.id
+               ORDER BY wp.play_order ASC, f.id ASC
+               LIMIT 1
+             ) AS source_path,
+             CAST(w.tmdb_id AS TEXT),
+             w.imdb_id,
+             c.match_score,
+             c.match_method,
+             c.is_selected
+         FROM work_award_match_candidates c
+         JOIN works w ON w.id = c.work_id
+         WHERE c.import_item_id = ?1
+         ORDER BY c.is_selected DESC, c.match_score DESC, w.title ASC",
+    )?;
+    let rows = stmt.query_map(params![import_item_id], |row| {
+        Ok(MatchCandidateView {
+            id: row.get(0)?,
+            work_id: row.get(1)?,
+            work_title: row.get(2)?,
+            work_original_title: row.get(3)?,
+            work_year: row.get(4)?,
+            work_source_path: row.get(5)?,
+            work_tmdb_id: row.get(6)?,
+            work_imdb_id: row.get(7)?,
+            score: row.get(8)?,
+            match_method: row.get(9)?,
+            is_selected: row.get::<_, i64>(10)? != 0,
+        })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn select_award_match_candidate_inner(
+    db: &DbState,
+    import_item_id: i64,
+    candidate_id: i64,
+) -> Result<()> {
+    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE work_award_match_candidates SET is_selected = 0 WHERE import_item_id = ?1",
+        params![import_item_id],
+    )?;
+    let candidate = tx
+        .query_row(
+            "SELECT work_id, match_score, match_method
+             FROM work_award_match_candidates
+             WHERE id = ?1 AND import_item_id = ?2",
+            params![candidate_id, import_item_id],
+            |row| {
+                Ok(ScoredCandidate {
+                    work_id: row.get(0)?,
+                    score: row.get(1)?,
+                    match_method: row.get(2)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("candidate not found"))?;
+    tx.execute(
+        "UPDATE work_award_match_candidates SET is_selected = 1 WHERE id = ?1",
+        params![candidate_id],
+    )?;
+    update_import_item_match(&tx, import_item_id, &candidate)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn approve_award_import_item_inner(
+    db: &DbState,
+    import_item_id: i64,
+) -> Result<crate::commands::awards::WorkAwardResultViewRow> {
+    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
+    let tx = conn.unchecked_transaction()?;
+    let item = fetch_import_item_for_approval(&tx, import_item_id)?;
+    let work_id = item
+        .matched_work_id
+        .ok_or_else(|| anyhow!("照合作品が選択されていません"))?;
+    let category_id = item
+        .matched_award_category_id
+        .ok_or_else(|| anyhow!("賞カテゴリが不明です"))?;
+    let year = item.raw_year.ok_or_else(|| anyhow!("年度が不明です"))?;
+    let edition_id = upsert_award_edition_local(&tx, item.award_body_id, year as i64)?;
+
+    if let Some(existing_id) = find_existing_award_result_local(
+        &tx,
+        work_id,
+        item.award_body_id,
+        edition_id,
+        category_id,
+        &item.raw_result_type,
+    )? {
+        tx.execute(
+            "UPDATE award_import_items
+             SET status = 'approved',
+                 approved_at = COALESCE(approved_at, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+             WHERE id = ?1",
+            params![item.id],
+        )?;
+        let row = get_work_award_result_local(&tx, existing_id)?;
+        tx.commit()?;
+        return Ok(row);
+    }
+
+    tx.execute(
+        "INSERT INTO work_award_results
+            (work_id, person_id, award_body_id, award_edition_id, award_category_id,
+             result_type, source_url, confidence, is_locked)
+         VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+        params![
+            work_id,
+            item.award_body_id,
+            edition_id,
+            category_id,
+            item.raw_result_type,
+            item.raw_source_url,
+            item.match_score,
+        ],
+    )?;
+    let result_id = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE award_import_items
+         SET status = 'approved',
+             approved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = ?1",
+        params![item.id],
+    )?;
+    let row = get_work_award_result_local(&tx, result_id)?;
+    tx.commit()?;
+    Ok(row)
+}
+
+fn fetch_import_item_for_approval(
+    conn: &Connection,
+    import_item_id: i64,
+) -> Result<ImportItemForApproval> {
+    conn.query_row(
+        "SELECT
+             aii.id,
+             aij.award_body_id,
+             aii.matched_award_category_id,
+             aii.matched_work_id,
+             aii.raw_year,
+             aii.raw_result_type,
+             aii.raw_source_url,
+             aii.match_score
+         FROM award_import_items aii
+         JOIN award_import_jobs aij ON aij.id = aii.job_id
+         WHERE aii.id = ?1",
+        params![import_item_id],
+        |row| {
+            Ok(ImportItemForApproval {
+                id: row.get(0)?,
+                award_body_id: row.get(1)?,
+                matched_award_category_id: row.get(2)?,
+                matched_work_id: row.get(3)?,
+                raw_year: row.get(4)?,
+                raw_result_type: row.get(5)?,
+                raw_source_url: row.get(6)?,
+                match_score: row.get(7)?,
+            })
+        },
+    )
+    .optional()?
+    .ok_or_else(|| anyhow!("import item not found"))
+}
+
+fn upsert_award_edition_local(conn: &Connection, award_body_id: i64, year: i64) -> Result<i64> {
+    conn.execute(
+        "INSERT OR IGNORE INTO award_editions (award_body_id, year) VALUES (?1, ?2)",
+        params![award_body_id, year],
+    )?;
+    conn.query_row(
+        "SELECT id FROM award_editions WHERE award_body_id = ?1 AND year = ?2",
+        params![award_body_id, year],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn find_existing_award_result_local(
+    conn: &Connection,
+    work_id: i64,
+    award_body_id: i64,
+    award_edition_id: i64,
+    award_category_id: i64,
+    result_type: &str,
+) -> Result<Option<i64>> {
+    conn.query_row(
+        "SELECT id
+         FROM work_award_results
+         WHERE work_id = ?1
+           AND person_id IS NULL
+           AND award_body_id = ?2
+           AND award_edition_id = ?3
+           AND award_category_id = ?4
+           AND result_type = ?5
+         LIMIT 1",
+        params![
+            work_id,
+            award_body_id,
+            award_edition_id,
+            award_category_id,
+            result_type
+        ],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn get_work_award_result_local(
+    conn: &Connection,
+    result_id: i64,
+) -> Result<crate::commands::awards::WorkAwardResultViewRow> {
+    conn.query_row(
+        "SELECT
+           war.id, war.work_id, war.person_id, war.award_body_id, war.award_edition_id,
+           war.award_category_id, war.result_type, war.section_name, war.source_url,
+           war.confidence, war.is_locked, war.note,
+           ab.name, ab.display_name_ja, ab.prestige_tier, ab.award_scope,
+           ae.year,
+           ac.name, ac.display_name_ja,
+           p.name
+         FROM work_award_results war
+         JOIN award_bodies ab ON ab.id = war.award_body_id
+         LEFT JOIN award_editions ae ON ae.id = war.award_edition_id
+         JOIN award_categories ac ON ac.id = war.award_category_id
+         LEFT JOIN persons p ON p.id = war.person_id
+         WHERE war.id = ?1",
+        params![result_id],
+        |row| {
+            Ok(crate::commands::awards::WorkAwardResultViewRow {
+                id: row.get(0)?,
+                work_id: row.get(1)?,
+                person_id: row.get(2)?,
+                award_body_id: row.get(3)?,
+                award_edition_id: row.get(4)?,
+                award_category_id: row.get(5)?,
+                result_type: row.get(6)?,
+                section_name: row.get(7)?,
+                source_url: row.get(8)?,
+                confidence: row.get(9)?,
+                is_locked: row.get::<_, i64>(10)? != 0,
+                note: row.get(11)?,
+                award_body_name: row.get(12)?,
+                award_body_display_name_ja: row.get(13)?,
+                prestige_tier: row.get(14)?,
+                award_scope: row.get(15)?,
+                award_year: row.get(16)?,
+                category_name: row.get(17)?,
+                category_display_name_ja: row.get(18)?,
+                person_name: row.get(19)?,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
+
+fn search_works_for_award_match_inner(
+    db: &DbState,
+    query: &str,
+    year: Option<i32>,
+) -> Result<Vec<WorkSearchResult>> {
+    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
+    let like = format!("%{}%", query.trim());
+    let mut stmt = conn.prepare(
+        "SELECT
+             w.id,
+             w.title,
+             w.original_title,
+             COALESCE(w.release_year, w.year),
+             CAST(w.tmdb_id AS TEXT),
+             w.imdb_id,
+             (
+               SELECT s.root_path || CASE WHEN f.file_path IS NOT NULL THEN ' / ' || f.file_path ELSE '' END
+               FROM work_parts wp
+               JOIN files f ON f.id = wp.file_id
+               JOIN sources s ON s.id = f.source_id
+               WHERE wp.work_id = w.id
+               ORDER BY wp.play_order ASC, f.id ASC
+               LIMIT 1
+             ) AS source_path
+         FROM works w
+         WHERE (w.title LIKE ?1 OR w.original_title LIKE ?1 OR w.title_guess LIKE ?1)
+           AND (?2 IS NULL OR COALESCE(w.release_year, w.year) IS NULL OR ABS(COALESCE(w.release_year, w.year) - ?2) <= 2)
+         ORDER BY
+           CASE WHEN w.title = ?3 OR w.original_title = ?3 OR w.title_guess = ?3 THEN 0 ELSE 1 END,
+           w.title ASC
+         LIMIT 30",
+    )?;
+    let rows = stmt.query_map(params![like, year, query], |row| {
+        Ok(WorkSearchResult {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            original_title: row.get(2)?,
+            year: row.get(3)?,
+            tmdb_id: row.get(4)?,
+            imdb_id: row.get(5)?,
+            source_path: row.get(6)?,
+        })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,5 +1569,67 @@ mod tests {
         assert!(query.contains("p:P1411"));
         assert!(query.contains("wd:Q11424"));
         assert!(query.contains("YEAR(?date) = 2026"));
+    }
+
+    fn import_item(
+        tmdb_id: Option<&str>,
+        imdb_id: Option<&str>,
+        year: Option<i32>,
+        title_ja: Option<&str>,
+        title_en: Option<&str>,
+    ) -> ImportItemForMatching {
+        ImportItemForMatching {
+            id: 1,
+            raw_title_ja: title_ja.map(str::to_string),
+            raw_title_en: title_en.map(str::to_string),
+            raw_imdb_id: imdb_id.map(str::to_string),
+            raw_tmdb_id: tmdb_id.map(str::to_string),
+            raw_year: year,
+        }
+    }
+
+    fn work(
+        title: &str,
+        original_title: Option<&str>,
+        year: Option<i32>,
+        tmdb_id: Option<i64>,
+        imdb_id: Option<&str>,
+    ) -> WorkForMatching {
+        WorkForMatching {
+            id: 10,
+            title: title.to_string(),
+            original_title: original_title.map(str::to_string),
+            title_guess: None,
+            release_year: year,
+            tmdb_id,
+            imdb_id: imdb_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn score_prefers_tmdb_id() {
+        let item = import_item(Some("872585"), None, Some(2024), None, None);
+        let work = work("オッペンハイマー", Some("Oppenheimer"), Some(2023), Some(872585), None);
+        let scored = score_single_candidate(&item, &work).unwrap();
+        assert_eq!(scored.score, 100.0);
+        assert_eq!(scored.match_method, "tmdb_id");
+    }
+
+    #[test]
+    fn score_imdb_id_ignores_tt_prefix_difference() {
+        let item = import_item(None, Some("tt15398776"), Some(2024), None, None);
+        let work = work("オッペンハイマー", Some("Oppenheimer"), Some(2023), None, Some("15398776"));
+        let scored = score_single_candidate(&item, &work).unwrap();
+        assert_eq!(scored.score, 98.0);
+        assert_eq!(scored.match_method, "imdb_id");
+    }
+
+    #[test]
+    fn score_title_exact_with_year_bonus() {
+        let item = import_item(None, None, Some(2024), None, Some("Oppenheimer"));
+        let work = work("Oppenheimer", Some("Oppenheimer"), Some(2024), None, None);
+        let scored = score_single_candidate(&item, &work).unwrap();
+        assert!(scored.score >= 90.0);
+        assert_eq!(scored.match_method, "title_exact");
     }
 }

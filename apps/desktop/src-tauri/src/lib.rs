@@ -123,6 +123,12 @@ pub fn run() {
             commands::awards::delete_work_award_result,
             commands::awards::list_award_winning_works,
             commands::award_import::fetch_wikidata_award_items,
+            commands::award_import::match_award_import_items,
+            commands::award_import::list_award_import_items,
+            commands::award_import::select_award_match_candidate,
+            commands::award_import::approve_award_import_item,
+            commands::award_import::reject_award_import_item,
+            commands::award_import::search_works_for_award_match,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineMantis");
