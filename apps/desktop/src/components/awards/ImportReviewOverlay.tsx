@@ -213,47 +213,54 @@ export function ImportReviewOverlay({ open, onClose, jobId, title }: ImportRevie
           {loading ? (
             <div className="p-5 text-sm text-gray-500">読み込み中...</div>
           ) : (
-            <table className="w-full table-fixed border-collapse text-xs">
-              <thead className="sticky top-0 z-10 bg-surface-elevated text-left text-gray-500">
-                <tr>
-                  <th className="w-9 border-b border-subtle px-2 py-2"></th>
-                  <th className="w-20 border-b border-subtle px-2 py-2">状態</th>
-                  <th className="w-16 border-b border-subtle px-2 py-2">年度</th>
-                  <th className="border-b border-subtle px-2 py-2">Wikidataタイトル</th>
-                  <th className="border-b border-subtle px-2 py-2">ローカル候補</th>
-                  <th className="w-20 border-b border-subtle px-2 py-2 text-right">スコア</th>
-                  <th className="w-24 border-b border-subtle px-2 py-2">結果</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredItems.map((item) => (
-                  <tr
-                    key={item.id}
-                    onClick={() => setSelectedId(item.id)}
-                    className={`h-8 cursor-pointer border-b border-subtle/60 hover:bg-surface-hover ${
-                      selectedItem?.id === item.id ? "bg-mantis-950/40 outline outline-1 outline-mantis-800" : ""
-                    } ${item.status === "approved" ? "opacity-60" : ""} ${item.status === "rejected" ? "opacity-40 line-through" : ""}`}
-                  >
-                    <td className="px-2">
-                      <input
-                        type="checkbox"
-                        checked={checkedIds.has(item.id)}
-                        onChange={() => toggleChecked(item.id)}
-                        onClick={(event) => event.stopPropagation()}
-                      />
-                    </td>
-                    <td className="px-2">{statusLabel(item)}</td>
-                    <td className="px-2 text-gray-400">{item.rawYear ?? "-"}</td>
-                    <td className="truncate px-2 font-medium text-gray-200">{displayImportTitle(item)}</td>
-                    <td className="truncate px-2 text-gray-400">
-                      {item.matchedWorkTitle ? `${item.matchedWorkTitle}${item.matchedWorkYear ? ` (${item.matchedWorkYear})` : ""}` : "-"}
-                    </td>
-                    <td className={`px-2 text-right ${scoreClass(item.matchScore)}`}>{scoreLabel(item.matchScore)}</td>
-                    <td className="px-2 text-gray-500">{RESULT_LABELS[item.rawResultType] ?? item.rawResultType}</td>
+            <>
+              <table className="w-full table-fixed border-collapse text-xs">
+                <thead className="sticky top-0 z-10 bg-surface-elevated text-left text-gray-500">
+                  <tr>
+                    <th className="w-9 border-b border-subtle px-2 py-2"></th>
+                    <th className="w-20 border-b border-subtle px-2 py-2">状態</th>
+                    <th className="w-16 border-b border-subtle px-2 py-2">年度</th>
+                    <th className="border-b border-subtle px-2 py-2">Wikidataタイトル</th>
+                    <th className="border-b border-subtle px-2 py-2">ローカル候補</th>
+                    <th className="w-20 border-b border-subtle px-2 py-2 text-right">スコア</th>
+                    <th className="w-24 border-b border-subtle px-2 py-2">結果</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filteredItems.map((item) => (
+                    <tr
+                      key={item.id}
+                      onClick={() => setSelectedId(item.id)}
+                      className={`h-8 cursor-pointer border-b border-subtle/60 hover:bg-surface-hover ${
+                        selectedItem?.id === item.id ? "bg-mantis-950/40 outline outline-1 outline-mantis-800" : ""
+                      } ${item.status === "approved" ? "opacity-60" : ""} ${item.status === "rejected" ? "opacity-40 line-through" : ""}`}
+                    >
+                      <td className="px-2">
+                        <input
+                          type="checkbox"
+                          checked={checkedIds.has(item.id)}
+                          onChange={() => toggleChecked(item.id)}
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                      </td>
+                      <td className="px-2">{statusLabel(item)}</td>
+                      <td className="px-2 text-gray-400">{item.rawYear ?? "-"}</td>
+                      <td className="truncate px-2 font-medium text-gray-200">{displayImportTitle(item)}</td>
+                      <td className="truncate px-2 text-gray-400">
+                        {item.matchedWorkTitle ? `${item.matchedWorkTitle}${item.matchedWorkYear ? ` (${item.matchedWorkYear})` : ""}` : "-"}
+                      </td>
+                      <td className={`px-2 text-right ${scoreClass(item.matchScore)}`}>{scoreLabel(item.matchScore)}</td>
+                      <td className="px-2 text-gray-500">{RESULT_LABELS[item.rawResultType] ?? item.rawResultType}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredItems.length === 0 && (
+                <div className="p-6 text-sm text-gray-500">
+                  この条件で表示できる候補がありません。状態や信頼度フィルタを変えるか、もう一度取得して照合してください。
+                </div>
+              )}
+            </>
           )}
         </div>
 

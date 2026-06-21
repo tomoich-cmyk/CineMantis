@@ -410,11 +410,6 @@ async fn run_import(
             continue;
         }
 
-        if import_item_exists(db, item, award_category_id)? {
-            skipped_items += 1;
-            continue;
-        }
-
         if item.result_type == ResultType::Winner {
             upgrade_pending_nominee_to_winner(db, item, award_category_id)?;
         }
@@ -784,25 +779,6 @@ fn dedupe_winner_priority(items: Vec<WikidataFilmResult>) -> Vec<WikidataFilmRes
             .then_with(|| a.title_en.cmp(&b.title_en))
     });
     values
-}
-
-fn import_item_exists(
-    db: &DbState,
-    item: &WikidataFilmResult,
-    award_category_id: Option<i64>,
-) -> Result<bool> {
-    let conn = db.0.lock().map_err(|err| anyhow!(err.to_string()))?;
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*)
-         FROM award_import_items
-         WHERE raw_film_id = ?1
-           AND COALESCE(matched_award_category_id, -1) = COALESCE(?2, -1)
-           AND COALESCE(raw_year, -1) = COALESCE(?3, -1)
-           AND status <> 'error'",
-        params![item.film_qid, award_category_id, item.year],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
 }
 
 fn upgrade_pending_nominee_to_winner(
