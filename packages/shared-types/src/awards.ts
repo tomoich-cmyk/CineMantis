@@ -78,6 +78,18 @@ export interface AwardCategory {
   note: string | null;
 }
 
+export interface AwardEdition {
+  id: number;
+  awardBodyId: number;
+  year: number;
+  editionNo: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  ceremonyDate: string | null;
+  officialUrl: string | null;
+  note: string | null;
+}
+
 export interface WorkAwardResultView {
   id: number;
   workId: number;

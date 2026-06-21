@@ -116,6 +116,7 @@ pub fn run() {
             commands::awards::list_award_bodies,
             commands::awards::get_award_body_detail,
             commands::awards::list_award_categories,
+            commands::awards::get_or_create_award_edition,
             commands::awards::list_work_awards,
             commands::awards::add_work_award_result,
             commands::awards::update_work_award_result,
