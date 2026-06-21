@@ -8,6 +8,7 @@ import { useOpenWorkFile, useUpdateResumePosition } from "@/hooks/useWatch";
 import { StarRating } from "@/components/common/StarRating";
 import { TagBadge } from "@/components/common/TagBadge";
 import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
+import { WorkAwardsPanel } from "@/components/awards/WorkAwardsPanel";
 
 const ROLE_LABELS: Record<string, string> = {
   director: "監督",
@@ -399,6 +400,8 @@ export function DetailPane() {
         )}
 
         {/* ── 外部情報 / 照合 ── */}
+        <WorkAwardsPanel workId={work.id} defaultYear={work.release_year ?? work.year} />
+
         <div className="px-3 py-2 border-t border-subtle mt-auto">
           {/* 照合状態 */}
           <div className="flex items-center justify-between text-xs mb-1.5">
