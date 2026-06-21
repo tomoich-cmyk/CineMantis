@@ -89,14 +89,14 @@ UPDATE award_categories
 SET wikidata_entity_id = CASE
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Academy Awards') AND name = 'Best Picture' THEN 'Q102427'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Festival de Cannes') AND name = 'Palme d''Or' THEN 'Q179808'
-  WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival') AND name = 'Golden Lion' THEN 'Q11384'
-  WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival') AND name = 'Golden Bear' THEN 'Q183614'
+  WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Venice International Film Festival') AND name = 'Golden Lion' THEN 'Q209459'
+  WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Berlin International Film Festival') AND name = 'Golden Bear' THEN 'Q154590'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'BAFTA Film Awards') AND name = 'Best Film' THEN 'Q139184'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Cesar Awards') AND name = 'Best Film' THEN 'Q645595'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Goya Awards') AND name = 'Best Film' THEN 'Q1467554'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Japan Academy Film Prize') AND name = 'Picture of the Year' THEN 'Q378567'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Sundance Film Festival') AND name = 'Grand Jury Prize: U.S. Dramatic' THEN 'Q15974895'
-  WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards') AND name = 'Best Motion Picture - Drama' THEN 'Q1011573'
+  WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards') AND name = 'Best Motion Picture - Drama' THEN 'Q1011509'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'Golden Globe Awards') AND name = 'Best Motion Picture - Musical or Comedy' THEN 'Q670282'
   WHEN award_body_id = (SELECT id FROM award_bodies WHERE name = 'European Film Awards') AND name = 'European Film' THEN 'Q777921'
   ELSE wikidata_entity_id
