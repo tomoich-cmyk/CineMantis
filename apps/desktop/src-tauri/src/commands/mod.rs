@@ -13,3 +13,4 @@ pub mod bulk;
 pub mod backup;
 pub mod audit;
 pub mod platform;
+pub mod awards;

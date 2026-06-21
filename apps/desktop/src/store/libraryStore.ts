@@ -41,6 +41,10 @@ interface LibraryStore {
   selectedPersonId: number | null;
   setSelectedPersonId: (id: number | null) => void;
 
+  // Awards
+  selectedAwardBodyId: number | null;
+  setSelectedAwardBodyId: (id: number | null) => void;
+
   // Sort
   sortField: SortField;
   sortOrder: SortOrder;
@@ -144,6 +148,7 @@ export const useLibraryStore = create<LibraryStore>()(
           selectedWorkId: null,
           selectedSeriesId: null,
           selectedPersonId: null,
+          selectedAwardBodyId: null,
           isSelectMode: false,
           selectedWorkIds: [],
         }),
@@ -157,6 +162,9 @@ export const useLibraryStore = create<LibraryStore>()(
 
       selectedPersonId: null,
       setSelectedPersonId: (selectedPersonId) => set({ selectedPersonId }),
+
+      selectedAwardBodyId: null,
+      setSelectedAwardBodyId: (selectedAwardBodyId) => set({ selectedAwardBodyId }),
 
       // ── Sort（保存する） ──────────────────────────────────────────────────
       sortField: "title",

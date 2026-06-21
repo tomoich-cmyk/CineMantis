@@ -7,6 +7,7 @@ export type NavSection =
   | "all-drama"
   | "series"
   | "persons"
+  | "awards"
   | "favorites"
   | "unorganized"
   | "needs-attention"

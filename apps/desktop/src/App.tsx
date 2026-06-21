@@ -10,6 +10,8 @@ import { SeriesScreen } from "@/components/series/SeriesScreen";
 import { SeriesDetailScreen } from "@/components/series/SeriesDetailScreen";
 import { PersonsScreen } from "@/components/persons/PersonsScreen";
 import { PersonDetailScreen } from "@/components/persons/PersonDetailScreen";
+import { AwardsScreen } from "@/components/awards/AwardsScreen";
+import { AwardDetailScreen } from "@/components/awards/AwardDetailScreen";
 import { AttentionCenterScreen } from "@/components/attention/AttentionCenterScreen";
 import { BackupScreen } from "@/components/backup/BackupScreen";
 import { AuditScreen } from "@/components/audit/AuditScreen";
@@ -19,48 +21,50 @@ import { useThumbnailEvents } from "@/hooks/useThumbnails";
 import { useMetadataEvents } from "@/hooks/useTmdb";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
-// ユーティリティ画面（TopBar・WorkList 非表示）
 const UTILITY_SECTIONS = new Set(["sources", "settings", "backup", "needs-attention", "audit", "about"]);
 
 export default function App() {
-  const { activeSection, selectedWorkId, selectedSeriesId, selectedPersonId } = useLibraryStore();
+  const {
+    activeSection,
+    selectedWorkId,
+    selectedSeriesId,
+    selectedPersonId,
+    selectedAwardBodyId,
+  } = useLibraryStore();
 
-  // グローバルイベントリスナー・ショートカット
   useThumbnailEvents();
   useMetadataEvents();
   useKeyboardShortcuts();
 
-  const isUtility       = UTILITY_SECTIONS.has(activeSection);
-  const isSeries        = activeSection === "series";
-  const isPersons       = activeSection === "persons";
+  const isUtility = UTILITY_SECTIONS.has(activeSection);
+  const isSeries = activeSection === "series";
+  const isPersons = activeSection === "persons";
+  const isAwards = activeSection === "awards";
+  const isBackup = activeSection === "backup";
   const isNeedsAttention = activeSection === "needs-attention";
-  const isBackup        = activeSection === "backup";
-  const detailOpen      = !isUtility && selectedWorkId !== null;
+  const detailOpen = !isUtility && selectedWorkId !== null;
+  const showTopBar =
+    !isUtility &&
+    !isAwards &&
+    !(isSeries && !selectedSeriesId) &&
+    !(isPersons && !selectedPersonId);
 
   return (
     <AppShell>
       <SideNav />
 
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* TopBar: ユーティリティ・シリーズ一覧・人物一覧では非表示 */}
-        {!isUtility
-          && !(isSeries  && !selectedSeriesId)
-          && !(isPersons && !selectedPersonId)
-          && <TopBar />}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {showTopBar && <TopBar />}
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-          {/* ユーティリティ画面 */}
-          {activeSection === "sources"  && <SourcesScreen />}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {activeSection === "sources" && <SourcesScreen />}
           {activeSection === "settings" && <SettingsScreen />}
-          {isBackup                     && <BackupScreen />}
-          {isNeedsAttention             && <AttentionCenterScreen />}
-          {activeSection === "audit"    && <AuditScreen />}
-          {activeSection === "about"    && <AboutScreen />}
+          {isBackup && <BackupScreen />}
+          {isNeedsAttention && <AttentionCenterScreen />}
+          {activeSection === "audit" && <AuditScreen />}
+          {activeSection === "about" && <AboutScreen />}
 
-          {/* シリーズ一覧 */}
           {isSeries && !selectedSeriesId && <SeriesScreen />}
-
-          {/* シリーズ詳細 */}
           {isSeries && selectedSeriesId !== null && (
             <>
               <SeriesDetailScreen seriesId={selectedSeriesId} />
@@ -68,10 +72,7 @@ export default function App() {
             </>
           )}
 
-          {/* 人物一覧 */}
           {isPersons && !selectedPersonId && <PersonsScreen />}
-
-          {/* 人物詳細 */}
           {isPersons && selectedPersonId !== null && (
             <>
               <PersonDetailScreen personId={selectedPersonId} />
@@ -79,8 +80,12 @@ export default function App() {
             </>
           )}
 
-          {/* 通常のライブラリ（スマートコレクション含む） */}
-          {!isUtility && !isSeries && !isPersons && (
+          {isAwards && !selectedAwardBodyId && <AwardsScreen />}
+          {isAwards && selectedAwardBodyId !== null && (
+            <AwardDetailScreen awardBodyId={selectedAwardBodyId} />
+          )}
+
+          {!isUtility && !isSeries && !isPersons && !isAwards && (
             <>
               <WorkList />
               {detailOpen && <DetailPane />}
@@ -89,7 +94,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* グローバル進捗バー */}
       <ScanProgressBar />
     </AppShell>
   );

@@ -1,0 +1,512 @@
+use crate::db::DbState;
+use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+#[derive(Debug, Serialize)]
+pub struct AwardBodyRow {
+    pub id: i64,
+    pub name: String,
+    pub display_name_ja: String,
+    pub original_name: Option<String>,
+    pub sort_name: Option<String>,
+    pub body_type: String,
+    pub prestige_tier: String,
+    pub award_scope: String,
+    pub country: Option<String>,
+    pub city: Option<String>,
+    pub official_url: Option<String>,
+    pub is_active: bool,
+    pub display_order: i64,
+    pub note: Option<String>,
+    pub registered_work_count: i64,
+    pub winner_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AwardCategoryRow {
+    pub id: i64,
+    pub award_body_id: i64,
+    pub name: String,
+    pub display_name_ja: String,
+    pub original_name: Option<String>,
+    pub category_type: String,
+    pub target_type: String,
+    pub is_top_prize: bool,
+    pub is_major_category: bool,
+    pub display_order: i64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkAwardResultViewRow {
+    pub id: i64,
+    pub work_id: i64,
+    pub person_id: Option<i64>,
+    pub award_body_id: i64,
+    pub award_edition_id: Option<i64>,
+    pub award_category_id: i64,
+    pub result_type: String,
+    pub section_name: Option<String>,
+    pub source_url: Option<String>,
+    pub confidence: Option<f64>,
+    pub is_locked: bool,
+    pub note: Option<String>,
+    pub award_body_name: String,
+    pub award_body_display_name_ja: String,
+    pub prestige_tier: String,
+    pub award_scope: String,
+    pub award_year: Option<i64>,
+    pub category_name: String,
+    pub category_display_name_ja: String,
+    pub person_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AwardWorkRow {
+    pub result_id: i64,
+    pub work_id: i64,
+    pub title: String,
+    pub year: Option<i64>,
+    pub poster_path: Option<String>,
+    pub award_year: Option<i64>,
+    pub category_display_name_ja: String,
+    pub category_name: String,
+    pub result_type: String,
+    pub person_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddWorkAwardResultInput {
+    pub work_id: i64,
+    pub person_id: Option<i64>,
+    pub award_body_id: i64,
+    pub award_edition_id: Option<i64>,
+    pub award_year: Option<i64>,
+    pub award_category_id: i64,
+    pub result_type: String,
+    pub section_name: Option<String>,
+    pub source_url: Option<String>,
+    pub note: Option<String>,
+    pub is_locked: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateWorkAwardResultInput {
+    pub id: i64,
+    pub result_type: Option<String>,
+    pub section_name: Option<String>,
+    pub source_url: Option<String>,
+    pub note: Option<String>,
+    pub is_locked: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwardWorkFilter {
+    pub award_body_id: Option<i64>,
+    pub prestige_tier: Option<String>,
+    pub result_type: Option<String>,
+}
+
+#[tauri::command]
+pub fn list_award_bodies(state: State<'_, DbState>) -> Result<Vec<AwardBodyRow>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT
+             ab.id, ab.name, ab.display_name_ja, ab.original_name, ab.sort_name,
+             ab.body_type, ab.prestige_tier, ab.award_scope, ab.country, ab.city,
+             ab.official_url, ab.is_active, ab.display_order, ab.note,
+             COUNT(DISTINCT war.work_id) AS registered_work_count,
+             SUM(CASE WHEN war.result_type = 'winner' THEN 1 ELSE 0 END) AS winner_count
+         FROM award_bodies ab
+         LEFT JOIN work_award_results war ON war.award_body_id = ab.id
+         WHERE ab.is_active = 1
+         GROUP BY ab.id
+         ORDER BY
+             CASE ab.prestige_tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END,
+             ab.display_order ASC,
+             ab.display_name_ja ASC",
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map([], map_award_body_row)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn get_award_body_detail(
+    state: State<'_, DbState>,
+    award_body_id: i64,
+) -> Result<Option<AwardBodyRow>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT
+             ab.id, ab.name, ab.display_name_ja, ab.original_name, ab.sort_name,
+             ab.body_type, ab.prestige_tier, ab.award_scope, ab.country, ab.city,
+             ab.official_url, ab.is_active, ab.display_order, ab.note,
+             COUNT(DISTINCT war.work_id) AS registered_work_count,
+             SUM(CASE WHEN war.result_type = 'winner' THEN 1 ELSE 0 END) AS winner_count
+         FROM award_bodies ab
+         LEFT JOIN work_award_results war ON war.award_body_id = ab.id
+         WHERE ab.id = ?1
+         GROUP BY ab.id",
+        params![award_body_id],
+        map_award_body_row,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_award_categories(
+    state: State<'_, DbState>,
+    award_body_id: i64,
+) -> Result<Vec<AwardCategoryRow>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT id, award_body_id, name, display_name_ja, original_name,
+                category_type, target_type, is_top_prize, is_major_category,
+                display_order, note
+         FROM award_categories
+         WHERE award_body_id = ?1
+         ORDER BY is_top_prize DESC, display_order ASC, display_name_ja ASC",
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(params![award_body_id], |row| {
+        Ok(AwardCategoryRow {
+            id: row.get(0)?,
+            award_body_id: row.get(1)?,
+            name: row.get(2)?,
+            display_name_ja: row.get(3)?,
+            original_name: row.get(4)?,
+            category_type: row.get(5)?,
+            target_type: row.get(6)?,
+            is_top_prize: row.get::<_, i64>(7)? != 0,
+            is_major_category: row.get::<_, i64>(8)? != 0,
+            display_order: row.get(9)?,
+            note: row.get(10)?,
+        })
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn list_work_awards(
+    state: State<'_, DbState>,
+    work_id: i64,
+) -> Result<Vec<WorkAwardResultViewRow>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    list_work_awards_for_conn(&conn, work_id)
+}
+
+#[tauri::command]
+pub fn add_work_award_result(
+    state: State<'_, DbState>,
+    input: AddWorkAwardResultInput,
+) -> Result<WorkAwardResultViewRow, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let edition_id = match (input.award_edition_id, input.award_year) {
+        (Some(id), _) => Some(id),
+        (None, Some(year)) => Some(upsert_award_edition(&conn, input.award_body_id, year)?),
+        (None, None) => None,
+    };
+
+    if let Some(existing_id) = find_existing_result(
+        &conn,
+        input.work_id,
+        input.person_id,
+        input.award_body_id,
+        edition_id,
+        input.award_category_id,
+        &input.result_type,
+    )? {
+        return get_work_award_result(&conn, existing_id);
+    }
+
+    conn.execute(
+        "INSERT INTO work_award_results
+            (work_id, person_id, award_body_id, award_edition_id, award_category_id,
+             result_type, section_name, source_url, note, is_locked)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            input.work_id,
+            input.person_id,
+            input.award_body_id,
+            edition_id,
+            input.award_category_id,
+            input.result_type,
+            input.section_name,
+            input.source_url,
+            input.note,
+            if input.is_locked.unwrap_or(false) { 1 } else { 0 }
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    get_work_award_result(&conn, conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn update_work_award_result(
+    state: State<'_, DbState>,
+    input: UpdateWorkAwardResultInput,
+) -> Result<WorkAwardResultViewRow, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let locked: bool = conn
+        .query_row(
+            "SELECT is_locked FROM work_award_results WHERE id = ?1",
+            params![input.id],
+            |row| Ok(row.get::<_, i64>(0)? != 0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "award result not found".to_string())?;
+
+    if locked && input.is_locked != Some(false) {
+        return Err("locked award result cannot be edited".to_string());
+    }
+
+    conn.execute(
+        "UPDATE work_award_results
+         SET result_type = COALESCE(?2, result_type),
+             section_name = COALESCE(?3, section_name),
+             source_url = COALESCE(?4, source_url),
+             note = COALESCE(?5, note),
+             is_locked = COALESCE(?6, is_locked)
+         WHERE id = ?1",
+        params![
+            input.id,
+            input.result_type,
+            input.section_name,
+            input.source_url,
+            input.note,
+            input.is_locked.map(|v| if v { 1 } else { 0 }),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    get_work_award_result(&conn, input.id)
+}
+
+#[tauri::command]
+pub fn delete_work_award_result(state: State<'_, DbState>, id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let locked: Option<i64> = conn
+        .query_row(
+            "SELECT is_locked FROM work_award_results WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if locked == Some(1) {
+        return Err("locked award result cannot be deleted".to_string());
+    }
+    conn.execute("DELETE FROM work_award_results WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_award_winning_works(
+    state: State<'_, DbState>,
+    filter: AwardWorkFilter,
+) -> Result<Vec<AwardWorkRow>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT war.id, w.id, w.title, COALESCE(w.release_year, w.year),
+                COALESCE(w.poster_path, w.thumb_path), ae.year,
+                ac.display_name_ja, ac.name, war.result_type, p.name
+         FROM work_award_results war
+         JOIN works w ON w.id = war.work_id
+         JOIN award_bodies ab ON ab.id = war.award_body_id
+         JOIN award_categories ac ON ac.id = war.award_category_id
+         LEFT JOIN award_editions ae ON ae.id = war.award_edition_id
+         LEFT JOIN persons p ON p.id = war.person_id
+         WHERE (?1 IS NULL OR war.award_body_id = ?1)
+           AND (?2 IS NULL OR ab.prestige_tier = ?2)
+           AND (?3 IS NULL OR war.result_type = ?3)
+         ORDER BY ae.year DESC NULLS LAST,
+             CASE war.result_type WHEN 'winner' THEN 0 WHEN 'nominee' THEN 1 ELSE 2 END,
+             ac.display_order ASC,
+             w.title ASC
+         LIMIT 1000",
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(
+        params![filter.award_body_id, filter.prestige_tier, filter.result_type],
+        |row| {
+            Ok(AwardWorkRow {
+                result_id: row.get(0)?,
+                work_id: row.get(1)?,
+                title: row.get(2)?,
+                year: row.get(3)?,
+                poster_path: row.get(4)?,
+                award_year: row.get(5)?,
+                category_display_name_ja: row.get(6)?,
+                category_name: row.get(7)?,
+                result_type: row.get(8)?,
+                person_name: row.get(9)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+fn map_award_body_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AwardBodyRow> {
+    Ok(AwardBodyRow {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        display_name_ja: row.get(2)?,
+        original_name: row.get(3)?,
+        sort_name: row.get(4)?,
+        body_type: row.get(5)?,
+        prestige_tier: row.get(6)?,
+        award_scope: row.get(7)?,
+        country: row.get(8)?,
+        city: row.get(9)?,
+        official_url: row.get(10)?,
+        is_active: row.get::<_, i64>(11)? != 0,
+        display_order: row.get(12)?,
+        note: row.get(13)?,
+        registered_work_count: row.get(14)?,
+        winner_count: row.get::<_, Option<i64>>(15)?.unwrap_or(0),
+    })
+}
+
+fn upsert_award_edition(
+    conn: &rusqlite::Connection,
+    award_body_id: i64,
+    year: i64,
+) -> Result<i64, String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO award_editions (award_body_id, year) VALUES (?1, ?2)",
+        params![award_body_id, year],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT id FROM award_editions WHERE award_body_id = ?1 AND year = ?2",
+        params![award_body_id, year],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn find_existing_result(
+    conn: &rusqlite::Connection,
+    work_id: i64,
+    person_id: Option<i64>,
+    award_body_id: i64,
+    award_edition_id: Option<i64>,
+    award_category_id: i64,
+    result_type: &str,
+) -> Result<Option<i64>, String> {
+    conn.query_row(
+        "SELECT id FROM work_award_results
+         WHERE work_id = ?1
+           AND ((person_id IS NULL AND ?2 IS NULL) OR person_id = ?2)
+           AND award_body_id = ?3
+           AND ((award_edition_id IS NULL AND ?4 IS NULL) OR award_edition_id = ?4)
+           AND award_category_id = ?5
+           AND result_type = ?6
+         LIMIT 1",
+        params![work_id, person_id, award_body_id, award_edition_id, award_category_id, result_type],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+fn list_work_awards_for_conn(
+    conn: &rusqlite::Connection,
+    work_id: i64,
+) -> Result<Vec<WorkAwardResultViewRow>, String> {
+    let mut stmt = conn.prepare(WORK_AWARD_SELECT_WITH_WHERE)
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![work_id], map_work_award_view_row)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+fn get_work_award_result(
+    conn: &rusqlite::Connection,
+    result_id: i64,
+) -> Result<WorkAwardResultViewRow, String> {
+    conn.query_row(WORK_AWARD_SELECT_BY_ID, params![result_id], map_work_award_view_row)
+        .map_err(|e| e.to_string())
+}
+
+const WORK_AWARD_SELECT_WITH_WHERE: &str = "
+SELECT
+  war.id, war.work_id, war.person_id, war.award_body_id, war.award_edition_id,
+  war.award_category_id, war.result_type, war.section_name, war.source_url,
+  war.confidence, war.is_locked, war.note,
+  ab.name, ab.display_name_ja, ab.prestige_tier, ab.award_scope,
+  ae.year,
+  ac.name, ac.display_name_ja,
+  p.name
+FROM work_award_results war
+JOIN award_bodies ab ON ab.id = war.award_body_id
+LEFT JOIN award_editions ae ON ae.id = war.award_edition_id
+JOIN award_categories ac ON ac.id = war.award_category_id
+LEFT JOIN persons p ON p.id = war.person_id
+WHERE war.work_id = ?1
+ORDER BY
+  CASE ab.prestige_tier WHEN 'S' THEN 0 WHEN 'A' THEN 1 WHEN 'B' THEN 2 ELSE 3 END,
+  ae.year DESC NULLS LAST,
+  ac.is_top_prize DESC,
+  ac.display_order ASC";
+
+const WORK_AWARD_SELECT_BY_ID: &str = "
+SELECT
+  war.id, war.work_id, war.person_id, war.award_body_id, war.award_edition_id,
+  war.award_category_id, war.result_type, war.section_name, war.source_url,
+  war.confidence, war.is_locked, war.note,
+  ab.name, ab.display_name_ja, ab.prestige_tier, ab.award_scope,
+  ae.year,
+  ac.name, ac.display_name_ja,
+  p.name
+FROM work_award_results war
+JOIN award_bodies ab ON ab.id = war.award_body_id
+LEFT JOIN award_editions ae ON ae.id = war.award_edition_id
+JOIN award_categories ac ON ac.id = war.award_category_id
+LEFT JOIN persons p ON p.id = war.person_id
+WHERE war.id = ?1";
+
+fn map_work_award_view_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkAwardResultViewRow> {
+    Ok(WorkAwardResultViewRow {
+        id: row.get(0)?,
+        work_id: row.get(1)?,
+        person_id: row.get(2)?,
+        award_body_id: row.get(3)?,
+        award_edition_id: row.get(4)?,
+        award_category_id: row.get(5)?,
+        result_type: row.get(6)?,
+        section_name: row.get(7)?,
+        source_url: row.get(8)?,
+        confidence: row.get(9)?,
+        is_locked: row.get::<_, i64>(10)? != 0,
+        note: row.get(11)?,
+        award_body_name: row.get(12)?,
+        award_body_display_name_ja: row.get(13)?,
+        prestige_tier: row.get(14)?,
+        award_scope: row.get(15)?,
+        award_year: row.get(16)?,
+        category_name: row.get(17)?,
+        category_display_name_ja: row.get(18)?,
+        person_name: row.get(19)?,
+    })
+}

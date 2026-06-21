@@ -112,6 +112,15 @@ pub fn run() {
             commands::tmdb::repair_fetch_all_movie_collections,
             // Platform
             commands::platform::create_desktop_shortcut,
+            // Awards
+            commands::awards::list_award_bodies,
+            commands::awards::get_award_body_detail,
+            commands::awards::list_award_categories,
+            commands::awards::list_work_awards,
+            commands::awards::add_work_award_result,
+            commands::awards::update_work_award_result,
+            commands::awards::delete_work_award_result,
+            commands::awards::list_award_winning_works,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CineMantis");
