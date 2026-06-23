@@ -2,6 +2,7 @@ import { AwardTierBadge, ResultBadge } from "@/components/awards/AwardBadge";
 import { WikidataImportPanel } from "@/components/awards/WikidataImportPanel";
 import { useAwardBodyDetail, useAwardCategories, useAwardWinningWorks } from "@/hooks/useAwards";
 import { useLibraryStore } from "@/store/libraryStore";
+import { useEffect, useMemo, useState } from "react";
 
 function alertClass(status: string): string {
   switch (status) {
@@ -21,8 +22,26 @@ function alertClass(status: string): string {
 export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
   const { data: body, isLoading: bodyLoading } = useAwardBodyDetail(awardBodyId);
   const { data: categories = [] } = useAwardCategories(awardBodyId);
-  const { data: rows = [], isLoading: rowsLoading } = useAwardWinningWorks({ awardBodyId });
+  const [categoryId, setCategoryId] = useState<number | null>(null);
+  const topCategoryId = useMemo(
+    () => (categories.find((category) => category.isTopPrize) ?? categories[0])?.id ?? null,
+    [categories],
+  );
+  const { data: rows = [], isLoading: rowsLoading } = useAwardWinningWorks({
+    awardBodyId,
+    awardCategoryId: categoryId,
+  });
   const { setSelectedAwardBodyId, setActiveSection, setSelectedWorkId } = useLibraryStore();
+
+  useEffect(() => {
+    setCategoryId(null);
+  }, [awardBodyId]);
+
+  useEffect(() => {
+    if (categoryId === null && topCategoryId !== null) {
+      setCategoryId(topCategoryId);
+    }
+  }, [categoryId, topCategoryId]);
 
   function openWork(workId: number) {
     setSelectedWorkId(workId);
@@ -72,7 +91,14 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
       )}
 
       {rowsLoading && <div className="p-5 text-sm text-gray-500">読み込み中...</div>}
-      {body && <WikidataImportPanel awardBody={body} categories={categories} />}
+      {body && (
+        <WikidataImportPanel
+          awardBody={body}
+          categories={categories}
+          categoryId={categoryId}
+          onCategoryChange={setCategoryId}
+        />
+      )}
 
       {!rowsLoading && rows.length === 0 && (
         <div className="p-5 text-sm text-gray-600">この賞に紐づく作品はまだありません。</div>

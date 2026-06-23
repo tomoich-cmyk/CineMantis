@@ -122,6 +122,7 @@ export interface UpdateWorkAwardResultInput {
 
 export interface AwardWorkFilter {
   awardBodyId?: number | null;
+  awardCategoryId?: number | null;
   prestigeTier?: string | null;
   resultType?: AwardResultType | null;
 }

@@ -115,6 +115,7 @@ pub struct UpdateWorkAwardResultInput {
 #[serde(rename_all = "camelCase")]
 pub struct AwardWorkFilter {
     pub award_body_id: Option<i64>,
+    pub award_category_id: Option<i64>,
     pub prestige_tier: Option<String>,
     pub result_type: Option<String>,
 }
@@ -452,8 +453,9 @@ pub fn list_award_winning_works(
          LEFT JOIN award_editions ae ON ae.id = war.award_edition_id
          LEFT JOIN persons p ON p.id = war.person_id
          WHERE (?1 IS NULL OR war.award_body_id = ?1)
-           AND (?2 IS NULL OR ab.prestige_tier = ?2)
-           AND (?3 IS NULL OR war.result_type = ?3)
+           AND (?2 IS NULL OR war.award_category_id = ?2)
+           AND (?3 IS NULL OR ab.prestige_tier = ?3)
+           AND (?4 IS NULL OR war.result_type = ?4)
          ORDER BY ae.year DESC NULLS LAST,
              CASE war.result_type WHEN 'winner' THEN 0 WHEN 'nominee' THEN 1 ELSE 2 END,
              ac.display_order ASC,
@@ -462,7 +464,12 @@ pub fn list_award_winning_works(
     ).map_err(|e| e.to_string())?;
 
     let rows = stmt.query_map(
-        params![filter.award_body_id, filter.prestige_tier, filter.result_type],
+        params![
+            filter.award_body_id,
+            filter.award_category_id,
+            filter.prestige_tier,
+            filter.result_type
+        ],
         |row| {
             Ok(AwardWorkRow {
                 result_id: row.get(0)?,

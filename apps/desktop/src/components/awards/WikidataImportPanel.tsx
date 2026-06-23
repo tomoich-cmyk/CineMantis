@@ -11,11 +11,16 @@ import { ImportReviewOverlay } from "@/components/awards/ImportReviewOverlay";
 interface WikidataImportPanelProps {
   awardBody: AwardBody;
   categories: AwardCategory[];
+  categoryId: number | null;
+  onCategoryChange: (categoryId: number | null) => void;
 }
 
-export function WikidataImportPanel({ awardBody, categories }: WikidataImportPanelProps) {
-  const topCategory = categories.find((category) => category.isTopPrize) ?? categories[0];
-  const [categoryId, setCategoryId] = useState<number | null>(topCategory?.id ?? null);
+export function WikidataImportPanel({
+  awardBody,
+  categories,
+  categoryId,
+  onCategoryChange,
+}: WikidataImportPanelProps) {
   const [year, setYear] = useState("");
   const [job, setJob] = useState<AwardImportJobSummary | null>(null);
   const [matchSummary, setMatchSummary] = useState<AwardImportMatchSummary | null>(null);
@@ -58,7 +63,7 @@ export function WikidataImportPanel({ awardBody, categories }: WikidataImportPan
           <label className="mb-1 block text-[11px] text-gray-500">Wikidata 取込カテゴリ</label>
           <select
             value={categoryId ?? ""}
-            onChange={(event) => setCategoryId(event.target.value ? Number(event.target.value) : null)}
+            onChange={(event) => onCategoryChange(event.target.value ? Number(event.target.value) : null)}
             className="h-8 w-full border border-subtle bg-surface-elevated px-2 text-sm text-gray-200 outline-none focus:border-mantis-600"
           >
             <option value="">賞全体から取得</option>
