@@ -769,17 +769,20 @@ fn extract_qid(uri: &str) -> String {
 }
 
 fn dedupe_winner_priority(items: Vec<WikidataFilmResult>) -> Vec<WikidataFilmResult> {
-    let mut map: HashMap<(String, String, Option<i32>), WikidataFilmResult> = HashMap::new();
+    let mut map: HashMap<(String, String), WikidataFilmResult> = HashMap::new();
 
     for item in items {
         let award_key = item
             .award_qid
             .clone()
             .unwrap_or_else(|| "category".to_string());
-        let key = (item.film_qid.clone(), award_key, item.year);
+        let key = (item.film_qid.clone(), award_key);
 
         match map.get(&key) {
-            Some(existing) if existing.result_type.priority() >= item.result_type.priority() => {}
+            Some(existing)
+                if existing.result_type.priority() > item.result_type.priority()
+                    || (existing.result_type.priority() == item.result_type.priority()
+                        && existing.year >= item.year) => {}
             _ => {
                 map.insert(key, item);
             }
@@ -807,10 +810,9 @@ fn upgrade_pending_nominee_to_winner(
          SET raw_result_type = 'winner'
          WHERE raw_film_id = ?1
            AND COALESCE(matched_award_category_id, -1) = COALESCE(?2, -1)
-           AND COALESCE(raw_year, -1) = COALESCE(?3, -1)
            AND raw_result_type = 'nominee'
            AND status = 'pending'",
-        params![item.film_qid, award_category_id, item.year],
+        params![item.film_qid, award_category_id],
     )?;
     Ok(())
 }
@@ -1422,10 +1424,9 @@ fn approve_award_import_item_inner(
         &tx,
         work_id,
         item.award_body_id,
-        edition_id,
         category_id,
-        &item.raw_result_type,
     )? {
+        reconcile_existing_award_result_local(&tx, existing_id, edition_id, &item)?;
         tx.execute(
             "UPDATE award_import_items
              SET status = 'approved',
@@ -1518,31 +1519,62 @@ fn find_existing_award_result_local(
     conn: &Connection,
     work_id: i64,
     award_body_id: i64,
-    award_edition_id: i64,
     award_category_id: i64,
-    result_type: &str,
 ) -> Result<Option<i64>> {
     conn.query_row(
-        "SELECT id
-         FROM work_award_results
-         WHERE work_id = ?1
-           AND person_id IS NULL
-           AND award_body_id = ?2
-           AND award_edition_id = ?3
-           AND award_category_id = ?4
-           AND result_type = ?5
+        "SELECT war.id
+         FROM work_award_results war
+         JOIN award_editions ae ON ae.id = war.award_edition_id
+         WHERE war.work_id = ?1
+           AND war.person_id IS NULL
+           AND war.award_body_id = ?2
+           AND war.award_category_id = ?3
+         ORDER BY
+           CASE war.result_type WHEN 'winner' THEN 0 WHEN 'nominee' THEN 1 ELSE 2 END,
+           ae.year DESC,
+           war.id ASC
          LIMIT 1",
-        params![
-            work_id,
-            award_body_id,
-            award_edition_id,
-            award_category_id,
-            result_type
-        ],
+        params![work_id, award_body_id, award_category_id],
         |row| row.get(0),
     )
     .optional()
     .map_err(Into::into)
+}
+
+fn reconcile_existing_award_result_local(
+    conn: &Connection,
+    result_id: i64,
+    incoming_edition_id: i64,
+    item: &ImportItemForApproval,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE work_award_results
+         SET award_edition_id = CASE
+               WHEN (
+                 SELECT incoming.year >= existing.year
+                 FROM award_editions incoming
+                 JOIN award_editions existing ON existing.id = work_award_results.award_edition_id
+                 WHERE incoming.id = ?2
+               )
+               THEN ?2
+               ELSE award_edition_id
+             END,
+             result_type = CASE
+               WHEN ?3 = 'winner' OR result_type <> 'winner' THEN ?3
+               ELSE result_type
+             END,
+             source_url = COALESCE(source_url, ?4),
+             confidence = COALESCE(confidence, ?5)
+         WHERE id = ?1",
+        params![
+            result_id,
+            incoming_edition_id,
+            item.raw_result_type,
+            item.raw_source_url,
+            item.match_score
+        ],
+    )?;
+    Ok(())
 }
 
 fn get_work_award_result_local(
@@ -1668,6 +1700,18 @@ mod tests {
         ]);
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].result_type, ResultType::Winner);
+    }
+
+    #[test]
+    fn dedupe_collapses_award_year_duplicates() {
+        let deduped = dedupe_winner_priority(vec![
+            item("Q1", ResultType::Winner, Some(2018)),
+            item("Q1", ResultType::Winner, Some(2019)),
+            item("Q1", ResultType::Nominee, Some(2020)),
+        ]);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].result_type, ResultType::Winner);
+        assert_eq!(deduped[0].year, Some(2019));
     }
 
     #[test]
