@@ -31,6 +31,10 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
     awardBodyId,
     awardCategoryId: categoryId,
   });
+  const visibleRows = useMemo(
+    () => (categoryId === null ? rows : rows.filter((row) => row.awardCategoryId === categoryId)),
+    [categoryId, rows],
+  );
   const { setSelectedAwardBodyId, setActiveSection, setSelectedWorkId } = useLibraryStore();
 
   useEffect(() => {
@@ -100,11 +104,11 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
         />
       )}
 
-      {!rowsLoading && rows.length === 0 && (
+      {!rowsLoading && visibleRows.length === 0 && (
         <div className="p-5 text-sm text-gray-600">この賞に紐づく作品はまだありません。</div>
       )}
 
-      {!rowsLoading && rows.length > 0 && (
+      {!rowsLoading && visibleRows.length > 0 && (
         <div className="h-full overflow-auto">
           <table className="w-full table-fixed border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-surface-elevated text-left text-xs font-medium text-gray-500">
@@ -118,7 +122,7 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {visibleRows.map((row) => (
                 <tr
                   key={row.resultId}
                   onClick={() => openWork(row.workId)}

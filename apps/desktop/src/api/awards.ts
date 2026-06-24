@@ -91,6 +91,7 @@ interface AwardWorkRow {
   year: number | null;
   poster_path: string | null;
   award_year: number | null;
+  award_category_id: number;
   category_display_name_ja: string;
   category_name: string;
   result_type: AwardResultType;
@@ -272,6 +273,7 @@ export async function listAwardWinningWorks(filter: AwardWorkFilter): Promise<Aw
     year: r.year,
     posterPath: r.poster_path,
     awardYear: r.award_year,
+    awardCategoryId: r.award_category_id,
     categoryDisplayNameJa: r.category_display_name_ja,
     categoryName: r.category_name,
     resultType: r.result_type,

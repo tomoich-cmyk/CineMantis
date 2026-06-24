@@ -137,6 +137,7 @@ export interface AwardWork {
   year: number | null;
   posterPath: string | null;
   awardYear: number | null;
+  awardCategoryId: number;
   categoryDisplayNameJa: string;
   categoryName: string;
   resultType: AwardResultType;

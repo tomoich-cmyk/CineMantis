@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AwardBody, AwardCategory } from "@cinemantis/shared-types";
 import {
   fetchWikidataAwardItems,
@@ -27,6 +27,13 @@ export function WikidataImportPanel({
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+
+  useEffect(() => {
+    setJob(null);
+    setMatchSummary(null);
+    setError(null);
+    setReviewOpen(false);
+  }, [awardBody.id, categoryId]);
 
   async function runImport() {
     setIsRunning(true);
@@ -63,7 +70,9 @@ export function WikidataImportPanel({
           <label className="mb-1 block text-[11px] text-gray-500">Wikidata 取込カテゴリ</label>
           <select
             value={categoryId ?? ""}
-            onChange={(event) => onCategoryChange(event.target.value ? Number(event.target.value) : null)}
+            onChange={(event) => {
+              onCategoryChange(event.target.value ? Number(event.target.value) : null);
+            }}
             className="h-8 w-full border border-subtle bg-surface-elevated px-2 text-sm text-gray-200 outline-none focus:border-mantis-600"
           >
             <option value="">賞全体から取得</option>

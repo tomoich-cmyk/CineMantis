@@ -78,6 +78,7 @@ pub struct AwardWorkRow {
     pub year: Option<i64>,
     pub poster_path: Option<String>,
     pub award_year: Option<i64>,
+    pub award_category_id: i64,
     pub category_display_name_ja: String,
     pub category_name: String,
     pub result_type: String,
@@ -445,7 +446,7 @@ pub fn list_award_winning_works(
     let mut stmt = conn.prepare(
         "SELECT war.id, w.id, w.title, COALESCE(w.release_year, w.year),
                 COALESCE(w.poster_path, w.thumb_path), ae.year,
-                ac.display_name_ja, ac.name, war.result_type, p.name
+                war.award_category_id, ac.display_name_ja, ac.name, war.result_type, p.name
          FROM work_award_results war
          JOIN works w ON w.id = war.work_id
          JOIN award_bodies ab ON ab.id = war.award_body_id
@@ -478,10 +479,11 @@ pub fn list_award_winning_works(
                 year: row.get(3)?,
                 poster_path: row.get(4)?,
                 award_year: row.get(5)?,
-                category_display_name_ja: row.get(6)?,
-                category_name: row.get(7)?,
-                result_type: row.get(8)?,
-                person_name: row.get(9)?,
+                award_category_id: row.get(6)?,
+                category_display_name_ja: row.get(7)?,
+                category_name: row.get(8)?,
+                result_type: row.get(9)?,
+                person_name: row.get(10)?,
             })
         },
     )
