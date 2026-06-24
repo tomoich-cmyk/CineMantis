@@ -453,14 +453,19 @@ fn resolve_wikidata_ids(
         .ok_or_else(|| anyhow!("award_body の wikidata_entity_id が未設定です"))?;
 
     let category_qid = if let Some(category_id) = award_category_id {
-        conn.query_row(
+        let qid = conn.query_row(
             "SELECT wikidata_entity_id FROM award_categories WHERE id = ?1 AND award_body_id = ?2",
             params![category_id, award_body_id],
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()?
         .flatten()
-        .filter(|qid| !qid.trim().is_empty())
+        .filter(|qid| !qid.trim().is_empty());
+
+        if qid.is_none() {
+            return Err(anyhow!("selected award category has no Wikidata ID"));
+        }
+        qid
     } else {
         None
     };
@@ -613,6 +618,7 @@ fn build_sparql(ids: &WikidataIds, year: Option<i32>) -> String {
 }
 
 fn build_sparql_category(category_qid: &str, year: Option<i32>) -> String {
+    let award_values = wikidata_values(category_qid);
     let year_filter = year
         .map(|year| format!("FILTER(!BOUND(?date) || YEAR(?date) = {year})"))
         .unwrap_or_default();
@@ -638,7 +644,7 @@ WHERE {{
     (p:P166  ps:P166  "winner")
     (p:P1411 ps:P1411 "nominee")
   }}
-  BIND(wd:{category_qid} AS ?award)
+  VALUES ?award {{ {award_values} }}
   {{
     ?film wdt:P31/wdt:P279* wd:Q11424 .
     ?film ?prop ?stmt .
@@ -667,6 +673,21 @@ GROUP BY ?film ?award ?resultType ?year ?imdbId ?tmdbId
 ORDER BY DESC(?year) ?resultType
 "#
     )
+}
+
+fn wikidata_values(raw: &str) -> String {
+    let values: Vec<String> = raw
+        .split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+        .map(str::trim)
+        .filter(|qid| qid.starts_with('Q') && qid[1..].chars().all(|ch| ch.is_ascii_digit()))
+        .map(|qid| format!("wd:{qid}"))
+        .collect();
+
+    if values.is_empty() {
+        "wd:Q0".to_string()
+    } else {
+        values.join(" ")
+    }
 }
 
 fn build_sparql_body(body_qid: &str, year: Option<i32>) -> String {
@@ -1722,7 +1743,7 @@ mod tests {
         assert!(query.contains("p:P1411"));
         assert!(query.contains("wd:Q11424"));
         assert!(query.contains("pq:P1686"));
-        assert!(query.contains("BIND(wd:Q102427 AS ?award)"));
+        assert!(query.contains("VALUES ?award { wd:Q102427 }"));
         assert!(query.contains("YEAR(?date) = 2026"));
     }
 
