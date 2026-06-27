@@ -27,14 +27,6 @@ const CATEGORIES: AttentionCategory[] = [
     action: "自動照合 or 候補を手動選択",
   },
   {
-    key: "no_poster",
-    label: "ポスターなし",
-    icon: "🖼",
-    description: "サムネイル・ポスター画像が未生成",
-    count: (s) => s?.no_poster ?? 0,
-    action: "サムネ生成 or メタデータ照合で取得",
-  },
-  {
     key: "missing_meta",
     label: "メタ不足",
     icon: "📋",
@@ -57,14 +49,6 @@ const CATEGORIES: AttentionCategory[] = [
     description: "登録済みファイルが見つからない",
     count: (s) => s?.file_missing ?? 0,
     action: "ソースを再スキャンまたはファイル確認",
-  },
-  {
-    key: "source_offline",
-    label: "ソースOFF",
-    icon: "📴",
-    description: "オフラインのソース経由の作品",
-    count: (s) => s?.source_offline ?? 0,
-    action: "NAS/ドライブの接続を確認",
   },
 ];
 
@@ -129,7 +113,7 @@ export function AttentionCenterScreen() {
           </div>
           {!statsLoading && totalIssues > 0 && (
             <span className="text-xs px-2.5 py-1 bg-yellow-900/30 border border-yellow-800/60 text-yellow-500 rounded-full">
-              {totalIssues} 件の要確認
+              {totalIssues} 件の要確認項目
             </span>
           )}
           {!statsLoading && totalIssues === 0 && (

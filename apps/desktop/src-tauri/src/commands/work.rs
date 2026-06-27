@@ -154,6 +154,7 @@ pub fn list_works(
 
     // 要確認フィルタ (allowlist 検証してそのまま埋め込み)
     let attention_filter_sql: &str = match attention_filter.as_deref() {
+        Some("unmatched")    => "AND COALESCE(w.match_status, 'unmatched') = 'unmatched'",
         Some("no_poster")    => "AND w.poster_path IS NULL AND w.thumb_path IS NULL",
         Some("missing_meta") => "AND (w.year IS NULL OR w.genres_json IS NULL)",
         Some("unorganized") => "AND (COALESCE(w.release_year, w.year) IS NULL OR COALESCE(w.country_type, 'unknown') = 'unknown' OR NULLIF(TRIM(COALESCE(w.reading, '')), '') IS NULL OR COALESCE(w.media_category, 'other') = 'other' OR NULLIF(TRIM(COALESCE(w.title, '')), '') IS NULL)",

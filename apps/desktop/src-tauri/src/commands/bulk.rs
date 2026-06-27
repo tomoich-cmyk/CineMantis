@@ -7,11 +7,11 @@ use tauri::State;
 #[derive(Debug, Serialize)]
 pub struct AttentionStats {
     pub unmatched: i64,      // 照合未完了
-    pub no_poster: i64,      // ポスター/サムネなし
+    pub no_poster: i64,      // legacy: ポスター/サムネなし
     pub missing_meta: i64,   // year or genres が空
     pub no_persons: i64,     // 人物情報なし
     pub file_missing: i64,   // ファイルが見つからない
-    pub source_offline: i64, // ソースがオフライン
+    pub source_offline: i64, // legacy: ソースがオフライン
 }
 
 #[tauri::command]
@@ -21,12 +21,15 @@ pub fn get_attention_stats(state: State<DbState>) -> Result<AttentionStats, Stri
     let row: AttentionStats = conn
         .query_row(
             "SELECT
-               SUM(CASE WHEN w.match_status = 'unmatched' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN COALESCE(w.match_status, 'unmatched') = 'unmatched' THEN 1 ELSE 0 END),
                SUM(CASE WHEN w.poster_path IS NULL AND w.thumb_path IS NULL THEN 1 ELSE 0 END),
                SUM(CASE WHEN w.year IS NULL OR w.genres_json IS NULL THEN 1 ELSE 0 END),
                (SELECT COUNT(DISTINCT w2.id) FROM works w2
                 WHERE NOT EXISTS (SELECT 1 FROM work_persons wp WHERE wp.work_id = w2.id)),
-               (SELECT COUNT(*) FROM files WHERE availability_status = 'missing'),
+               (SELECT COUNT(DISTINCT wpt_missing.work_id)
+                  FROM work_parts wpt_missing
+                  JOIN files ff_missing ON ff_missing.id = wpt_missing.file_id
+                 WHERE ff_missing.availability_status = 'missing'),
                (SELECT COUNT(*) FROM sources WHERE status = 'offline')
              FROM works w",
             [],
