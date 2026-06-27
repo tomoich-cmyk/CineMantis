@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { clsx } from "clsx";
-import { useAttentionStats } from "@/hooks/useBulk";
+import { bulkKeys, useAttentionStats } from "@/hooks/useBulk";
+import { useAutoMatchWork, useRefreshTmdbMetadata } from "@/hooks/useTmdb";
+import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
 import { listWorks } from "@/api/works";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { WorkSummary } from "@cinemantis/shared-types";
 import { useLibraryStore } from "@/store/libraryStore";
 
@@ -67,11 +69,24 @@ function useAttentionWorks(filter: string | null) {
   });
 }
 
-function WorkMiniCard({ work, onSelect }: { work: WorkSummary; onSelect: () => void }) {
+function WorkMiniCard({
+  work,
+  active,
+  onSelect,
+}: {
+  work: WorkSummary;
+  active: boolean;
+  onSelect: () => void;
+}) {
   return (
     <button
       onClick={onSelect}
-      className="flex items-center gap-2 px-3 py-2 rounded bg-surface hover:bg-surface-hover transition-colors text-left w-full border border-subtle hover:border-gray-600"
+      className={clsx(
+        "flex items-center gap-2 px-3 py-2 rounded transition-colors text-left w-full border",
+        active
+          ? "bg-yellow-900/20 border-yellow-700/70"
+          : "bg-surface border-subtle hover:bg-surface-hover hover:border-gray-600"
+      )}
     >
       <span className="text-lg">
         {work.matchStatus === "unmatched" ? "🔍" : "🎬"}
@@ -89,15 +104,47 @@ function WorkMiniCard({ work, onSelect }: { work: WorkSummary; onSelect: () => v
 export function AttentionCenterScreen() {
   const { data: stats, isLoading: statsLoading } = useAttentionStats();
   const [selectedFilter, setSelectedFilter] = useState<string | null>(null);
+  const [selectedWorkId, setSelectedWorkIdLocal] = useState<number | null>(null);
+  const [showCandidates, setShowCandidates] = useState(false);
   const { data: filteredWorks = [], isLoading: worksLoading } = useAttentionWorks(selectedFilter);
+  const qc = useQueryClient();
+  const autoMatch = useAutoMatchWork();
+  const refreshMeta = useRefreshTmdbMetadata();
   const { setSelectedWorkId, setActiveSection } = useLibraryStore();
 
   const selectedCategory = CATEGORIES.find((c) => c.key === selectedFilter);
+  const selectedWork = filteredWorks.find((work) => work.id === selectedWorkId) ?? null;
   const totalIssues = CATEGORIES.reduce((sum, c) => sum + c.count(stats), 0);
+  const isMatched = selectedWork
+    ? ["auto", "manual", "locked", "matched"].includes(selectedWork.matchStatus)
+    : false;
+
+  function refreshAttentionQueries() {
+    qc.invalidateQueries({ queryKey: ["attention-works"] });
+    qc.invalidateQueries({ queryKey: bulkKeys.attentionStats });
+  }
 
   function openWork(workId: number) {
     setSelectedWorkId(workId);
     setActiveSection("all-movies");
+  }
+
+  function selectFilter(key: string) {
+    setSelectedFilter((current) => (current === key ? null : key));
+    setSelectedWorkIdLocal(null);
+    setShowCandidates(false);
+  }
+
+  function runAutoMatch(workId: number) {
+    autoMatch.mutate(workId, {
+      onSuccess: () => refreshAttentionQueries(),
+    });
+  }
+
+  function runRefreshMetadata(workId: number) {
+    refreshMeta.mutate(workId, {
+      onSuccess: () => refreshAttentionQueries(),
+    });
   }
 
   return (
@@ -131,7 +178,7 @@ export function AttentionCenterScreen() {
             return (
               <button
                 key={cat.key}
-                onClick={() => setSelectedFilter(isActive ? null : cat.key)}
+                onClick={() => selectFilter(cat.key)}
                 disabled={count === 0 && !isActive}
                 className={clsx(
                   "flex items-start gap-3 p-4 rounded border text-left transition-all",
@@ -171,7 +218,11 @@ export function AttentionCenterScreen() {
                 {selectedCategory?.icon} {selectedCategory?.label} — {filteredWorks.length} 件
               </span>
               <button
-                onClick={() => setSelectedFilter(null)}
+                onClick={() => {
+                  setSelectedFilter(null);
+                  setSelectedWorkIdLocal(null);
+                  setShowCandidates(false);
+                }}
                 className="text-gray-600 hover:text-gray-300 text-lg transition-colors"
               >
                 ×
@@ -190,14 +241,84 @@ export function AttentionCenterScreen() {
                   <WorkMiniCard
                     key={work.id}
                     work={work}
-                    onSelect={() => openWork(work.id)}
+                    active={selectedWorkId === work.id}
+                    onSelect={() => setSelectedWorkIdLocal(work.id)}
                   />
                 ))}
+              </div>
+            )}
+
+            {selectedWork && (
+              <div className="border-t border-subtle bg-surface-elevated px-4 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">選択中</p>
+                    <p className="truncate text-sm font-semibold text-gray-100">
+                      {selectedWork.title}
+                    </p>
+                    <p className="mt-0.5 text-xs text-gray-600">
+                      {selectedWork.year ?? "年不明"} / {selectedWork.matchStatus}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      onClick={() => setShowCandidates(true)}
+                      className="rounded border border-mantis-700 bg-mantis-900/30 px-3 py-1.5 text-xs text-mantis-300 hover:bg-mantis-800/40"
+                    >
+                      候補を探す
+                    </button>
+                    {!isMatched && (
+                      <button
+                        onClick={() => runAutoMatch(selectedWork.id)}
+                        disabled={autoMatch.isPending}
+                        className="rounded border border-yellow-800 bg-yellow-900/20 px-3 py-1.5 text-xs text-yellow-300 hover:bg-yellow-900/35 disabled:opacity-40"
+                      >
+                        {autoMatch.isPending ? "照合中…" : "自動照合"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => runRefreshMetadata(selectedWork.id)}
+                      disabled={!isMatched || refreshMeta.isPending}
+                      title={!isMatched ? "先にTMDb照合してください" : undefined}
+                      className="rounded border border-subtle px-3 py-1.5 text-xs text-gray-300 hover:border-gray-600 disabled:opacity-35"
+                    >
+                      {refreshMeta.isPending ? "取得中…" : "メタデータ再取得"}
+                    </button>
+                    <button
+                      onClick={() => openWork(selectedWork.id)}
+                      className="rounded border border-subtle px-3 py-1.5 text-xs text-gray-500 hover:text-gray-200"
+                    >
+                      ライブラリで開く
+                    </button>
+                  </div>
+                </div>
+                {autoMatch.error && (
+                  <p className="mt-2 text-xs text-red-400">
+                    自動照合に失敗しました: {String(autoMatch.error)}
+                  </p>
+                )}
+                {refreshMeta.error && (
+                  <p className="mt-2 text-xs text-red-400">
+                    メタデータ再取得に失敗しました: {String(refreshMeta.error)}
+                  </p>
+                )}
               </div>
             )}
           </div>
         )}
       </div>
+
+      {selectedWork && showCandidates && (
+        <CandidateDialog
+          workId={selectedWork.id}
+          workTitle={selectedWork.title}
+          isLocked={selectedWork.matchStatus === "locked"}
+          onClose={() => {
+            setShowCandidates(false);
+            refreshAttentionQueries();
+          }}
+        />
+      )}
     </div>
   );
 }
