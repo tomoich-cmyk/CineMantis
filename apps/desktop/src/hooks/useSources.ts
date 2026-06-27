@@ -28,6 +28,7 @@ export function useScanSource() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: sourceKeys.all });
       qc.invalidateQueries({ queryKey: ["works"] });
+      qc.invalidateQueries({ queryKey: ["syncOutbox"] });
     },
     onError: (err: unknown) => {
       console.error("Scan failed:", err);
@@ -42,6 +43,7 @@ export function useDeleteSource() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: sourceKeys.all });
       qc.invalidateQueries({ queryKey: ["works"] });
+      qc.invalidateQueries({ queryKey: ["syncOutbox"] });
     },
   });
 }
@@ -53,6 +55,7 @@ export function useDeduplicateLibraryFiles() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: sourceKeys.all });
       qc.invalidateQueries({ queryKey: ["works"] });
+      qc.invalidateQueries({ queryKey: ["syncOutbox"] });
     },
   });
 }

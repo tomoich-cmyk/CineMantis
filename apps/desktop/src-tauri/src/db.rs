@@ -33,6 +33,7 @@ const MIGRATION_AWARD_FESTIVAL_QID_FIXES: &str = include_str!("../../../../packa
 const MIGRATION_AWARD_PERSON_CATEGORY_QIDS: &str = include_str!("../../../../packages/db/migrations/014_award_person_category_qids.sql");
 const MIGRATION_ACADEMY_CATEGORY_QIDS: &str = include_str!("../../../../packages/db/migrations/016_academy_category_qids.sql");
 const MIGRATION_AWARD_CATEGORY_QID_EXPANSION: &str = include_str!("../../../../packages/db/migrations/017_award_category_qid_expansion.sql");
+const MIGRATION_SYNC_OUTBOX: &str = include_str!("../../../../packages/db/migrations/018_sync_outbox.sql");
 
 /// マイグレーション適用（起動時に一度だけ呼ぶ）
 pub fn init(path: &Path) -> Result<()> {
@@ -58,6 +59,7 @@ pub fn init(path: &Path) -> Result<()> {
     conn.execute_batch(MIGRATION_AWARD_PERSON_CATEGORY_QIDS)?;
     conn.execute_batch(MIGRATION_ACADEMY_CATEGORY_QIDS)?;
     conn.execute_batch(MIGRATION_AWARD_CATEGORY_QID_EXPANSION)?;
+    conn.execute_batch(MIGRATION_SYNC_OUTBOX)?;
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?

@@ -209,6 +209,10 @@ pub async fn scan_source(
         return Err(format!("Root path does not exist: {}", root_path));
     }
 
+    // オンライン復帰時に、このソースに紐づく保留中の実ファイル操作を先に反映する。
+    // 同期失敗はキューに残し、スキャン自体は継続する。
+    let _ = crate::commands::sync::process_sync_outbox_inner(&state, Some(source_id));
+
     // 2. Walk files
     let _ = window.emit(
         "scan:progress",

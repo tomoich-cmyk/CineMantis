@@ -135,6 +135,7 @@ export function useDeleteWorkFiles() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workKeys.all });
       qc.invalidateQueries({ queryKey: workKeys.filterOptions });
+      qc.invalidateQueries({ queryKey: ["syncOutbox"] });
     },
   });
 }

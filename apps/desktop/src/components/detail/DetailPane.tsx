@@ -130,7 +130,14 @@ export function DetailPane() {
     );
     if (!ok) return;
     deleteFiles(work.id, {
-      onSuccess: () => setSelectedWorkId(null),
+      onSuccess: (result) => {
+        if (result.queued_files > 0) {
+          window.alert(
+            `${result.queued_files}件の実ファイル削除を同期待ちに登録しました。\nNASがオンラインになったら、ソース管理から同期を実行できます。`,
+          );
+        }
+        setSelectedWorkId(null);
+      },
       onError: (error) => window.alert(String(error)),
     });
   }

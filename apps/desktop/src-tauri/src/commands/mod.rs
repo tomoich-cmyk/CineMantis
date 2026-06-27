@@ -15,3 +15,4 @@ pub mod audit;
 pub mod platform;
 pub mod awards;
 pub mod award_import;
+pub mod sync;

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSourceList, useAddSource, useDeduplicateLibraryFiles, useDeleteSource, useScanSource } from "@/hooks/useSources";
+import { useProcessSyncOutbox, useSyncOutboxList } from "@/hooks/useSyncOutbox";
 import type { Source } from "@cinemantis/shared-types";
 import { clsx } from "clsx";
 
@@ -187,6 +188,9 @@ export function SourcesScreen() {
   const [showAdd, setShowAdd] = useState(false);
   const { mutate: deleteSource, variables: deletingId, isPending: deleting } = useDeleteSource();
   const { mutate: deduplicate, data: deduplicateResult, isPending: deduplicating, error: deduplicateError } = useDeduplicateLibraryFiles();
+  const { data: syncItems = [] } = useSyncOutboxList();
+  const { mutate: processSync, data: syncResult, isPending: syncing, error: syncError } = useProcessSyncOutbox();
+  const pendingDeletes = syncItems.filter((item) => item.action_type === "delete_file");
 
   function confirmDelete(source: Source) {
     const ok = window.confirm(
@@ -207,6 +211,19 @@ export function SourcesScreen() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => processSync(null)}
+              disabled={!pendingDeletes.length || syncing}
+              className={clsx(
+                "px-3 py-1.5 text-sm border transition-colors",
+                pendingDeletes.length
+                  ? "border-yellow-700 text-yellow-300 hover:bg-yellow-900/20"
+                  : "border-gray-800 text-gray-700 cursor-not-allowed",
+              )}
+              title="NAS復帰後に保留中の実ファイル操作を反映"
+            >
+              {syncing ? "同期中…" : `同期待ち ${pendingDeletes.length} 件`}
+            </button>
             <button
               onClick={() => deduplicate()}
               disabled={deduplicating}
@@ -241,6 +258,27 @@ export function SourcesScreen() {
           </div>
         )}
         {deduplicateError && <div className="text-xs text-red-400">重複整理失敗: {String(deduplicateError)}</div>}
+        {syncResult && (
+          <div className="text-xs text-mantis-400 bg-mantis-900/20 border border-mantis-800 rounded px-3 py-2">
+            同期完了 — 削除: {syncResult.deleted} 件 / 既に存在なし: {syncResult.already_missing} 件 / オフライン: {syncResult.skipped_offline} 件 / 失敗: {syncResult.failed} 件
+          </div>
+        )}
+        {syncError && <div className="text-xs text-red-400">同期失敗: {String(syncError)}</div>}
+        {pendingDeletes.length > 0 && (
+          <div className="rounded border border-yellow-900/50 bg-yellow-950/10 p-3 text-xs text-yellow-200/80">
+            <div className="mb-2 font-medium text-yellow-300">
+              NAS復帰待ちの実ファイル削除が {pendingDeletes.length} 件あります
+            </div>
+            <div className="grid gap-1 text-gray-500">
+              {pendingDeletes.slice(0, 4).map((item) => (
+                <div key={item.id} className="truncate">
+                  {item.work_title ?? item.target_path}
+                </div>
+              ))}
+              {pendingDeletes.length > 4 && <div>ほか {pendingDeletes.length - 4} 件</div>}
+            </div>
+          </div>
+        )}
 
         {/* Source list */}
         {isLoading ? (
@@ -275,7 +313,7 @@ export function SourcesScreen() {
         <div className="text-xs text-gray-700 border border-surface-border rounded p-3 leading-relaxed">
           <strong className="text-gray-500">NASオフライン耐性：</strong>
           NASがオフラインでも、既に登録されている作品はライブラリに表示され続けます。
-          評価・タグ・メモは通常通り編集できます。
+          評価などのDBメタデータは通常通り編集できます。オフライン中の実ファイル削除は同期待ちに入り、NAS復帰後に反映できます。
         </div>
       </div>
 

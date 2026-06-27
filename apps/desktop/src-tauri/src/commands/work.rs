@@ -92,6 +92,13 @@ pub struct UpdateWorkLibraryPayload {
     pub genre_text: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DeleteWorkFilesResult {
+    pub removed_files: usize,
+    pub queued_files: usize,
+    pub missing_files: usize,
+}
+
 // ─── list_works ───────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -538,40 +545,62 @@ pub fn delete_work(
 pub fn delete_work_files(
     state: State<'_, DbState>,
     work_id: i64,
-) -> Result<(), String> {
+) -> Result<DeleteWorkFilesResult, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
-    let files: Vec<(i64, String, String)> = {
+    let files: Vec<(i64, i64, String, String, String)> = {
         let mut stmt = conn
             .prepare(
-                "SELECT f.id, f.file_path, s.root_path
+                "SELECT f.id, f.source_id, f.file_path, s.root_path, w.title
                  FROM work_parts wp
                  JOIN files f ON f.id = wp.file_id
                  JOIN sources s ON s.id = f.source_id
+                 JOIN works w ON w.id = wp.work_id
                  WHERE wp.work_id = ?1",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt.query_map(rusqlite::params![work_id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
         })
         .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?
     };
 
-    for (_, file_path, root_path) in &files {
+    let mut result = DeleteWorkFilesResult {
+        removed_files: 0,
+        queued_files: 0,
+        missing_files: 0,
+    };
+
+    for (_, source_id, file_path, root_path, work_title) in &files {
+        let root = std::path::PathBuf::from(root_path);
         let mut path = std::path::PathBuf::from(file_path);
         if !path.is_absolute() {
-            path = std::path::PathBuf::from(root_path).join(file_path);
+            path = root.join(file_path);
         }
-        if !path.exists() {
+        if path.exists() {
+            if !path.is_file() {
+                return Err(format!("削除対象がファイルではありません: {}", path.display()));
+            }
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("ファイル削除に失敗しました: {} ({})", path.display(), e))?;
+            result.removed_files += 1;
             continue;
         }
-        if !path.is_file() {
-            return Err(format!("削除対象がファイルではありません: {}", path.display()));
+
+        if !root.exists() {
+            crate::commands::sync::enqueue_file_delete(
+                &conn,
+                Some(*source_id),
+                work_id,
+                work_title,
+                &path.to_string_lossy(),
+            )?;
+            result.queued_files += 1;
+        } else {
+            result.missing_files += 1;
         }
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("ファイル削除に失敗しました: {} ({})", path.display(), e))?;
     }
 
     conn.execute("DELETE FROM work_parts   WHERE work_id = ?1", rusqlite::params![work_id])
@@ -587,7 +616,7 @@ pub fn delete_work_files(
     conn.execute("DELETE FROM works WHERE id = ?1", rusqlite::params![work_id])
         .map_err(|e| e.to_string())?;
 
-    for (file_id, _, _) in files {
+    for (file_id, _, _, _, _) in files {
         conn.execute(
             "DELETE FROM files
              WHERE id = ?1
@@ -597,5 +626,5 @@ pub fn delete_work_files(
         .map_err(|e| e.to_string())?;
     }
 
-    Ok(())
+    Ok(result)
 }

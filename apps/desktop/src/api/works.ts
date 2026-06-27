@@ -208,6 +208,12 @@ export async function updateWorkLibraryFields(
   return invoke("update_work_library_fields", { payload });
 }
 
-export async function deleteWorkFiles(workId: number): Promise<void> {
-  return invoke("delete_work_files", { workId });
+export interface DeleteWorkFilesResult {
+  removed_files: number;
+  queued_files: number;
+  missing_files: number;
+}
+
+export async function deleteWorkFiles(workId: number): Promise<DeleteWorkFilesResult> {
+  return invoke<DeleteWorkFilesResult>("delete_work_files", { workId });
 }
