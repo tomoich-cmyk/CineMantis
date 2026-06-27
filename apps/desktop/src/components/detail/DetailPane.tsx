@@ -151,6 +151,7 @@ export function DetailPane() {
   const isMatched = ["auto", "manual", "locked", "matched"].includes(work.match_status);
   const isPending = work.match_status === "pending";
   const isLocked  = work.match_status === "locked";
+  const artworkPath = isMatched ? (work.poster_path ?? work.thumb_path) : null;
 
   // 再生進捗
   const progress =
@@ -176,7 +177,7 @@ export function DetailPane() {
         {/* ── ポスター / サムネイル ── */}
         <div className="mx-auto mt-2 w-32 aspect-[2/3] bg-surface rounded overflow-hidden flex-shrink-0 relative group/poster">
           <WorkImage
-            src={work.poster_path ?? work.thumb_path}
+            src={artworkPath}
             alt={work.title}
           />
           {/* ポスター上の ▶ オーバーレイ */}

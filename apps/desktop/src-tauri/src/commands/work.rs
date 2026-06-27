@@ -207,7 +207,12 @@ pub fn list_works(
                   JOIN files f ON f.id = wp_size.file_id
                   WHERE wp_size.work_id = w.id
                 ),
-                COALESCE(w.poster_path, w.thumb_path),
+                CASE
+                  WHEN w.tmdb_id IS NOT NULL
+                   AND w.match_status IN ('auto', 'manual', 'locked', 'matched')
+                  THEN COALESCE(w.poster_path, w.thumb_path)
+                  ELSE NULL
+                END,
                 us.user_rating, COALESCE(us.my_rating, us.user_rating), COALESCE(us.play_count, 0),
                 COALESCE(us.watch_status, 'unwatched'),
                 COALESCE(us.watched_status, CASE WHEN us.watch_status = 'skipped' THEN 'abandoned' ELSE us.watch_status END, 'unwatched'),

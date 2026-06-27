@@ -122,34 +122,24 @@ pub async fn generate_thumbnails_batch_inner(
         let out_path = cache.thumb_path(work_id);
         let out_str = out_path.to_string_lossy().to_string();
 
-        if out_path.exists() {
+        let offset = calc_offset(duration_sec, 0.30);
+        let ok = run_ffmpeg(&file_path, offset, &out_str)
+            || run_ffmpeg(&file_path, calc_offset(duration_sec, 0.10), &out_str);
+
+        if ok {
             if let Ok(conn) = db.0.lock() {
                 let _ = conn.execute(
-                    "UPDATE works SET thumb_path = ?1 WHERE id = ?2 AND (thumb_path IS NULL OR thumb_path = '')",
+                    "UPDATE works SET thumb_path = ?1 WHERE id = ?2",
                     rusqlite::params![out_str, work_id],
                 );
             }
+            let _ = app.emit("thumb:generated", ThumbGenerated {
+                work_id,
+                thumb_path: out_str,
+            });
             done += 1;
         } else {
-            let offset = calc_offset(duration_sec, 0.30);
-            let ok = run_ffmpeg(&file_path, offset, &out_str)
-                || run_ffmpeg(&file_path, calc_offset(duration_sec, 0.10), &out_str);
-
-            if ok {
-                if let Ok(conn) = db.0.lock() {
-                    let _ = conn.execute(
-                        "UPDATE works SET thumb_path = ?1 WHERE id = ?2",
-                        rusqlite::params![out_str, work_id],
-                    );
-                }
-                let _ = app.emit("thumb:generated", ThumbGenerated {
-                    work_id,
-                    thumb_path: out_str,
-                });
-                done += 1;
-            } else {
-                failed += 1;
-            }
+            failed += 1;
         }
 
         let _ = app.emit("thumb:batch_progress", ThumbBatchProgress { total, done, failed });
@@ -188,10 +178,6 @@ pub async fn generate_thumbnail(
 ) -> Result<String, String> {
     let cache = CacheDir::new(&app)?;
     let out_path = cache.thumb_path(work_id);
-
-    if out_path.exists() {
-        return Ok(out_path.to_string_lossy().to_string());
-    }
 
     let (file_path, duration_sec) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
