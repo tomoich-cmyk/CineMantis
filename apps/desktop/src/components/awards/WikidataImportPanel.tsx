@@ -35,6 +35,17 @@ export function WikidataImportPanel({
     setReviewOpen(false);
   }, [awardBody.id, categoryId]);
 
+  const importableCategories = categories.filter((category) => category.wikidataEntityId);
+  const hiddenCategoryCount = categories.length - importableCategories.length;
+  const selectedCategory =
+    importableCategories.find((category) => category.id === categoryId) ?? null;
+
+  useEffect(() => {
+    if (categoryId !== null && importableCategories.length > 0 && !selectedCategory) {
+      onCategoryChange(null);
+    }
+  }, [categoryId, importableCategories.length, onCategoryChange, selectedCategory]);
+
   async function runImport() {
     setIsRunning(true);
     setError(null);
@@ -61,8 +72,6 @@ export function WikidataImportPanel({
     }
   }
 
-  const selectedCategory = categories.find((category) => category.id === categoryId) ?? null;
-
   return (
     <section className="border-b border-subtle bg-black/20 px-5 py-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -76,12 +85,17 @@ export function WikidataImportPanel({
             className="h-8 w-full border border-subtle bg-surface-elevated px-2 text-sm text-gray-200 outline-none focus:border-mantis-600"
           >
             <option value="">賞全体から取得</option>
-            {categories.map((category) => (
+            {importableCategories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.displayNameJa} / {category.name}
               </option>
             ))}
           </select>
+          {hiddenCategoryCount > 0 && (
+            <div className="mt-1 text-[11px] text-gray-600">
+              Wikidata ID未設定の{hiddenCategoryCount}カテゴリは取込対象から除外しています
+            </div>
+          )}
         </div>
         <div className="w-28">
           <label className="mb-1 block text-[11px] text-gray-500">年度</label>

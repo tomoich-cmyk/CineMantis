@@ -44,6 +44,7 @@ pub struct AwardCategoryRow {
     pub is_major_category: bool,
     pub display_order: i64,
     pub note: Option<String>,
+    pub wikidata_entity_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,7 +265,7 @@ pub fn list_award_categories(
     let mut stmt = conn.prepare(
         "SELECT id, award_body_id, name, display_name_ja, original_name,
                 category_type, target_type, is_top_prize, is_major_category,
-                display_order, note
+                display_order, note, wikidata_entity_id
          FROM award_categories
          WHERE award_body_id = ?1
          ORDER BY is_top_prize DESC, display_order ASC, display_name_ja ASC",
@@ -283,6 +284,7 @@ pub fn list_award_categories(
             is_major_category: row.get::<_, i64>(8)? != 0,
             display_order: row.get(9)?,
             note: row.get(10)?,
+            wikidata_entity_id: row.get(11)?,
         })
     })
     .map_err(|e| e.to_string())?

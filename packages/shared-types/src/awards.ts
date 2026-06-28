@@ -93,6 +93,7 @@ export interface AwardCategory {
   isMajorCategory: boolean;
   displayOrder: number;
   note: string | null;
+  wikidataEntityId: string | null;
 }
 
 export interface AwardEdition {

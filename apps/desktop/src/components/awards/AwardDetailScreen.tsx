@@ -22,10 +22,16 @@ function alertClass(status: string): string {
 export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
   const { data: body, isLoading: bodyLoading } = useAwardBodyDetail(awardBodyId);
   const { data: categories = [] } = useAwardCategories(awardBodyId);
+  const importableCategories = useMemo(
+    () => categories.filter((category) => category.wikidataEntityId),
+    [categories],
+  );
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const topCategoryId = useMemo(
-    () => (categories.find((category) => category.isTopPrize) ?? categories[0])?.id ?? null,
-    [categories],
+    () =>
+      (importableCategories.find((category) => category.isTopPrize) ?? importableCategories[0])
+        ?.id ?? null,
+    [importableCategories],
   );
   const { data: rows = [], isLoading: rowsLoading } = useAwardWinningWorks({
     awardBodyId,
@@ -74,7 +80,7 @@ export function AwardDetailScreen({ awardBodyId }: { awardBodyId: number }) {
         </div>
         {body && (
           <div className="flex gap-4 text-xs text-gray-500">
-            <span>カテゴリ {body.categoryCount}</span>
+            <span>カテゴリ {importableCategories.length}</span>
             <span>登録作品 {body.registeredWorkCount}</span>
             <span className="text-yellow-400">受賞 {body.winnerCount}</span>
           </div>

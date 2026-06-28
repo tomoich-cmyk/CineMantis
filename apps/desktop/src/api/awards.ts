@@ -47,6 +47,7 @@ interface AwardCategoryRow {
   is_major_category: boolean;
   display_order: number;
   note: string | null;
+  wikidata_entity_id: string | null;
 }
 
 interface WorkAwardResultViewRow {
@@ -394,6 +395,7 @@ function toAwardCategory(r: AwardCategoryRow): AwardCategory {
     isMajorCategory: r.is_major_category,
     displayOrder: r.display_order,
     note: r.note,
+    wikidataEntityId: r.wikidata_entity_id,
   };
 }
 
