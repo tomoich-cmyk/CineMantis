@@ -382,7 +382,7 @@ function ManualSearchModal({
   onClose: () => void;
   onApplied: (candidateId: number) => Promise<void>;
 }) {
-  const [query, setQuery] = useState(displayImportTitle(item));
+  const [query, setQuery] = useState(importSearchTitle(item));
   const [year, setYear] = useState(item.rawYear?.toString() ?? "");
   const [results, setResults] = useState<WorkSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -459,7 +459,11 @@ function ManualSearchModal({
 }
 
 function displayImportTitle(item: AwardImportItemView) {
-  return item.rawTitleJa || item.rawTitleEn || item.rawAwardNameJa || item.rawAwardNameEn || `import #${item.id}`;
+  return item.rawTitleJa || item.rawTitleEn || `タイトル未取得（${item.rawFilmId}）`;
+}
+
+function importSearchTitle(item: AwardImportItemView) {
+  return item.rawTitleJa || item.rawTitleEn || "";
 }
 
 function scoreLabel(score: number | null) {

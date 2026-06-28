@@ -46,6 +46,7 @@ pub struct AwardImportItemView {
     pub award_category_name: Option<String>,
     pub raw_year: Option<i32>,
     pub raw_result_type: String,
+    pub raw_film_id: String,
     pub raw_title_ja: Option<String>,
     pub raw_title_en: Option<String>,
     pub raw_imdb_id: Option<String>,
@@ -209,6 +210,8 @@ struct SparqlBinding {
     title_ja: Option<SparqlValue>,
     #[serde(rename = "titleEn")]
     title_en: Option<SparqlValue>,
+    #[serde(rename = "titleFallback")]
+    title_fallback: Option<SparqlValue>,
     #[serde(rename = "resultType")]
     result_type: Option<SparqlValue>,
     year: Option<SparqlValue>,
@@ -629,6 +632,7 @@ SELECT DISTINCT
   ?film
   (SAMPLE(?titleJa) AS ?titleJa)
   (SAMPLE(?titleEn) AS ?titleEn)
+  (SAMPLE(?titleFallback) AS ?titleFallback)
   ?award
   (SAMPLE(?awardNameJa) AS ?awardNameJa)
   (SAMPLE(?awardNameEn) AS ?awardNameEn)
@@ -666,6 +670,7 @@ WHERE {{
   OPTIONAL {{ ?film wdt:P4947 ?tmdbId }}
   OPTIONAL {{ ?film rdfs:label ?titleJa . FILTER(LANG(?titleJa) = "ja") }}
   OPTIONAL {{ ?film rdfs:label ?titleEn . FILTER(LANG(?titleEn) = "en") }}
+  OPTIONAL {{ ?film rdfs:label ?titleFallback . FILTER(LANG(?titleFallback) IN ("es", "ca", "fr", "de", "it", "pt")) }}
   OPTIONAL {{ ?award rdfs:label ?awardNameJa . FILTER(LANG(?awardNameJa) = "ja") }}
   OPTIONAL {{ ?award rdfs:label ?awardNameEn . FILTER(LANG(?awardNameEn) = "en") }}
 }}
@@ -701,6 +706,7 @@ SELECT DISTINCT
   ?film
   (SAMPLE(?titleJa) AS ?titleJa)
   (SAMPLE(?titleEn) AS ?titleEn)
+  (SAMPLE(?titleFallback) AS ?titleFallback)
   ?award
   (SAMPLE(?awardNameJa) AS ?awardNameJa)
   (SAMPLE(?awardNameEn) AS ?awardNameEn)
@@ -729,6 +735,7 @@ WHERE {{
   OPTIONAL {{ ?film wdt:P4947 ?tmdbId }}
   OPTIONAL {{ ?film rdfs:label ?titleJa . FILTER(LANG(?titleJa) = "ja") }}
   OPTIONAL {{ ?film rdfs:label ?titleEn . FILTER(LANG(?titleEn) = "en") }}
+  OPTIONAL {{ ?film rdfs:label ?titleFallback . FILTER(LANG(?titleFallback) IN ("es", "ca", "fr", "de", "it", "pt")) }}
   OPTIONAL {{ ?award rdfs:label ?awardNameJa . FILTER(LANG(?awardNameJa) = "ja") }}
   OPTIONAL {{ ?award rdfs:label ?awardNameEn . FILTER(LANG(?awardNameEn) = "en") }}
 }}
@@ -758,7 +765,11 @@ fn parse_binding(binding: &SparqlBinding) -> Option<WikidataFilmResult> {
     Some(WikidataFilmResult {
         film_qid,
         title_ja: binding.title_ja.as_ref().map(|value| value.value.clone()),
-        title_en: binding.title_en.as_ref().map(|value| value.value.clone()),
+        title_en: binding
+            .title_en
+            .as_ref()
+            .or(binding.title_fallback.as_ref())
+            .map(|value| value.value.clone()),
         result_type,
         year: binding
             .year
@@ -1220,6 +1231,7 @@ fn list_award_import_items_inner(
              ac.name AS award_category_name,
              aii.raw_year,
              aii.raw_result_type,
+             aii.raw_film_id,
              aii.raw_title_ja,
              aii.raw_title_en,
              aii.raw_imdb_id,
@@ -1268,22 +1280,23 @@ fn list_award_import_items_inner(
                 award_category_name: row.get(5)?,
                 raw_year: row.get(6)?,
                 raw_result_type: row.get(7)?,
-                raw_title_ja: row.get(8)?,
-                raw_title_en: row.get(9)?,
-                raw_imdb_id: row.get(10)?,
-                raw_tmdb_id: row.get(11)?,
-                raw_source_url: row.get(12)?,
-                raw_award_name_en: row.get(13)?,
-                raw_award_name_ja: row.get(14)?,
-                matched_work_id: row.get(15)?,
-                matched_work_title: row.get(16)?,
-                matched_work_year: row.get(17)?,
-                matched_work_tmdb_id: row.get(18)?,
-                match_score: row.get(19)?,
-                match_method: row.get(20)?,
-                status: row.get(21)?,
-                approved_at: row.get(22)?,
-                already_confirmed: row.get::<_, i64>(23)? != 0,
+                raw_film_id: row.get(8)?,
+                raw_title_ja: row.get(9)?,
+                raw_title_en: row.get(10)?,
+                raw_imdb_id: row.get(11)?,
+                raw_tmdb_id: row.get(12)?,
+                raw_source_url: row.get(13)?,
+                raw_award_name_en: row.get(14)?,
+                raw_award_name_ja: row.get(15)?,
+                matched_work_id: row.get(16)?,
+                matched_work_title: row.get(17)?,
+                matched_work_year: row.get(18)?,
+                matched_work_tmdb_id: row.get(19)?,
+                match_score: row.get(20)?,
+                match_method: row.get(21)?,
+                status: row.get(22)?,
+                approved_at: row.get(23)?,
+                already_confirmed: row.get::<_, i64>(24)? != 0,
                 candidates: Vec::new(),
             })
         })?

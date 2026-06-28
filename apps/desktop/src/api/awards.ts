@@ -170,6 +170,7 @@ export interface AwardImportItemView {
   awardCategoryName: string | null;
   rawYear: number | null;
   rawResultType: string;
+  rawFilmId: string;
   rawTitleJa: string | null;
   rawTitleEn: string | null;
   rawImdbId: string | null;
