@@ -239,7 +239,7 @@ export function AuditScreen() {
           {(["duplicates", "integrity"] as const).map((t) => {
             const labels: Record<Tab, string> = {
               duplicates: `重複候補 ${dupLoading ? "" : `(${duplicates.length}グループ / ${totalDupWorks}件)`}`,
-              integrity:  `整合性チェック ${intLoading ? "" : `(${report?.totalIssues ?? 0}件)`}`,
+              integrity:  `整合性チェック ${intLoading ? "" : `(${report?.totalIssues ?? 0}項目)`}`,
             };
             return (
               <button
