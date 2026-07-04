@@ -11,6 +11,7 @@ import {
   type MetadataUpdatedEvent,
 } from "@/api/tmdb";
 import { workKeys } from "./useWorks";
+import { auditKeys } from "./useAudit";
 
 // ─── Query key factory ───────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ export function useApplyTmdbMatch() {
       qc.invalidateQueries({ queryKey: workKeys.detail(vars.workId) });
       qc.invalidateQueries({ queryKey: workKeys.all });
       qc.invalidateQueries({ queryKey: tmdbKeys.candidates(vars.workId) });
+      qc.invalidateQueries({ queryKey: auditKeys.integrity });
     },
   });
 }

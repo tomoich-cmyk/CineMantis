@@ -73,21 +73,24 @@ export function FilterBar() {
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-0.5">
-          {[1, 2, 3, 4, 5].map((n) => (
-            <button
-              key={n}
-              onClick={() => setFilter("minUserRating", filters.minUserRating === n ? null : n)}
-              className={clsx(
-                "text-base leading-none transition-colors",
-                (filters.minUserRating ?? 0) >= n ? "text-yellow-400" : "text-gray-700 hover:text-gray-500",
-              )}
-              title={`${n}点以上`}
-            >
-              ★
-            </button>
-          ))}
-        </div>
+        <label className="flex items-center gap-1 text-xs text-gray-500">
+          評価
+          <input
+            type="number"
+            min={0}
+            max={10}
+            step={0.1}
+            value={filters.minUserRating ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              const next = raw === "" ? null : Math.max(0, Math.min(10, Math.round(Number(raw) * 10) / 10));
+              setFilter("minUserRating", Number.isFinite(next) ? next : null);
+            }}
+            placeholder="0.0"
+            className={fieldClass("w-16 text-right font-mono")}
+          />
+          <span className="text-gray-700">以上</span>
+        </label>
 
         <select
           value={filters.personId ?? ""}

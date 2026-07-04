@@ -65,6 +65,10 @@ function formatRuntime(value: number | null) {
   return hours > 0 ? `${hours}時間${minutes}分` : `${minutes}分`;
 }
 
+function isTenthStep(value: number) {
+  return Math.abs(value * 10 - Math.round(value * 10)) < 0.0001;
+}
+
 function formatGenres(value: string | null) {
   if (!value) return "";
   try {
@@ -228,7 +232,7 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
 
     if (column === "myRating") {
       const next = trimmed ? Number(trimmed) : null;
-      if (next !== null && (!Number.isFinite(next) || next < 0 || next > 5 || !Number.isInteger(next * 2))) return;
+      if (next !== null && (!Number.isFinite(next) || next < 0 || next > 10 || !isTenthStep(next))) return;
       if (!bulk && next === (work.myRating ?? work.userRating ?? null)) return;
       for (const workId of workIds) {
         updateStats({ work_id: workId, user_rating: next, my_rating: next });
@@ -283,8 +287,8 @@ export function WorkRow({ work, selected, onSelect, onToggleSelect, onShiftConte
         autoFocus
         type={column === "releaseYear" || column === "myRating" || column === "playCount" ? "number" : "text"}
         min={column === "myRating" || column === "playCount" ? 0 : undefined}
-        max={column === "myRating" ? 5 : undefined}
-        step={column === "myRating" ? 0.5 : column === "playCount" ? 1 : undefined}
+        max={column === "myRating" ? 10 : undefined}
+        step={column === "myRating" ? 0.1 : column === "playCount" ? 1 : undefined}
         value={draft}
         onClick={(event) => event.stopPropagation()}
         onChange={(event) => setDraft(event.target.value)}

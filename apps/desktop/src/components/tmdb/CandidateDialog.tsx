@@ -135,6 +135,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
   // 候補選択
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedMediaType, setSelectedMediaType] = useState<string>("");
+  const [lockOnApply, setLockOnApply] = useState(isLocked);
 
   // 直接 TMDb ID 指定
   const [showDirectId, setShowDirectId] = useState(false);
@@ -164,7 +165,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
   function handleApply() {
     if (!selected) return;
     applyMatch(
-      { workId, tmdbId: selected.tmdb_id, mediaType: selected.media_type, lock: false },
+      { workId, tmdbId: selected.tmdb_id, mediaType: selected.media_type, lock: lockOnApply },
       { onSuccess: onClose }
     );
   }
@@ -173,7 +174,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
     const id = parseInt(directIdInput, 10);
     if (isNaN(id) || id <= 0) return;
     applyMatch(
-      { workId, tmdbId: id, mediaType: directMediaType, lock: false },
+      { workId, tmdbId: id, mediaType: directMediaType, lock: lockOnApply },
       { onSuccess: onClose }
     );
   }
@@ -207,7 +208,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
         {/* ── locked バナー ── */}
         {isLocked && (
           <div className="mx-4 mt-3 px-3 py-2 bg-yellow-900/30 border border-yellow-700/50 rounded text-xs text-yellow-400 flex-shrink-0">
-            🔒 固定済みです。候補を適用すると固定が解除され「手動照合」になります。
+            🔒 固定済みです。固定チェックを外して適用すると「手動照合」に戻ります。
           </div>
         )}
 
@@ -327,7 +328,16 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
         </div>
 
         {/* ── Footer ── */}
-        <div className="flex items-center justify-end px-5 py-3 border-t border-subtle flex-shrink-0">
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-subtle flex-shrink-0">
+          <label className="flex items-center gap-2 text-xs text-gray-500">
+            <input
+              type="checkbox"
+              checked={lockOnApply}
+              onChange={(event) => setLockOnApply(event.target.checked)}
+              className="accent-mantis-500"
+            />
+            この候補で固定する
+          </label>
           <div className="flex gap-2">
             <button
               onClick={onClose}

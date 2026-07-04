@@ -18,6 +18,9 @@ export interface IntegrityIssue {
 }
 
 export type IssueCode =
+  | "unmatched"
+  | "missing_meta"
+  | "no_persons"
   | "watching_no_resume"
   | "watched_no_playcount"
   | "tmdb_no_overview"

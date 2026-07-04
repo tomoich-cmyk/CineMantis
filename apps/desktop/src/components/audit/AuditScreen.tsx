@@ -9,10 +9,14 @@ import {
 } from "@/hooks/useAudit";
 import type { DuplicateGroup, IntegrityIssue, IssueCode } from "@/api/audit";
 import { useLibraryStore } from "@/store/libraryStore";
+import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
 
 // ─── ラベルマップ ─────────────────────────────────────────────────────────────
 
 const ISSUE_LABELS: Record<IssueCode, { label: string; icon: string; desc: string }> = {
+  unmatched:            { label: "未照合",       icon: "🔎", desc: "TMDb 情報が紐付いていない" },
+  missing_meta:         { label: "メタ不足",     icon: "📋", desc: "年・よみ・ジャンルなどが未整理" },
+  no_persons:           { label: "人物なし",     icon: "👤", desc: "監督・出演情報が未取得" },
   watching_no_resume:   { label: "再開位置なし", icon: "⏸", desc: "視聴中だが再開位置が未記録" },
   watched_no_playcount: { label: "再生数ゼロ",   icon: "▶", desc: "視聴済みだが再生回数が 0" },
   tmdb_no_overview:     { label: "概要なし",      icon: "📋", desc: "TMDb 照合済みだが概要が空" },
@@ -100,6 +104,7 @@ function DuplicateGroupCard({
 function IntegrityIssueCard({
   issue,
   onNavigate,
+  onFindCandidate,
   onRepairPersons,
   onRefreshMeta,
   onDelete,
@@ -107,12 +112,15 @@ function IntegrityIssueCard({
 }: {
   issue: IntegrityIssue;
   onNavigate: (workId: number) => void;
+  onFindCandidate: (issue: IntegrityIssue) => void;
   onRepairPersons: (workId: number) => void;
   onRefreshMeta: (workId: number) => void;
   onDelete: (workId: number) => void;
   isPending: boolean;
 }) {
-  const hasMeta = issue.issues.includes("tmdb_no_overview");
+  const needsCandidate = issue.issues.includes("unmatched");
+  const needsMetaRefresh = issue.issues.includes("tmdb_no_overview") || issue.issues.includes("missing_meta");
+  const needsPersons = issue.issues.includes("no_persons");
 
   return (
     <div className="flex items-start gap-3 px-4 py-3 bg-surface-elevated border border-subtle rounded-lg">
@@ -141,12 +149,22 @@ function IntegrityIssueCard({
         >
           詳細
         </button>
-        {hasMeta && (
+        {needsCandidate && (
+          <button
+            onClick={() => onFindCandidate(issue)}
+            disabled={isPending}
+            className="text-[11px] px-2.5 py-1 border border-mantis-700/50 rounded text-mantis-400 hover:bg-mantis-800/20 transition-colors disabled:opacity-30"
+            title="通常画面と同じ候補選択でTMDb照合"
+          >
+            🔎 候補を探す
+          </button>
+        )}
+        {needsMetaRefresh && !needsCandidate && (
           <button
             onClick={() => onRefreshMeta(issue.workId)}
             disabled={isPending}
             className="text-[11px] px-2.5 py-1 border border-mantis-700/50 rounded text-mantis-400 hover:bg-mantis-800/20 transition-colors disabled:opacity-30"
-            title="メタデータ再取得"
+            title="この作品だけメタデータを再取得"
           >
             📋 再取得
           </button>
@@ -161,7 +179,7 @@ function IntegrityIssueCard({
             🗑 削除
           </button>
         )}
-        {(issue.issues.includes("watching_no_resume") || issue.issues.includes("watched_no_playcount")) && (
+        {needsPersons && (
           <button
             onClick={() => onRepairPersons(issue.workId)}
             disabled={isPending}
@@ -181,6 +199,7 @@ function IntegrityIssueCard({
 export function AuditScreen() {
   const [tab, setTab] = useState<Tab>("duplicates");
   const [confirmDelete, setConfirmDelete] = useState<{ workId: number; title: string } | null>(null);
+  const [candidateTarget, setCandidateTarget] = useState<IntegrityIssue | null>(null);
 
   const { setSelectedWorkId, setActiveSection } = useLibraryStore();
 
@@ -219,14 +238,14 @@ export function AuditScreen() {
           <div>
             <h1 className="text-lg font-semibold text-gray-100">監査レポート</h1>
             <p className="text-xs text-gray-500 mt-0.5">
-              ライブラリの重複・整合性問題を検出・修正します
+              未整理・未照合・重複を確認して、候補選択や再取得で整理します
             </p>
           </div>
           <button
             onClick={() => { refetchDup(); refetchInt(); }}
             className="text-xs px-3 py-1.5 border border-subtle rounded text-gray-400 hover:text-gray-100 hover:border-gray-500 transition-colors"
           >
-            🔄 再スキャン
+            🔄 再チェック
           </button>
         </div>
 
@@ -340,6 +359,7 @@ export function AuditScreen() {
                       key={issue.workId}
                       issue={issue}
                       onNavigate={navigateToWork}
+                      onFindCandidate={setCandidateTarget}
                       onRepairPersons={(id) => repairPersons(id)}
                       onRefreshMeta={(id) => refreshMeta(id)}
                       onDelete={(id) => handleDeleteConfirm(id, issue.title)}
@@ -382,6 +402,16 @@ export function AuditScreen() {
             </div>
           </div>
         </div>
+      )}
+      {candidateTarget && (
+        <CandidateDialog
+          workId={candidateTarget.workId}
+          workTitle={candidateTarget.title}
+          onClose={() => {
+            setCandidateTarget(null);
+            refetchInt();
+          }}
+        />
       )}
     </div>
   );

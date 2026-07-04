@@ -110,7 +110,7 @@ export interface WorkPart {
 
 export interface UserStats {
   workId: number;
-  userRating: number | null;   // 1–5
+  userRating: number | null;   // 0.0-10.0
   myRating: number | null;
   playCount: number;
   lastPlayedAt: string | null;
