@@ -14,13 +14,10 @@ import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
 // ─── ラベルマップ ─────────────────────────────────────────────────────────────
 
 const ISSUE_LABELS: Record<IssueCode, { label: string; icon: string; desc: string }> = {
-  unmatched:            { label: "未照合",       icon: "🔎", desc: "TMDb 情報が紐付いていない" },
-  missing_meta:         { label: "メタ不足",     icon: "📋", desc: "年・よみ・ジャンルなどが未整理" },
-  no_persons:           { label: "人物なし",     icon: "👤", desc: "監督・出演情報が未取得" },
-  watching_no_resume:   { label: "再開位置なし", icon: "⏸", desc: "視聴中だが再開位置が未記録" },
-  watched_no_playcount: { label: "再生数ゼロ",   icon: "▶", desc: "視聴済みだが再生回数が 0" },
-  tmdb_no_overview:     { label: "概要なし",      icon: "📋", desc: "TMDb 照合済みだが概要が空" },
-  no_parts:             { label: "ファイルなし",  icon: "💔", desc: "ファイルが紐付いていない" },
+  unmatched:    { label: "未照合",     icon: "🔍", desc: "TMDb 情報が紐付いていない作品" },
+  missing_meta: { label: "メタ不足",   icon: "📋", desc: "製作年またはジャンルが未入力" },
+  no_persons:   { label: "人物なし",   icon: "👤", desc: "監督・出演情報が未取得" },
+  file_missing: { label: "ファイル消失", icon: "💔", desc: "登録済みファイルが見つからない" },
 };
 
 const REASON_LABELS: Record<DuplicateGroup["reason"], { label: string; icon: string }> = {
@@ -107,7 +104,6 @@ function IntegrityIssueCard({
   onFindCandidate,
   onRepairPersons,
   onRefreshMeta,
-  onDelete,
   isPending,
 }: {
   issue: IntegrityIssue;
@@ -115,11 +111,10 @@ function IntegrityIssueCard({
   onFindCandidate: (issue: IntegrityIssue) => void;
   onRepairPersons: (workId: number) => void;
   onRefreshMeta: (workId: number) => void;
-  onDelete: (workId: number) => void;
   isPending: boolean;
 }) {
   const needsCandidate = issue.issues.includes("unmatched");
-  const needsMetaRefresh = issue.issues.includes("tmdb_no_overview") || issue.issues.includes("missing_meta");
+  const needsMetaRefresh = issue.issues.includes("missing_meta");
   const needsPersons = issue.issues.includes("no_persons");
 
   return (
@@ -167,16 +162,6 @@ function IntegrityIssueCard({
             title="この作品だけメタデータを再取得"
           >
             📋 再取得
-          </button>
-        )}
-        {issue.issues.includes("no_parts") && (
-          <button
-            onClick={() => onDelete(issue.workId)}
-            disabled={isPending}
-            className="text-[11px] px-2.5 py-1 border border-red-800/50 rounded text-red-400 hover:bg-red-900/20 transition-colors disabled:opacity-30"
-            title="ライブラリから削除"
-          >
-            🗑 削除
           </button>
         )}
         {needsPersons && (
@@ -350,7 +335,7 @@ export function AuditScreen() {
                 </div>
 
                 <p className="text-xs text-gray-500">
-                  {report.totalWorks} 件中 {report.totalIssues} 件に問題があります。
+                  {report.totalWorks} 件中 {report.issues.length} 作品 / {report.totalIssues} 項目に問題があります。
                 </p>
 
                 <div className="flex flex-col gap-2">
@@ -362,7 +347,6 @@ export function AuditScreen() {
                       onFindCandidate={setCandidateTarget}
                       onRepairPersons={(id) => repairPersons(id)}
                       onRefreshMeta={(id) => refreshMeta(id)}
-                      onDelete={(id) => handleDeleteConfirm(id, issue.title)}
                       isPending={isPending}
                     />
                   ))}

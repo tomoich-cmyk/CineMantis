@@ -93,13 +93,13 @@ function yearSort(a: [string, number], b: [string, number]) {
 function ratingBucket(work: WorkSummary) {
   const rating = work.myRating ?? work.userRating;
   if (!rating) return "未評価";
-  return `${rating.toFixed(1)}★`;
+  return `★ ${rating.toFixed(1)}`;
 }
 
 function ratingSort(a: [string, number], b: [string, number]) {
   if (a[0] === "未評価") return 1;
   if (b[0] === "未評価") return -1;
-  return Number.parseFloat(b[0]) - Number.parseFloat(a[0]);
+  return Number.parseFloat(b[0].replace("★", "").trim()) - Number.parseFloat(a[0].replace("★", "").trim());
 }
 
 function BrowserPane({
@@ -212,8 +212,8 @@ function LibraryBrowser({ works }: { works: WorkSummary[] }) {
         <BrowserPane
           title="評価"
           items={ratingCounts}
-          active={filters.minUserRating ? `${filters.minUserRating}★` : null}
-          onPick={(value) => setFilter("minUserRating", value && value !== "未評価" ? Number(value.replace("★", "")) : null)}
+          active={filters.minUserRating ? `★ ${filters.minUserRating.toFixed(1)}` : null}
+          onPick={(value) => setFilter("minUserRating", value && value !== "未評価" ? Number(value.replace("★", "").trim()) : null)}
         />
         <BrowserPane
           title="ジャンル"

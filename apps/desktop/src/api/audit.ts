@@ -21,10 +21,7 @@ export type IssueCode =
   | "unmatched"
   | "missing_meta"
   | "no_persons"
-  | "watching_no_resume"
-  | "watched_no_playcount"
-  | "tmdb_no_overview"
-  | "no_parts";
+  | "file_missing";
 
 export interface IntegrityReport {
   issues: IntegrityIssue[];

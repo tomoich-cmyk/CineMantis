@@ -24,13 +24,13 @@ export function StarRating({ value, max = 10, size = "sm", readonly, onChange }:
 
   if (readonly) {
     return (
-      <span className={clsx("inline-flex items-center gap-1 font-mono", sizeClass)}>
+      <span className={clsx("inline-flex items-center gap-1 font-mono tabular-nums", sizeClass)}>
         {rating === null ? (
           <span className="text-gray-700">未評価</span>
         ) : (
           <>
-            <span className="text-yellow-400">{formatRating(rating)}</span>
-            <span className="text-gray-700">/ {max}</span>
+            <span className="text-yellow-400 leading-none">★</span>
+            <span className="text-yellow-300">{formatRating(rating)}</span>
           </>
         )}
       </span>
@@ -39,6 +39,7 @@ export function StarRating({ value, max = 10, size = "sm", readonly, onChange }:
 
   return (
     <div className={clsx("flex items-center gap-2", sizeClass)} onClick={(event) => event.stopPropagation()}>
+      <span className="text-yellow-400 leading-none">★</span>
       <input
         type="number"
         min={0}

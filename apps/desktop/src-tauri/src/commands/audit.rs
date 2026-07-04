@@ -139,14 +139,11 @@ pub fn get_duplicate_groups(
 }
 
 /// 整合性レポートを返す
-/// チェック項目：
-///   watching_no_resume   … watch_status='watching' かつ resume_position_sec が NULL/0
-///   watched_no_playcount … watch_status='watched'  かつ play_count が 0/NULL
-///   unmatched            … TMDb 未照合
-///   missing_meta         … 未整理ビュー相当の主要メタ不足
-///   no_persons           … 人物情報未取得
-///   tmdb_no_overview     … tmdb_id あり かつ overview なし
-///   no_parts             … work_parts が 0 件（ファイル未関連付け）
+/// チェック項目は要確認センターと同じ条件に揃える。
+///   unmatched    … TMDb 未照合
+///   missing_meta … 製作年またはジャンルが未入力
+///   no_persons   … 人物情報未取得
+///   file_missing … 登録済みファイルが見つからない
 #[tauri::command]
 pub fn get_integrity_report(
     state: State<'_, DbState>,
@@ -163,33 +160,21 @@ pub fn get_integrity_report(
                w.id,
                w.title,
                w.year,
-               CASE WHEN COALESCE(us.watch_status,'unwatched') = 'watching'
-                    AND (us.resume_position_sec IS NULL OR us.resume_position_sec = 0)
-                    THEN 1 ELSE 0 END AS watching_no_resume,
-               CASE WHEN COALESCE(us.watch_status,'unwatched') = 'watched'
-                    AND (us.play_count IS NULL OR us.play_count = 0)
-                    THEN 1 ELSE 0 END AS watched_no_playcount,
-               CASE WHEN w.tmdb_id IS NULL
-                    OR COALESCE(w.match_status, 'unmatched') IN ('unmatched', 'pending')
+               CASE WHEN COALESCE(w.match_status, 'unmatched') = 'unmatched'
                     THEN 1 ELSE 0 END AS unmatched,
-               CASE WHEN COALESCE(w.release_year, w.year) IS NULL
-                    OR COALESCE(w.country_type, 'unknown') = 'unknown'
-                    OR NULLIF(TRIM(COALESCE(w.reading, '')), '') IS NULL
-                    OR COALESCE(w.media_category, 'other') = 'other'
-                    OR NULLIF(TRIM(COALESCE(w.title, '')), '') IS NULL
-                    OR NULLIF(TRIM(COALESCE(w.genre_text, w.genres_json, '')), '') IS NULL
+               CASE WHEN w.year IS NULL OR w.genres_json IS NULL
                     THEN 1 ELSE 0 END AS missing_meta,
                CASE WHEN NOT EXISTS (
                     SELECT 1 FROM work_persons wp_person WHERE wp_person.work_id = w.id)
                     THEN 1 ELSE 0 END AS no_persons,
-               CASE WHEN w.tmdb_id IS NOT NULL
-                    AND (w.synopsis IS NULL OR w.synopsis = '')
-                    THEN 1 ELSE 0 END AS tmdb_no_overview,
-               CASE WHEN NOT EXISTS (
-                    SELECT 1 FROM work_parts wp WHERE wp.work_id = w.id)
-                    THEN 1 ELSE 0 END AS no_parts
+               CASE WHEN EXISTS (
+                    SELECT 1
+                      FROM work_parts wp_missing
+                      JOIN files f_missing ON f_missing.id = wp_missing.file_id
+                     WHERE wp_missing.work_id = w.id
+                       AND f_missing.availability_status = 'missing')
+                    THEN 1 ELSE 0 END AS file_missing
              FROM works w
-             LEFT JOIN user_stats us ON us.work_id = w.id
              ORDER BY w.id",
         )
         .map_err(|e| e.to_string())?;
@@ -204,9 +189,6 @@ pub fn get_integrity_report(
                 row.get::<_, i32>(4)?,
                 row.get::<_, i32>(5)?,
                 row.get::<_, i32>(6)?,
-                row.get::<_, i32>(7)?,
-                row.get::<_, i32>(8)?,
-                row.get::<_, i32>(9)?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -218,13 +200,10 @@ pub fn get_integrity_report(
             id,
             title,
             year,
-            watching_no_resume,
-            watched_no_playcount,
             unmatched,
             missing_meta,
             no_persons,
-            tmdb_no_overview,
-            no_parts,
+            file_missing,
         ) = row;
         let mut issue_list: Vec<String> = Vec::new();
         if unmatched == 1 {
@@ -236,17 +215,8 @@ pub fn get_integrity_report(
         if no_persons == 1 {
             issue_list.push("no_persons".to_string());
         }
-        if watching_no_resume == 1 {
-            issue_list.push("watching_no_resume".to_string());
-        }
-        if watched_no_playcount == 1 {
-            issue_list.push("watched_no_playcount".to_string());
-        }
-        if tmdb_no_overview == 1 {
-            issue_list.push("tmdb_no_overview".to_string());
-        }
-        if no_parts == 1 {
-            issue_list.push("no_parts".to_string());
+        if file_missing == 1 {
+            issue_list.push("file_missing".to_string());
         }
         if !issue_list.is_empty() {
             issues.push(IntegrityIssue {
@@ -258,7 +228,10 @@ pub fn get_integrity_report(
         }
     }
 
-    let total_issues = issues.len() as i64;
+    let total_issues = issues
+        .iter()
+        .map(|issue| issue.issues.len() as i64)
+        .sum();
     Ok(IntegrityReport {
         issues,
         total_works,
