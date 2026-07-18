@@ -152,7 +152,7 @@ pub fn list_works(
         Some("created_at")     => "COALESCE(w.date_added, w.created_at)",
         Some("runtime_sec")    => "w.runtime_sec",
         Some("release_date")   => "w.release_date",
-        _                      => "w.sort_title",
+        _                      => "cm_kana_sort_key(COALESCE(NULLIF(TRIM(w.reading), ''), w.sort_title, w.title))",
     };
     let order_dir = match sort_order.as_deref() {
         Some("desc") => "DESC",
@@ -259,7 +259,9 @@ pub fn list_works(
            ))
            {attention_filter_sql}
            {unorganized_sql}
-         ORDER BY {order_col} {order_dir} NULLS LAST"
+         ORDER BY {order_col} {order_dir} NULLS LAST,
+                  cm_kana_sort_key(COALESCE(w.sort_title, w.title)) {order_dir} NULLS LAST,
+                  w.title {order_dir}"
     );
 
     let is_fav_int: i64 = if is_favorite.unwrap_or(false) { 1 } else { 0 };

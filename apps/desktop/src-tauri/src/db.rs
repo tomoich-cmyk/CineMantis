@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rusqlite::functions::FunctionFlags;
 use rusqlite::Connection;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -12,8 +13,22 @@ impl DbState {
     pub fn new(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        register_functions(&conn)?;
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
+}
+
+fn register_functions(conn: &Connection) -> Result<()> {
+    conn.create_scalar_function(
+        "cm_kana_sort_key",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let value: Option<String> = ctx.get(0)?;
+            Ok(value.map(|v| crate::services::reading::kana_sort_key(&v)))
+        },
+    )?;
+    Ok(())
 }
 
 const MIGRATION_001: &str = include_str!("../../../../packages/db/migrations/001_initial.sql");

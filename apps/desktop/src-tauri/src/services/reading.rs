@@ -24,6 +24,22 @@ pub fn infer_reading(title: &str) -> Option<String> {
     (has_kana && !reading.is_empty()).then_some(reading)
 }
 
+pub fn kana_sort_key(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ('\u{30A1}'..='\u{30F6}').contains(&ch) {
+                char::from_u32(ch as u32 - 0x60).unwrap_or(ch)
+            } else if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                ch
+            }
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::infer_reading;
