@@ -43,6 +43,19 @@ const COUNTRY_LABEL: Record<string, string> = {
   unknown: "不明",
 };
 
+const RATING_PRESETS = [10, 9.5, 9, 8.5, 8, 7.5, 7, 6.5, 6, 5, 4, 3, 2, 1, 0];
+
+function normalizeRating(value: string | number) {
+  const rating = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(rating)) return null;
+  const clamped = Math.min(10, Math.max(0, rating));
+  return Math.round(clamped * 10) / 10;
+}
+
+function formatRatingDraft(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? normalizeRating(value)?.toFixed(1) ?? "" : "";
+}
+
 function decadeOf(work: WorkSummary) {
   const year = work.releaseYear ?? work.year;
   if (!year) return "不明";
@@ -260,6 +273,7 @@ function VirtualList({
   const suppressHeaderClickRef = useRef(false);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [editMenu, setEditMenu] = useState<{ x: number; y: number; work: WorkSummary; workIds: number[] } | null>(null);
+  const [ratingDraft, setRatingDraft] = useState("");
   const { mutate: updateLibraryFields } = useUpdateWorkLibraryFields();
   const { mutate: updateStats } = useUpdateStats();
   const { mutate: setWorkMatchStatus } = useSetWorkMatchStatus();
@@ -457,9 +471,10 @@ function VirtualList({
     const workIds = selectedWorkIds.includes(work.id) ? selectedWorkIds : [work.id];
     if (!selectedWorkIds.includes(work.id)) selectAllWorks([work.id]);
     setSelectedWorkId(work.id);
+    setRatingDraft(formatRatingDraft(work.myRating ?? work.userRating));
     setEditMenu({
-      x: Math.min(event.clientX, window.innerWidth - 230),
-      y: Math.min(event.clientY, window.innerHeight - 330),
+      x: Math.min(event.clientX, window.innerWidth - 300),
+      y: Math.min(event.clientY, window.innerHeight - 430),
       work,
       workIds,
     });
@@ -494,8 +509,16 @@ function VirtualList({
 
   function setRating(rating: number | null) {
     if (!editMenu) return;
-    for (const workId of editMenu.workIds) updateStats({ work_id: workId, user_rating: rating, my_rating: rating });
+    const nextRating = rating === null ? null : normalizeRating(rating);
+    if (nextRating === null) return;
+    for (const workId of editMenu.workIds) updateStats({ work_id: workId, user_rating: nextRating, my_rating: nextRating });
     setEditMenu(null);
+  }
+
+  function applyRatingDraft() {
+    const nextRating = normalizeRating(ratingDraft);
+    if (nextRating === null) return;
+    setRating(nextRating);
   }
 
   function editPlayCount() {
@@ -612,7 +635,7 @@ function VirtualList({
       {editMenu && (
         <div
           onPointerDown={(event) => event.stopPropagation()}
-          className="fixed z-[80] w-56 border border-[#333] bg-[#171717] py-1 text-xs text-gray-200 shadow-2xl"
+          className="fixed z-[80] w-72 border border-[#333] bg-[#171717] py-1 text-xs text-gray-200 shadow-2xl"
           style={{ left: editMenu.x, top: editMenu.y }}
         >
           <div className="border-b border-[#2b2b2b] px-3 py-1.5 text-[11px] text-gray-500">
@@ -629,13 +652,52 @@ function VirtualList({
             <button onClick={() => setCountry("domestic")} className="border border-[#333] py-1 hover:bg-[#303030]">邦画</button>
             <button onClick={() => setCountry("unknown")} className="border border-[#333] py-1 hover:bg-[#303030]">不明</button>
           </div>
-          <div className="px-3 py-1 text-[10px] text-gray-500">マイ評価</div>
+          <div className="px-3 py-1 text-[10px] text-gray-500">マイ評価 / 10</div>
+          <div className="px-2 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-yellow-400">★</span>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={0.1}
+                value={ratingDraft}
+                onChange={(event) => setRatingDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") applyRatingDraft();
+                }}
+                className="h-8 min-w-0 flex-1 border border-[#2c2c2c] bg-[#101014] px-2 text-right text-sm text-gray-100 outline-none focus:border-mantis-500"
+                placeholder="0.0"
+              />
+              <button
+                onClick={applyRatingDraft}
+                className="h-8 border border-mantis-700 px-3 text-mantis-200 hover:bg-mantis-900/40"
+              >
+                適用
+              </button>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              step={0.1}
+              value={normalizeRating(ratingDraft) ?? 0}
+              onChange={(event) => setRatingDraft(Number(event.target.value).toFixed(1))}
+              className="mt-2 w-full accent-mantis-500"
+            />
+          </div>
           <div className="grid grid-cols-5 gap-1 px-2 pb-1">
-            {Array.from({ length: 10 }, (_, index) => (index + 1) / 2).map((rating) => (
-              <button key={rating} onClick={() => setRating(rating)} className="border border-[#333] py-1 hover:bg-[#303030]">{rating}</button>
+            {RATING_PRESETS.map((rating) => (
+              <button
+                key={rating}
+                onClick={() => setRating(rating)}
+                className="border border-[#333] py-1 font-mono text-[11px] hover:bg-[#303030]"
+              >
+                {rating.toFixed(1)}
+              </button>
             ))}
           </div>
-          <button onClick={() => setRating(0)} className="w-full px-3 py-1.5 text-left text-gray-500 hover:bg-[#303030]">0（未評価）に戻す</button>
+          <button onClick={() => setRating(0)} className="w-full px-3 py-1.5 text-left text-gray-500 hover:bg-[#303030]">0.0 にする</button>
         </div>
       )}
     </div>
