@@ -1,12 +1,15 @@
+use crate::commands::tmdb::{CLEAR_MATCH_ASSIGNMENTS, UNLOCKED_STATUS_SQL};
 use crate::db::DbState;
+use crate::models::match_status::MatchStatus;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 // ─── AttentionStats ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub struct AttentionStats {
     pub unmatched: i64,      // 照合未完了
+    pub pending: i64,        // レビュー待ち（候補はあるが自動確定できなかった）
     pub no_poster: i64,      // legacy: ポスター/サムネなし
     pub missing_meta: i64,   // year or genres が空
     pub no_persons: i64,     // 人物情報なし
@@ -22,6 +25,7 @@ pub fn get_attention_stats(state: State<DbState>) -> Result<AttentionStats, Stri
         .query_row(
             "SELECT
                SUM(CASE WHEN COALESCE(w.match_status, 'unmatched') = 'unmatched' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN w.match_status = 'pending' THEN 1 ELSE 0 END),
                SUM(CASE WHEN w.poster_path IS NULL AND w.thumb_path IS NULL THEN 1 ELSE 0 END),
                SUM(CASE WHEN w.year IS NULL OR w.genres_json IS NULL THEN 1 ELSE 0 END),
                (SELECT COUNT(DISTINCT w2.id) FROM works w2
@@ -36,11 +40,12 @@ pub fn get_attention_stats(state: State<DbState>) -> Result<AttentionStats, Stri
             |row| {
                 Ok(AttentionStats {
                     unmatched:      row.get::<_, Option<i64>>(0)?.unwrap_or(0),
-                    no_poster:      row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                    missing_meta:   row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                    no_persons:     row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    file_missing:   row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    source_offline: row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    pending:        row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    no_poster:      row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    missing_meta:   row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    no_persons:     row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    file_missing:   row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    source_offline: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 })
             },
         )
@@ -130,19 +135,165 @@ pub fn bulk_remove_tag(
 
 // ─── bulk_set_match_status ────────────────────────────────────────────────────
 
-/// match_status を一括変更する（locked / matched / unmatched 等）
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct BulkMatchStatusResult {
+    /// 状態を変更した件数
+    pub updated: usize,
+    /// 条件に合わず変更しなかった件数（tmdb_id なしでの固定、固定中の照合解除など）
+    pub skipped: usize,
+}
+
+/// match_status を一括変更する。
+///   locked    : tmdb_id がある作品だけを固定する
+///   matched   : 固定を解除する（locked の作品だけが対象。tmdb_id がなければ unmatched に戻す）
+///   unmatched : 照合を解除する（固定中の作品は対象外。tmdb_id やポスターも消す）
+///   pending   : tmdb_id がなく固定されていない作品だけをレビュー待ちにする
 #[tauri::command]
 pub fn bulk_set_match_status(
+    app: AppHandle,
     state: State<DbState>,
     work_ids_json: String,
     status: String,
-) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE works SET match_status = ?2
-         WHERE id IN (SELECT CAST(je.value AS INTEGER) FROM json_each(?1) je)",
-        rusqlite::params![work_ids_json, status],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+) -> Result<BulkMatchStatusResult, String> {
+    let status = MatchStatus::parse(&status)?;
+    let work_ids: Vec<i64> =
+        serde_json::from_str(&work_ids_json).map_err(|_| "作品 ID の指定が不正です".to_string())?;
+    let (result, cleared) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        bulk_set_match_status_inner(&conn, &work_ids, status)?
+    };
+    for work_id in cleared {
+        crate::services::poster_store::delete_poster_for_work(&app, work_id);
+    }
+    Ok(result)
+}
+
+/// bulk_set_match_status の DB 処理。照合を解除した作品 ID も返す（ポスター削除用）。
+pub(crate) fn bulk_set_match_status_inner(
+    conn: &rusqlite::Connection,
+    work_ids: &[i64],
+    status: MatchStatus,
+) -> Result<(BulkMatchStatusResult, Vec<i64>), String> {
+    let mut unique_ids = work_ids.to_vec();
+    unique_ids.sort_unstable();
+    unique_ids.dedup();
+    let ids_json = serde_json::to_string(&unique_ids).map_err(|e| e.to_string())?;
+    const TARGET: &str = "id IN (SELECT CAST(je.value AS INTEGER) FROM json_each(?1) je)";
+
+    let sql = match status {
+        MatchStatus::Locked => format!(
+            "UPDATE works SET match_status = 'locked'
+             WHERE {TARGET} AND tmdb_id IS NOT NULL AND match_status <> 'locked'
+             RETURNING id"
+        ),
+        MatchStatus::Matched => format!(
+            "UPDATE works SET match_status = {UNLOCKED_STATUS_SQL},
+                    metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             WHERE {TARGET} AND match_status = 'locked'
+             RETURNING id"
+        ),
+        MatchStatus::Unmatched => format!(
+            "UPDATE works SET {CLEAR_MATCH_ASSIGNMENTS}
+             WHERE {TARGET} AND match_status <> 'locked'
+             RETURNING id"
+        ),
+        MatchStatus::Pending => format!(
+            "UPDATE works SET match_status = 'pending'
+             WHERE {TARGET} AND match_status <> 'locked' AND tmdb_id IS NULL
+             RETURNING id"
+        ),
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let changed: Vec<i64> = stmt
+        .query_map(rusqlite::params![ids_json], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+
+    let result = BulkMatchStatusResult {
+        updated: changed.len(),
+        skipped: unique_ids.len() - changed.len(),
+    };
+    let cleared = if status == MatchStatus::Unmatched { changed } else { Vec::new() };
+    Ok((result, cleared))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_support::*;
+
+    #[test]
+    fn invalid_status_strings_are_rejected() {
+        for value in ["auto", "manual", "MATCHED", "", "matched; DROP TABLE works"] {
+            assert!(MatchStatus::parse(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn lock_requires_tmdb_id() {
+        let conn = open_migrated();
+        let matched = insert_work(&conn, "A");
+        set_match(&conn, matched, "matched", Some(10));
+        let unmatched = insert_work(&conn, "B");
+
+        let (result, _) =
+            bulk_set_match_status_inner(&conn, &[matched, unmatched], MatchStatus::Locked).unwrap();
+        assert_eq!(result, BulkMatchStatusResult { updated: 1, skipped: 1 });
+        assert_eq!(match_state(&conn, matched), ("locked".into(), Some(10)));
+        assert_eq!(match_state(&conn, unmatched), ("unmatched".into(), None));
+    }
+
+    #[test]
+    fn unlock_returns_to_a_status_consistent_with_tmdb_id() {
+        let conn = open_migrated();
+        let with_id = insert_work(&conn, "A");
+        set_match(&conn, with_id, "locked", Some(10));
+        let without_id = insert_work(&conn, "B");
+        set_match(&conn, without_id, "locked", None); // 旧コードで作られ得た不整合
+        let unmatched = insert_work(&conn, "C");
+
+        let (result, _) = bulk_set_match_status_inner(
+            &conn,
+            &[with_id, without_id, unmatched],
+            MatchStatus::Matched,
+        )
+        .unwrap();
+        assert_eq!(result, BulkMatchStatusResult { updated: 2, skipped: 1 });
+        assert_eq!(match_state(&conn, with_id), ("matched".into(), Some(10)));
+        assert_eq!(match_state(&conn, without_id), ("unmatched".into(), None));
+        assert_eq!(match_state(&conn, unmatched), ("unmatched".into(), None));
+    }
+
+    #[test]
+    fn clearing_skips_locked_works_and_removes_tmdb_id() {
+        let conn = open_migrated();
+        let matched = insert_work(&conn, "A");
+        set_match(&conn, matched, "matched", Some(10));
+        let locked = insert_work(&conn, "B");
+        set_match(&conn, locked, "locked", Some(20));
+
+        let (result, cleared) =
+            bulk_set_match_status_inner(&conn, &[matched, locked, matched], MatchStatus::Unmatched)
+                .unwrap();
+        assert_eq!(result, BulkMatchStatusResult { updated: 1, skipped: 1 });
+        assert_eq!(cleared, vec![matched]);
+        assert_eq!(match_state(&conn, matched), ("unmatched".into(), None));
+        assert_eq!(match_state(&conn, locked), ("locked".into(), Some(20)));
+    }
+
+    #[test]
+    fn pending_requires_no_tmdb_id() {
+        let conn = open_migrated();
+        let matched = insert_work(&conn, "A");
+        set_match(&conn, matched, "matched", Some(10));
+        let unmatched = insert_work(&conn, "B");
+
+        let (result, _) =
+            bulk_set_match_status_inner(&conn, &[matched, unmatched], MatchStatus::Pending).unwrap();
+        assert_eq!(result, BulkMatchStatusResult { updated: 1, skipped: 1 });
+        assert_eq!(match_state(&conn, matched), ("matched".into(), Some(10)));
+        assert_eq!(match_state(&conn, unmatched), ("pending".into(), None));
+    }
 }

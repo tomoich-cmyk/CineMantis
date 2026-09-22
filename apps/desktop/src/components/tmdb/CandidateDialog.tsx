@@ -144,7 +144,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
 
   const { data: candidates = [], isLoading, isError, isFetching } =
     useTmdbCandidates(workId, searchParams);
-  const { mutate: applyMatch, isPending: applying } = useApplyTmdbMatch();
+  const { mutate: applyMatch, isPending: applying, error: applyError } = useApplyTmdbMatch();
 
   const selected = candidates.find(
     (c) => c.tmdb_id === selectedId && c.media_type === selectedMediaType
@@ -163,7 +163,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
   }
 
   function handleApply() {
-    if (!selected) return;
+    if (!selected || isLocked) return;
     applyMatch(
       { workId, tmdbId: selected.tmdb_id, mediaType: selected.media_type, lock: lockOnApply },
       { onSuccess: onClose }
@@ -172,7 +172,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
 
   function handleApplyDirectId() {
     const id = parseInt(directIdInput, 10);
-    if (isNaN(id) || id <= 0) return;
+    if (isNaN(id) || id <= 0 || isLocked) return;
     applyMatch(
       { workId, tmdbId: id, mediaType: directMediaType, lock: lockOnApply },
       { onSuccess: onClose }
@@ -208,7 +208,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
         {/* ── locked バナー ── */}
         {isLocked && (
           <div className="mx-4 mt-3 px-3 py-2 bg-yellow-900/30 border border-yellow-700/50 rounded text-xs text-yellow-400 flex-shrink-0">
-            🔒 固定済みです。固定チェックを外して適用すると「手動照合」に戻ります。
+            🔒 固定中のため候補を適用できません。候補の確認はできます。変更するには先に「固定を解除」してください。
           </div>
         )}
 
@@ -318,7 +318,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
               </select>
               <button
                 onClick={handleApplyDirectId}
-                disabled={!directIdInput || applying}
+                disabled={!directIdInput || applying || isLocked}
                 className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-40"
               >
                 適用
@@ -326,6 +326,12 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
             </div>
           )}
         </div>
+
+        {applyError && (
+          <p className="px-5 pt-2 text-xs text-red-400 break-words flex-shrink-0">
+            適用に失敗しました: {String(applyError)}
+          </p>
+        )}
 
         {/* ── Footer ── */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-subtle flex-shrink-0">
@@ -347,7 +353,7 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
             </button>
             <button
               onClick={handleApply}
-              disabled={!selected || applying}
+              disabled={!selected || applying || isLocked}
               className="px-4 py-1.5 text-xs bg-mantis-700 hover:bg-mantis-600 text-white rounded transition-colors disabled:opacity-40"
             >
               {applying ? "適用中…" : "この候補を適用"}

@@ -180,6 +180,7 @@ pub fn list_works(
     let unorganized_clause = build_unorganized_sql();
     let attention_filter_sql: &str = match attention_filter.as_deref() {
         Some("unmatched")    => "AND COALESCE(w.match_status, 'unmatched') = 'unmatched'",
+        Some("pending")      => "AND w.match_status = 'pending'",
         Some("no_poster")    => "AND w.poster_path IS NULL AND w.thumb_path IS NULL",
         Some("missing_meta") => "AND (w.year IS NULL OR w.genres_json IS NULL)",
         Some("unorganized")  => unorganized_clause.as_str(),
@@ -230,7 +231,7 @@ pub fn list_works(
                 ),
                 CASE
                   WHEN w.tmdb_id IS NOT NULL
-                   AND w.match_status IN ('auto', 'manual', 'locked', 'matched')
+                   AND w.match_status IN ('locked', 'matched')
                   THEN COALESCE(w.poster_path, w.thumb_path)
                   ELSE NULL
                 END,

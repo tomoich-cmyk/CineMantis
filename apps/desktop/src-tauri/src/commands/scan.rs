@@ -339,20 +339,25 @@ pub async fn scan_source(
                     extract_probe_info(probe);
 
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                conn.execute(
-                    "INSERT INTO files
-                       (source_id, file_path, file_name, extension, file_size, mtime,
-                        duration_sec, width, height, video_codec, audio_codec, container)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                    rusqlite::params![
-                        source_id, path_str, file_name, extension,
-                        file_size, mtime, duration_sec, width, height,
-                        video_codec, audio_codec, container
-                    ],
+                let file_id = insert_scanned_file(
+                    &conn,
+                    &ScannedFile {
+                        source_id,
+                        root_path: &root_path,
+                        file_path: &path_str,
+                        file_name: &file_name,
+                        extension: &extension,
+                        file_size,
+                        mtime: mtime.as_deref(),
+                        duration_sec,
+                        width,
+                        height,
+                        video_codec: video_codec.as_deref(),
+                        audio_codec: audio_codec.as_deref(),
+                        container: &container,
+                    },
                 )
                 .map_err(|e| e.to_string())?;
-
-                let file_id = conn.last_insert_rowid();
 
                 // Auto-create a Work from filename (title estimation)
                 let title = estimate_title(&file_name);
@@ -371,23 +376,14 @@ pub async fn scan_source(
                     }
                 };
                 let country_type = infer_country_type_from_path(file_path, root);
-                let reading = crate::services::reading::infer_reading(&title);
-                conn.execute(
-                    "INSERT INTO works (work_type, media_kind, title, sort_title, reading, date_added, media_category, country_type)
-                     VALUES (?1, ?2, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?6, ?7)",
-                    rusqlite::params![
-                        work_type,
-                        work_media_kind,
-                        title,
-                        title.to_lowercase(),
-                        reading,
-                        if ["movie", "drama", "ova"].contains(&work_type.as_str()) { work_type.as_str() } else { "other" },
-                        country_type,
-                    ],
+                let work_id = insert_scanned_work(
+                    &conn,
+                    &work_type,
+                    &work_media_kind,
+                    &title,
+                    country_type,
                 )
                 .map_err(|e| e.to_string())?;
-
-                let work_id = conn.last_insert_rowid();
 
                 // Link via work_parts
                 conn.execute(
@@ -515,6 +511,72 @@ pub async fn scan_source(
     Ok(result)
 }
 
+/// 新規ファイル1件分の files 行
+pub(crate) struct ScannedFile<'a> {
+    pub source_id: i64,
+    pub root_path: &'a str,
+    pub file_path: &'a str,
+    pub file_name: &'a str,
+    pub extension: &'a str,
+    pub file_size: Option<i64>,
+    pub mtime: Option<&'a str>,
+    pub duration_sec: Option<f64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub video_codec: Option<&'a str>,
+    pub audio_codec: Option<&'a str>,
+    pub container: &'a str,
+}
+
+/// files に新規行を追加する。照合前入力として元ファイル名と
+/// source root からの相対パスを original_* に残す（original_captured = 1）。
+pub(crate) fn insert_scanned_file(
+    conn: &rusqlite::Connection,
+    file: &ScannedFile,
+) -> rusqlite::Result<i64> {
+    let original_rel_path =
+        crate::services::prematch_inputs::relative_to_root(file.root_path, file.file_path);
+    conn.execute(
+        "INSERT INTO files
+           (source_id, file_path, file_name, extension, file_size, mtime,
+            duration_sec, width, height, video_codec, audio_codec, container,
+            original_file_name, original_rel_path, original_captured)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?3, ?13, 1)",
+        rusqlite::params![
+            file.source_id, file.file_path, file.file_name, file.extension,
+            file.file_size, file.mtime, file.duration_sec, file.width, file.height,
+            file.video_codec, file.audio_codec, file.container, original_rel_path
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// ファイル名から推定した作品を追加する。推定タイトルは title_guess にも残し、
+/// TMDB 適用で title が書き換わった後も照合前の手がかりとして使えるようにする。
+pub(crate) fn insert_scanned_work(
+    conn: &rusqlite::Connection,
+    work_type: &str,
+    media_kind: &str,
+    title: &str,
+    country_type: &str,
+) -> rusqlite::Result<i64> {
+    let reading = crate::services::reading::infer_reading(title);
+    conn.execute(
+        "INSERT INTO works (work_type, media_kind, title, title_guess, sort_title, reading, date_added, media_category, country_type)
+         VALUES (?1, ?2, ?3, ?3, ?4, ?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?6, ?7)",
+        rusqlite::params![
+            work_type,
+            media_kind,
+            title,
+            title.to_lowercase(),
+            reading,
+            if ["movie", "drama", "ova"].contains(&work_type) { work_type } else { "other" },
+            country_type,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
 /// Simple title estimation from filename:
 /// - Remove extension
 /// - Replace . _ - with spaces
@@ -621,4 +683,68 @@ fn days_to_ymd(days: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_support::*;
+
+    fn scanned<'a>(source_id: i64, root_path: &'a str, file_path: &'a str, file_name: &'a str) -> ScannedFile<'a> {
+        ScannedFile {
+            source_id,
+            root_path,
+            file_path,
+            file_name,
+            extension: "mkv",
+            file_size: Some(1),
+            mtime: None,
+            duration_sec: Some(5880.0),
+            width: None,
+            height: None,
+            video_codec: None,
+            audio_codec: None,
+            container: "mkv",
+        }
+    }
+
+    #[test]
+    fn new_file_keeps_original_name_and_relative_path() {
+        let conn = open_migrated();
+        let root = r"D:\Movies";
+        let source_id = insert_source(&conn, root);
+        let file_id = insert_scanned_file(
+            &conn,
+            &scanned(source_id, root, r"D:\Movies\SF\Alien.1979.1080p.mkv", "Alien.1979.1080p.mkv"),
+        )
+        .unwrap();
+
+        let (name, rel, captured): (String, String, i64) = conn
+            .query_row(
+                "SELECT original_file_name, original_rel_path, original_captured FROM files WHERE id = ?1",
+                rusqlite::params![file_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Alien.1979.1080p.mkv");
+        assert_eq!(rel, "SF/Alien.1979.1080p.mkv");
+        assert_eq!(captured, 1);
+        assert!(!rel.contains(':') && !rel.starts_with('/') && !rel.starts_with('\\'));
+    }
+
+    #[test]
+    fn new_work_stores_title_guess() {
+        let conn = open_migrated();
+        let title = estimate_title("Alien.1979.1080p.mkv");
+        let work_id = insert_scanned_work(&conn, "movie", "unknown", &title, "foreign").unwrap();
+        let (stored_title, title_guess): (String, Option<String>) = conn
+            .query_row(
+                "SELECT title, title_guess FROM works WHERE id = ?1",
+                rusqlite::params![work_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored_title, title);
+        assert_eq!(title_guess.as_deref(), Some(title.as_str()));
+    }
 }

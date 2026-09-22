@@ -70,13 +70,29 @@ function formatPosition(sec: number): string {
 }
 
 const MATCH_LABELS: Record<string, { label: string; cls: string }> = {
-  matched:  { label: "照合済",   cls: "text-mantis-500" },
-  auto:     { label: "自動照合", cls: "text-mantis-500" },
-  manual:   { label: "手動照合", cls: "text-blue-400"   },
-  locked:   { label: "固定",     cls: "text-yellow-400" },
-  pending:  { label: "試行済",   cls: "text-orange-400" },
-  unmatched:{ label: "未照合",   cls: "text-gray-600"   },
+  matched:  { label: "照合済",       cls: "text-mantis-500" },
+  locked:   { label: "固定",         cls: "text-yellow-400" },
+  pending:  { label: "レビュー待ち", cls: "text-orange-400" },
+  unmatched:{ label: "未照合",       cls: "text-gray-600"   },
 };
+
+/** 自動照合で AUTO にしなかった理由（metadata_matcher::reason） */
+const MATCH_REASON_LABELS: Record<string, string> = {
+  NO_CANDIDATES: "候補なし",
+  BELOW_THRESHOLD: "スコア不足",
+  MULTIPLE_ABOVE_THRESHOLD: "有力候補が複数",
+  TIED_TOP: "同点の候補あり",
+  NO_YEAR_HINT: "ファイル名に年がない",
+  CANDIDATE_YEAR_UNKNOWN: "候補の公開年が不明",
+  YEAR_OUT_OF_RANGE: "年が一致しない",
+  EPISODE_MARKER_VS_MOVIE: "話数表記と映画候補が矛盾",
+  PART_MISMATCH: "Part 番号が一致しない",
+};
+
+function describeMatchReasons(reasons: string[] | undefined): string {
+  if (!reasons?.length) return "";
+  return reasons.map((reason) => MATCH_REASON_LABELS[reason] ?? reason).join("・");
+}
 
 // ─── コンポーネント ───────────────────────────────────────────────────────────
 
@@ -155,7 +171,7 @@ export function DetailPane() {
   if (!work) return null;
 
   const matchInfo = MATCH_LABELS[work.match_status] ?? MATCH_LABELS.unmatched;
-  const isMatched = ["auto", "manual", "locked", "matched"].includes(work.match_status);
+  const isMatched = work.match_status === "locked" || work.match_status === "matched";
   const isPending = work.match_status === "pending";
   const isLocked  = work.match_status === "locked";
   const artworkPath = isMatched ? (work.poster_path ?? work.thumb_path) : null;
@@ -440,10 +456,10 @@ export function DetailPane() {
 
           {/* アクションボタン */}
           <div className="flex flex-col gap-1.5">
-            {/* 試行済ヒント */}
+            {/* レビュー待ちヒント */}
             {isPending && (
               <p className="text-[11px] text-orange-400/70 leading-relaxed">
-                一括照合で候補が見つかりませんでした。「候補を探す」で別のキーワードを試すか、「自動照合」で再試行できます。
+                候補はありますが、自動では確定できませんでした。「候補を探す」で確認して適用してください。
               </p>
             )}
 
@@ -456,7 +472,8 @@ export function DetailPane() {
             {autoMatchResult && !autoMatchResult.matched && !autoMatchError && (
               <p className="text-[11px] text-orange-400/80 leading-relaxed">
                 自動採用できる候補がありませんでした
-                {autoMatchResult.confidence > 0 ? `（最高 ${autoMatchResult.confidence}%）` : ""}。
+                {autoMatchResult.confidence > 0 ? `（最高 ${autoMatchResult.confidence}%）` : ""}
+                {autoMatchResult.reasons?.length ? `: ${describeMatchReasons(autoMatchResult.reasons)}` : ""}。
                 「候補を探す」から確認できます。
               </p>
             )}

@@ -6,6 +6,7 @@ import {
   bulkAddTag,
   bulkRemoveTag,
   bulkSetMatchStatus,
+  type BulkMatchStatus,
 } from "@/api/bulk";
 import { workKeys } from "@/hooks/useWorks";
 import { useLibraryStore } from "@/store/libraryStore";
@@ -105,7 +106,7 @@ export function useBulkSetMatchStatus() {
       status,
     }: {
       workIds: number[];
-      status: "locked" | "matched" | "manual" | "unmatched";
+      status: BulkMatchStatus;
     }) => bulkSetMatchStatus(workIds, status),
     onSuccess: () => {
       invalidate();

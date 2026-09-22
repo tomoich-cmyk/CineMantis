@@ -140,11 +140,17 @@ pub struct TmdbCandidate {
 pub struct AutoMatchResult {
     pub work_id: i64,
     pub matched: bool,
-    pub status: String, // "matched" | "manual" | "locked" | "unmatched"
+    pub status: String, // MatchStatus: "unmatched" | "pending" | "matched" | "locked"
     pub confidence: i32,
     pub tmdb_id: Option<i64>,
     pub title: Option<String>,
     pub poster_local_path: Option<String>,
+    /// 自動照合の判定（"AUTO" | "REVIEW" | "UNRESOLVED"）。手動適用・再取得では None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// AUTO にしなかった理由コード（metadata_matcher::reason）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
 }
 
 /// バッチ照合の進捗イベント

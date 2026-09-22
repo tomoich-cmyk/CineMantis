@@ -217,6 +217,30 @@ export function AboutScreen() {
           </div>
         </section>
 
+        {/* ── データ提供（TMDB attribution） ── */}
+        <section>
+          <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            データ提供
+          </h2>
+          <div className="bg-surface-elevated border border-subtle rounded-lg px-4 py-3 text-[11px] text-gray-500 leading-relaxed">
+            <p className="text-xs text-gray-300">
+              This product uses the TMDB API but is not endorsed or certified by TMDB.
+            </p>
+            <p className="mt-1">
+              映画・TV のメタデータと画像は{" "}
+              <a
+                href="https://www.themoviedb.org/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-400"
+              >
+                The Movie Database (TMDB)
+              </a>{" "}
+              から取得しています。
+            </p>
+          </div>
+        </section>
+
         {/* ── 既知の制約 ── */}
         <section>
           <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">

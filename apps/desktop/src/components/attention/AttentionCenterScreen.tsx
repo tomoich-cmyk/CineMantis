@@ -29,6 +29,14 @@ const CATEGORIES: AttentionCategory[] = [
     action: "自動照合 or 候補を手動選択",
   },
   {
+    key: "pending",
+    label: "レビュー待ち",
+    icon: "🧐",
+    description: "候補はあるが自動確定できなかった作品（同点・年なし・矛盾など）",
+    count: (s) => s?.pending ?? 0,
+    action: "候補を確認して適用",
+  },
+  {
     key: "missing_meta",
     label: "メタ不足",
     icon: "📋",
@@ -116,8 +124,9 @@ export function AttentionCenterScreen() {
   const selectedWork = filteredWorks.find((work) => work.id === selectedWorkId) ?? null;
   const totalIssues = CATEGORIES.reduce((sum, c) => sum + c.count(stats), 0);
   const isMatched = selectedWork
-    ? ["auto", "manual", "locked", "matched"].includes(selectedWork.matchStatus)
+    ? selectedWork.matchStatus === "locked" || selectedWork.matchStatus === "matched"
     : false;
+  const isLocked = selectedWork?.matchStatus === "locked";
 
   function refreshAttentionQueries() {
     qc.invalidateQueries({ queryKey: ["attention-works"] });
@@ -278,8 +287,14 @@ export function AttentionCenterScreen() {
                     )}
                     <button
                       onClick={() => runRefreshMetadata(selectedWork.id)}
-                      disabled={!isMatched || refreshMeta.isPending}
-                      title={!isMatched ? "先にTMDb照合してください" : undefined}
+                      disabled={!isMatched || isLocked || refreshMeta.isPending}
+                      title={
+                        isLocked
+                          ? "固定中です。再取得するには先に固定を解除してください"
+                          : !isMatched
+                            ? "先にTMDb照合してください"
+                            : undefined
+                      }
                       className="rounded border border-subtle px-3 py-1.5 text-xs text-gray-300 hover:border-gray-600 disabled:opacity-35"
                     >
                       {refreshMeta.isPending ? "取得中…" : "メタデータ再取得"}

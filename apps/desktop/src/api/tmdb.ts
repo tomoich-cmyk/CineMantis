@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { MatchStatus } from "@cinemantis/shared-types";
 
 export interface TmdbCandidate {
   tmdb_id: number;
@@ -12,14 +13,21 @@ export interface TmdbCandidate {
   reasons: string[];
 }
 
+/** 自動照合（rules-safe）の判定 */
+export type MatchDecision = "AUTO" | "REVIEW" | "UNRESOLVED";
+
 export interface AutoMatchResult {
   work_id: number;
   matched: boolean;
-  status: "auto" | "matched" | "manual" | "locked" | "pending" | "unmatched";
+  status: MatchStatus;
   confidence: number;
   tmdb_id: number | null;
   title: string | null;
   poster_local_path: string | null;
+  /** 自動照合のときだけ入る */
+  decision?: MatchDecision;
+  /** AUTO にしなかった理由コード */
+  reasons?: string[];
 }
 
 export interface MetadataBatchProgress {

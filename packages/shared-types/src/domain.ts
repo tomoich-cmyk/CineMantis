@@ -8,6 +8,13 @@ export type CountryType = "foreign" | "domestic" | "unknown";
 
 export type MediaCategory = "movie" | "drama" | "ova" | "other";
 
+/**
+ * works.match_status（DB の CHECK 制約と同じ4値）
+ * - unmatched: 未照合（自動照合で候補なしを含む）
+ * - pending:   レビュー待ち（候補はあるが自動確定できなかった）
+ * - matched:   照合済み
+ * - locked:    固定（変更には明示的な固定解除が必要）
+ */
 export type MatchStatus = "unmatched" | "pending" | "matched" | "locked";
 
 export type SourceType = "nas" | "external_hdd" | "local";

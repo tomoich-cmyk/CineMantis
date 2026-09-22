@@ -1,15 +1,223 @@
 use crate::commands::settings::get_api_key_internal;
 use crate::db::DbState;
+use crate::models::match_status::MatchStatus;
 use crate::models::tmdb::*;
 use crate::services::{
-    metadata_matcher::{best_candidate, merge_and_rank, score_movie, score_tv},
+    metadata_matcher::{
+        merge_and_rank, rules_safe_best_candidate, score_movie, score_tv, SafeDecision,
+    },
     poster_store::store_poster_for_work,
-    title_parser::parse_title,
+    title_parser::{parse_title, ParsedTitle},
     tmdb_client::TmdbClient,
 };
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
+
+// ─── 照合状態の共通ルール ─────────────────────────────────────────────────────
+
+/// locked の作品は明示的な unlock なしに変更しない
+pub(crate) const LOCKED_ERROR: &str =
+    "固定中の作品は変更できません。先に「固定を解除」してください。";
+
+/// 固定解除後の状態（tmdb_id の有無に合わせ、CHECK 制約の有効値に戻す）
+pub(crate) const UNLOCKED_STATUS_SQL: &str =
+    "CASE WHEN tmdb_id IS NULL THEN 'unmatched' ELSE 'matched' END";
+
+/// 照合解除で書き戻す列
+pub(crate) const CLEAR_MATCH_ASSIGNMENTS: &str = "tmdb_id = NULL, tmdb_media_type = NULL,
+    poster_path = NULL, match_status = 'unmatched', match_confidence = NULL,
+    metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+
+/// 照合前の状態（locked 判定とポスター整理に使う）
+struct CurrentMatch {
+    status: String,
+    tmdb_id: Option<i64>,
+    media_type: Option<String>,
+}
+
+fn load_current_match(conn: &Connection, work_id: i64) -> Result<CurrentMatch, String> {
+    conn.query_row(
+        "SELECT match_status, tmdb_id, tmdb_media_type FROM works WHERE id = ?1",
+        rusqlite::params![work_id],
+        |row| {
+            Ok(CurrentMatch {
+                status: row.get(0)?,
+                tmdb_id: row.get(1)?,
+                media_type: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| format!("work {work_id} not found"))
+}
+
+/// match_confidence の書き方
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfidenceWrite {
+    /// 自動照合のスコアを記録する
+    Score(i32),
+    /// 人が選んだ照合。スコアではないので NULL にする
+    /// TODO(PR2): 手動確定という操作由来は match_source / match history で管理する
+    Clear,
+    /// メタデータ再取得など、照合そのものは変わらない
+    Keep,
+}
+
+/// works に TMDB 照合結果を書き込む内容
+pub(crate) struct TmdbMatchWrite<'a> {
+    pub work_id: i64,
+    pub tmdb_id: i64,
+    pub media_type: &'a str,
+    pub match_status: MatchStatus,
+    pub confidence: ConfidenceWrite,
+    pub title: &'a str,
+    pub original_title: Option<&'a str>,
+    pub overview: Option<&'a str>,
+    pub year: Option<i32>,
+    pub release_date: Option<&'a str>,
+    pub genres_json: Option<&'a str>,
+    pub country_json: Option<&'a str>,
+    pub runtime_sec: Option<f64>,
+    pub imdb_id: Option<&'a str>,
+    pub poster_local_path: Option<&'a str>,
+    pub external_rating: Option<f64>,
+    pub reading: Option<&'a str>,
+    pub country_type: Option<&'a str>,
+    pub media_category: &'a str,
+}
+
+/// TMDB 照合結果を works に書き込む。locked の作品は変更せず false を返す。
+/// - title_guess（照合前入力）は変更しない
+/// - ポスター取得に失敗した場合、同じ TMDB 作品なら既存の poster_path を残し、
+///   別の作品に変わる場合は古い作品のポスターを残さないよう NULL にする
+fn write_tmdb_match(conn: &Connection, w: &TmdbMatchWrite) -> Result<bool, String> {
+    let (confidence, keep_confidence) = match w.confidence {
+        ConfidenceWrite::Score(score) => (Some(score), 0),
+        ConfidenceWrite::Clear => (None, 0),
+        ConfidenceWrite::Keep => (None, 1),
+    };
+    let updated = conn
+        .execute(
+            "UPDATE works SET
+               title            = ?1,
+               original_title   = COALESCE(?19, original_title),
+               synopsis         = COALESCE(?2, synopsis),
+               year             = COALESCE(?3, year),
+               release_date     = COALESCE(?4, release_date),
+               genres_json      = COALESCE(?5, genres_json),
+               country_json     = COALESCE(?6, country_json),
+               runtime_sec      = COALESCE(?7, runtime_sec),
+               tmdb_id          = ?8,
+               tmdb_media_type  = ?9,
+               imdb_id          = COALESCE(?10, imdb_id),
+               poster_path      = CASE
+                                    WHEN ?11 IS NOT NULL THEN ?11
+                                    WHEN tmdb_id IS ?8 AND tmdb_media_type IS ?9 THEN poster_path
+                                    ELSE NULL
+                                  END,
+               media_kind       = ?9,
+               external_rating  = ?12,
+               external_rating_source = 'tmdb',
+               reading          = COALESCE(NULLIF(TRIM(COALESCE(reading, '')), ''), ?13),
+               match_status     = ?14,
+               match_confidence = CASE WHEN ?20 = 1 THEN match_confidence ELSE ?15 END,
+               country_type     = COALESCE(NULLIF(country_type, 'unknown'), ?17, country_type),
+               media_category   = COALESCE(NULLIF(media_category, 'other'), ?18),
+               metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             WHERE id = ?16 AND match_status <> 'locked'",
+            rusqlite::params![
+                w.title,
+                w.overview,
+                w.year,
+                w.release_date,
+                w.genres_json,
+                w.country_json,
+                w.runtime_sec,
+                w.tmdb_id,
+                w.media_type,
+                w.imdb_id,
+                w.poster_local_path,
+                w.external_rating,
+                w.reading,
+                w.match_status.as_str(),
+                confidence,
+                w.work_id,
+                w.country_type,
+                w.media_category,
+                w.original_title,
+                keep_confidence,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(updated > 0)
+}
+
+/// 自動照合で AUTO にならなかった結果（REVIEW / UNRESOLVED）を記録する。
+/// 照合済み（tmdb_id あり）や locked の作品は変更しない。変更後の状態を返す。
+fn record_unapplied_decision(
+    conn: &Connection,
+    work_id: i64,
+    status: MatchStatus,
+) -> Result<MatchStatus, String> {
+    conn.execute(
+        "UPDATE works SET match_status = ?2,
+                metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = ?1 AND tmdb_id IS NULL AND match_status <> 'locked'",
+        rusqlite::params![work_id, status.as_str()],
+    )
+    .map_err(|e| e.to_string())?;
+    let current = load_current_match(conn, work_id)?;
+    MatchStatus::parse(&current.status)
+}
+
+/// locked → 有効な状態へ戻す。変更した件数を返す
+fn unlock_work(conn: &Connection, work_id: i64) -> Result<usize, String> {
+    conn.execute(
+        &format!(
+            "UPDATE works SET match_status = {UNLOCKED_STATUS_SQL},
+                    metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+             WHERE id = ?1 AND match_status = 'locked'"
+        ),
+        rusqlite::params![work_id],
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// 照合を解除する。locked の作品は拒否する
+fn clear_match(conn: &Connection, work_id: i64) -> Result<(), String> {
+    let current = load_current_match(conn, work_id)?;
+    if current.status == MatchStatus::Locked.as_str() {
+        return Err(LOCKED_ERROR.to_string());
+    }
+    conn.execute(
+        &format!("UPDATE works SET {CLEAR_MATCH_ASSIGNMENTS} WHERE id = ?1 AND match_status <> 'locked'"),
+        rusqlite::params![work_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn unapplied_result(
+    work_id: i64,
+    status: MatchStatus,
+    decision: Option<SafeDecision>,
+    confidence: i32,
+    reasons: Vec<String>,
+) -> AutoMatchResult {
+    AutoMatchResult {
+        work_id,
+        matched: false,
+        status: status.as_str().to_string(),
+        confidence,
+        tmdb_id: None,
+        title: None,
+        poster_local_path: None,
+        decision: decision.map(|d| d.as_str().to_string()),
+        reasons,
+    }
+}
 
 // ─── 内部ヘルパー ─────────────────────────────────────────────────────────────
 
@@ -44,11 +252,12 @@ fn get_work_for_match(db: &DbState, work_id: i64) -> Result<Option<WorkForMatch>
     .map_err(|e| e.to_string())
 }
 
-/// 候補を検索して scored candidates を返す（内部共通処理）
+/// 候補を検索して scored candidates を返す（内部共通処理）。
+/// rules-safe 判定用に、照合前入力を parse した結果も返す。
 async fn fetch_candidates(
     client: &TmdbClient,
     work: &WorkForMatch,
-) -> Result<Vec<TmdbCandidate>, String> {
+) -> Result<(Vec<TmdbCandidate>, ParsedTitle), String> {
     // 検索に使うタイトルを決定
     let raw_title = work.title_guess.as_deref().unwrap_or(&work.title);
     let parsed = parse_title(raw_title);
@@ -127,7 +336,7 @@ async fn fetch_candidates(
         return Err(format!("TMDb search failed: {}", errors.join(" / ")));
     }
 
-    Ok(merge_and_rank(all))
+    Ok((merge_and_rank(all), parsed))
 }
 
 /// 詳細取得 + DB 更新 + ポスター保存（movie / tv 共通）
@@ -138,18 +347,24 @@ async fn apply_match_internal(
     work_id: i64,
     tmdb_id: i64,
     media_type: &str,
-    new_match_status: &str,
-    confidence: i32,
+    new_match_status: MatchStatus,
+    confidence: ConfidenceWrite,
 ) -> Result<AutoMatchResult, String> {
-    // シリーズ解析用に照合前のオリジナルタイトルを先取り
-    let orig_work_title: String = {
+    // locked は明示的な unlock なしに変更しない。シリーズ解析用に照合前のタイトルも先取りする
+    let (previous, orig_work_title) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT COALESCE(title_guess, title) FROM works WHERE id = ?1",
-            rusqlite::params![work_id],
-            |row| row.get(0),
-        )
-        .unwrap_or_default()
+        let previous = load_current_match(&conn, work_id)?;
+        if previous.status == MatchStatus::Locked.as_str() {
+            return Err(LOCKED_ERROR.to_string());
+        }
+        let orig_work_title: String = conn
+            .query_row(
+                "SELECT COALESCE(title_guess, title) FROM works WHERE id = ?1",
+                rusqlite::params![work_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        (previous, orig_work_title)
     };
 
     // 詳細取得
@@ -157,6 +372,7 @@ async fn apply_match_internal(
 
     let (
         title,
+        original_title,
         overview,
         release_date,
         genres_json,
@@ -172,6 +388,7 @@ async fn apply_match_internal(
         let countries = countries_to_json(d.production_countries.as_deref());
         (
             d.title,
+            d.original_title,
             d.overview,
             d.release_date,
             genres,
@@ -193,6 +410,7 @@ async fn apply_match_internal(
             .map(|&s| s as f64 * 60.0);
         (
             d.name,
+            d.original_name,
             d.overview,
             d.first_air_date,
             genres,
@@ -203,6 +421,7 @@ async fn apply_match_internal(
             d.vote_average,
         )
     };
+    let original_title = original_title.filter(|t| !t.trim().is_empty());
 
     let year = release_date
         .as_deref()
@@ -233,55 +452,44 @@ async fn apply_match_internal(
     } else {
         None
     };
+    let same_tmdb_work =
+        previous.tmdb_id == Some(tmdb_id) && previous.media_type.as_deref() == Some(media_type);
 
     // DB 更新
     {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE works SET
-               title            = ?1,
-               synopsis         = COALESCE(?2, synopsis),
-               year             = COALESCE(?3, year),
-               release_date     = COALESCE(?4, release_date),
-               genres_json      = COALESCE(?5, genres_json),
-               country_json     = COALESCE(?6, country_json),
-               runtime_sec      = COALESCE(?7, runtime_sec),
-               tmdb_id          = ?8,
-               tmdb_media_type  = ?9,
-               imdb_id          = COALESCE(?10, imdb_id),
-               poster_path      = ?11,
-               media_kind       = ?9,
-               external_rating  = ?12,
-               external_rating_source = 'tmdb',
-               reading          = COALESCE(NULLIF(TRIM(COALESCE(reading, '')), ''), ?13),
-               match_status     = ?14,
-               match_confidence = ?15,
-               country_type     = COALESCE(NULLIF(country_type, 'unknown'), ?17, country_type),
-               media_category   = COALESCE(NULLIF(media_category, 'other'), ?18),
-               metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-             WHERE id = ?16",
-            rusqlite::params![
-                title,
-                overview,
-                year,
-                release_date,
-                genres_json,
-                country_json,
-                runtime_sec,
+        let updated = write_tmdb_match(
+            &conn,
+            &TmdbMatchWrite {
+                work_id,
                 tmdb_id,
                 media_type,
-                imdb_id,
-                poster_local_path,
-                external_rating,
-                inferred_reading,
-                new_match_status,
+                match_status: new_match_status,
                 confidence,
-                work_id,
-                inferred_country_type,
-                inferred_media_category,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
+                title: &title,
+                original_title: original_title.as_deref(),
+                overview: overview.as_deref(),
+                year,
+                release_date: release_date.as_deref(),
+                genres_json: genres_json.as_deref(),
+                country_json: country_json.as_deref(),
+                runtime_sec,
+                imdb_id: imdb_id.as_deref(),
+                poster_local_path: poster_local_path.as_deref(),
+                external_rating,
+                reading: inferred_reading.as_deref(),
+                country_type: inferred_country_type,
+                media_category: inferred_media_category,
+            },
+        )?;
+        if !updated {
+            // 詳細取得中に固定された
+            return Err(LOCKED_ERROR.to_string());
+        }
+    }
+    // 別の作品に付け替えてポスターが取れなかった場合、古い作品のポスターファイルを残さない
+    if poster_local_path.is_none() && !same_tmdb_work {
+        crate::services::poster_store::delete_poster_for_work(app, work_id);
     }
 
     // ── 人物情報（credits）取得・保存 ─────────────────────────────────────────
@@ -320,7 +528,7 @@ async fn apply_match_internal(
         "metadata:updated",
         MetadataUpdatedEvent {
             work_id,
-            status: new_match_status.to_string(),
+            status: new_match_status.as_str().to_string(),
             poster_local_path: poster_local_path.clone(),
             title: title.clone(),
             year,
@@ -330,11 +538,16 @@ async fn apply_match_internal(
     Ok(AutoMatchResult {
         work_id,
         matched: true,
-        status: new_match_status.to_string(),
-        confidence,
+        status: new_match_status.as_str().to_string(),
+        confidence: match confidence {
+            ConfidenceWrite::Score(score) => score,
+            ConfidenceWrite::Clear | ConfidenceWrite::Keep => 0,
+        },
         tmdb_id: Some(tmdb_id),
         title: Some(title),
         poster_local_path,
+        decision: None,
+        reasons: Vec::new(),
     })
 }
 
@@ -369,25 +582,22 @@ pub async fn search_tmdb_candidates(
         }
     }
 
-    fetch_candidates(&client, &work).await
+    fetch_candidates(&client, &work)
+        .await
+        .map(|(candidates, _)| candidates)
 }
 
-/// locked → matched に変更（固定解除）
-/// メタデータはそのまま保持し、locked フラグだけ外す
+/// locked を解除する（固定解除）
+/// メタデータはそのまま保持し、tmdb_id があれば matched、なければ unmatched に戻す
 #[tauri::command]
 pub fn unlock_tmdb_match(state: State<'_, DbState>, work_id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE works SET match_status = 'matched',
-            metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE id = ?1 AND match_status = 'locked'",
-        rusqlite::params![work_id],
-    )
-    .map_err(|e| e.to_string())?;
+    unlock_work(&conn, work_id)?;
     Ok(())
 }
 
-/// 1作品を自動照合して高信頼なら反映
+/// 1作品を自動照合する。rules-safe で AUTO のときだけ反映し、
+/// REVIEW は pending（レビュー待ち）、UNRESOLVED は unmatched として記録する
 #[tauri::command]
 pub async fn auto_match_work(
     app: AppHandle,
@@ -400,54 +610,45 @@ pub async fn auto_match_work(
     let work =
         get_work_for_match(&state, work_id)?.ok_or_else(|| format!("work {work_id} not found"))?;
 
-    if work.match_status == "locked" {
-        return Ok(AutoMatchResult {
+    if work.match_status == MatchStatus::Locked.as_str() {
+        return Ok(unapplied_result(
             work_id,
-            matched: false,
-            status: "locked".to_string(),
-            confidence: 0,
-            tmdb_id: None,
-            title: None,
-            poster_local_path: None,
-        });
+            MatchStatus::Locked,
+            None,
+            0,
+            vec!["LOCKED".to_string()],
+        ));
     }
 
-    let candidates = fetch_candidates(&client, &work).await?;
+    let (candidates, parsed) = fetch_candidates(&client, &work).await?;
+    let outcome = rules_safe_best_candidate(&candidates, &parsed);
+    let reasons: Vec<String> = outcome.reasons.iter().map(|r| r.to_string()).collect();
+    let top_confidence = outcome.top.map(|c| c.confidence).unwrap_or(0);
 
-    match best_candidate(&candidates) {
-        None => {
-            // 低信頼 → unmatched に記録
-            let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let _ = conn.execute(
-                "UPDATE works SET match_status = 'unmatched', metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-                rusqlite::params![work_id],
-            );
-            Ok(AutoMatchResult {
-                work_id,
-                matched: false,
-                status: "unmatched".to_string(),
-                confidence: candidates.first().map(|c| c.confidence).unwrap_or(0),
-                tmdb_id: None,
-                title: None,
-                poster_local_path: None,
-            })
-        }
-        Some(best) => {
-            let result = apply_match_internal(
+    match (outcome.decision, outcome.top) {
+        (SafeDecision::Auto, Some(best)) => {
+            apply_match_internal(
                 &app,
                 &state,
                 &client,
                 work_id,
                 best.tmdb_id,
                 &best.media_type,
-                "matched",
-                best.confidence,
+                MatchStatus::Matched,
+                ConfidenceWrite::Score(best.confidence),
             )
-            .await?;
-            Ok(AutoMatchResult {
-                confidence: best.confidence,
+            .await
+            .map(|result| AutoMatchResult {
+                decision: Some(SafeDecision::Auto.as_str().to_string()),
                 ..result
             })
+        }
+        (decision, _) => {
+            let status = {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                record_unapplied_decision(&conn, work_id, decision.match_status())?
+            };
+            Ok(unapplied_result(work_id, status, Some(decision), top_confidence, reasons))
         }
     }
 }
@@ -462,7 +663,7 @@ pub async fn auto_match_source(
     auto_match_source_inner(&app, &state, source_id).await
 }
 
-/// 手動選択した候補を反映
+/// 手動選択した候補を反映（locked の作品は先に固定解除が必要）
 #[tauri::command]
 pub async fn apply_tmdb_match(
     app: AppHandle,
@@ -472,9 +673,12 @@ pub async fn apply_tmdb_match(
     media_type: String,
     lock: bool,
 ) -> Result<AutoMatchResult, String> {
+    if media_type != "movie" && media_type != "tv" {
+        return Err(format!("不正な media_type です: {media_type}"));
+    }
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
-    let match_status = if lock { "locked" } else { "matched" };
+    let match_status = if lock { MatchStatus::Locked } else { MatchStatus::Matched };
     apply_match_internal(
         &app,
         &state,
@@ -483,12 +687,12 @@ pub async fn apply_tmdb_match(
         tmdb_id,
         &media_type,
         match_status,
-        100,
+        ConfidenceWrite::Clear,
     )
     .await
 }
 
-/// 既に tmdb_id がある作品のメタデータを再取得
+/// 既に tmdb_id がある作品のメタデータを再取得（locked の作品は先に固定解除が必要）
 #[tauri::command]
 pub async fn refresh_tmdb_metadata(
     app: AppHandle,
@@ -517,13 +721,14 @@ pub async fn refresh_tmdb_metadata(
         work_id,
         tmdb_id,
         &media_type,
-        "matched",
-        100,
+        MatchStatus::Matched,
+        ConfidenceWrite::Keep,
     )
     .await
 }
 
 /// 照合を解除する（poster 削除・match_status を unmatched に戻す）
+/// locked の作品は先に固定解除が必要
 #[tauri::command]
 pub fn clear_tmdb_match(
     app: AppHandle,
@@ -532,15 +737,7 @@ pub fn clear_tmdb_match(
 ) -> Result<(), String> {
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE works SET
-               tmdb_id = NULL, tmdb_media_type = NULL,
-               poster_path = NULL, match_status = 'unmatched',
-               match_confidence = NULL, metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-             WHERE id = ?1",
-            rusqlite::params![work_id],
-        )
-        .map_err(|e| e.to_string())?;
+        clear_match(&conn, work_id)?;
     }
     crate::services::poster_store::delete_poster_for_work(&app, work_id);
     Ok(())
@@ -585,6 +782,8 @@ pub async fn auto_match_source_inner(
                AND (w.match_status IS NULL OR w.match_status IN ('unmatched'))
                AND w.title IS NOT NULL AND w.title != ''
                AND w.match_status != 'locked'
+               -- 一度も照合を試していない作品だけ（UNRESOLVED の作品を毎回再試行しない）
+               AND w.metadata_updated_at IS NULL
              {base_filter}
              ORDER BY w.id
              LIMIT 10"
@@ -651,8 +850,8 @@ pub async fn auto_match_source_inner(
             year,
             match_status: "unmatched".to_string(),
         };
-        let candidates = match fetch_candidates(&client, &work).await {
-            Ok(candidates) => candidates,
+        let (candidates, parsed) = match fetch_candidates(&client, &work).await {
+            Ok(result) => result,
             Err(error) => {
                 eprintln!("[TMDb] search error for \"{}\": {}", title, error);
                 last_error = Some(format!("\"{title}\": {error}"));
@@ -675,32 +874,9 @@ pub async fn auto_match_source_inner(
             }
         };
 
-        match best_candidate(&candidates) {
-            None => {
-                // 候補なし or スコア不足の診断情報を記録
-                if candidates.is_empty() {
-                    let msg = format!("\"{}\" → no TMDb results", title);
-                    eprintln!("[TMDb] FAIL: {}", msg);
-                    last_error = Some(msg);
-                } else {
-                    let top = &candidates[0];
-                    let msg = format!(
-                        "\"{}\" → best={} score={} (< threshold)",
-                        title, top.title, top.confidence
-                    );
-                    eprintln!("[TMDb] FAIL: {}", msg);
-                    last_error = Some(msg);
-                }
-                // 一括照合での失敗は 'pending' に変更して次回スキップ
-                // （個別の「自動照合」ボタンを押すと 'unmatched' に戻るため再試行可能）
-                let conn = db.0.lock().map_err(|e| e.to_string())?;
-                let _ = conn.execute(
-                    "UPDATE works SET match_status = 'pending', metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-                    rusqlite::params![work_id],
-                );
-                failed += 1;
-            }
-            Some(best) => {
+        let outcome = rules_safe_best_candidate(&candidates, &parsed);
+        match (outcome.decision, outcome.top) {
+            (SafeDecision::Auto, Some(best)) => {
                 eprintln!(
                     "[TMDb] MATCH: \"{}\" → \"{}\" ({})",
                     title, best.title, best.confidence
@@ -712,8 +888,8 @@ pub async fn auto_match_source_inner(
                     work_id,
                     best.tmdb_id,
                     &best.media_type,
-                    "matched",
-                    best.confidence,
+                    MatchStatus::Matched,
+                    ConfidenceWrite::Score(best.confidence),
                 )
                 .await
                 {
@@ -723,6 +899,29 @@ pub async fn auto_match_source_inner(
                         last_error = Some(e);
                         failed += 1;
                     }
+                }
+            }
+            (decision, top) => {
+                // 自動確定できない理由を診断情報として残す
+                let msg = match top {
+                    None => format!("\"{}\" → no TMDb results", title),
+                    Some(top) => format!(
+                        "\"{}\" → best={} score={} ({})",
+                        title,
+                        top.title,
+                        top.confidence,
+                        outcome.reasons.join(", ")
+                    ),
+                };
+                eprintln!("[TMDb] {}: {}", decision.as_str(), msg);
+                last_error = Some(msg);
+                // REVIEW → pending（レビュー待ち）、UNRESOLVED → unmatched
+                let conn = db.0.lock().map_err(|e| e.to_string())?;
+                let _ = record_unapplied_decision(&conn, work_id, decision.match_status());
+                if decision == SafeDecision::Review {
+                    skipped += 1;
+                } else {
+                    failed += 1;
                 }
             }
         }
@@ -1092,4 +1291,169 @@ pub struct TmdbCandidatesResponse {
     pub parsed_title: String,
     pub media_kind: String,
     pub year_hint: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_support::*;
+
+    fn write<'a>(work_id: i64, tmdb_id: i64, poster: Option<&'a str>) -> TmdbMatchWrite<'a> {
+        TmdbMatchWrite {
+            work_id,
+            tmdb_id,
+            media_type: "movie",
+            match_status: MatchStatus::Matched,
+            confidence: ConfidenceWrite::Score(90),
+            title: "エイリアン",
+            original_title: Some("Alien"),
+            overview: None,
+            year: Some(1979),
+            release_date: Some("1979-05-25"),
+            genres_json: None,
+            country_json: None,
+            runtime_sec: None,
+            imdb_id: None,
+            poster_local_path: poster,
+            external_rating: None,
+            reading: None,
+            country_type: None,
+            media_category: "movie",
+        }
+    }
+
+    fn row(conn: &Connection, work_id: i64) -> (String, Option<String>, Option<String>, Option<String>, Option<f64>) {
+        conn.query_row(
+            "SELECT title, title_guess, original_title, poster_path, match_confidence FROM works WHERE id = ?1",
+            rusqlite::params![work_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap()
+    }
+
+    fn scanned_work(conn: &Connection) -> i64 {
+        crate::commands::scan::insert_scanned_work(conn, "movie", "unknown", "Alien 1979", "foreign")
+            .unwrap()
+    }
+
+    #[test]
+    fn apply_keeps_title_guess_and_saves_original_title() {
+        let conn = open_migrated();
+        let work_id = scanned_work(&conn);
+        assert!(write_tmdb_match(&conn, &write(work_id, 348, Some("/p/1.jpg"))).unwrap());
+
+        let (title, title_guess, original_title, poster, confidence) = row(&conn, work_id);
+        assert_eq!(title, "エイリアン");
+        assert_eq!(title_guess.as_deref(), Some("Alien 1979"));
+        assert_eq!(original_title.as_deref(), Some("Alien"));
+        assert_eq!(poster.as_deref(), Some("/p/1.jpg"));
+        assert_eq!(confidence, Some(90.0));
+        assert_eq!(match_state(&conn, work_id), ("matched".into(), Some(348)));
+    }
+
+    #[test]
+    fn poster_failure_keeps_poster_for_same_tmdb_work_only() {
+        let conn = open_migrated();
+        let work_id = scanned_work(&conn);
+        write_tmdb_match(&conn, &write(work_id, 348, Some("/p/1.jpg"))).unwrap();
+
+        // 再取得でポスター取得に失敗しても、同じ作品なら既存のポスターを残す
+        write_tmdb_match(&conn, &write(work_id, 348, None)).unwrap();
+        assert_eq!(row(&conn, work_id).3.as_deref(), Some("/p/1.jpg"));
+
+        // 別の作品に付け替えて取得に失敗した場合は、古い作品のポスターを残さない
+        write_tmdb_match(&conn, &write(work_id, 999, None)).unwrap();
+        assert_eq!(row(&conn, work_id).3, None);
+    }
+
+    #[test]
+    fn confidence_is_not_set_to_100_for_manual_or_refresh() {
+        let conn = open_migrated();
+        let work_id = scanned_work(&conn);
+        write_tmdb_match(&conn, &write(work_id, 348, None)).unwrap();
+
+        let mut refresh = write(work_id, 348, None);
+        refresh.confidence = ConfidenceWrite::Keep;
+        write_tmdb_match(&conn, &refresh).unwrap();
+        assert_eq!(row(&conn, work_id).4, Some(90.0));
+
+        let mut manual = write(work_id, 348, None);
+        manual.confidence = ConfidenceWrite::Clear;
+        write_tmdb_match(&conn, &manual).unwrap();
+        assert_eq!(row(&conn, work_id).4, None);
+    }
+
+    #[test]
+    fn locked_work_is_not_overwritten_by_apply() {
+        let conn = open_migrated();
+        let work_id = scanned_work(&conn);
+        set_match(&conn, work_id, "locked", Some(11));
+
+        let mut explicit_lock = write(work_id, 348, Some("/p/1.jpg"));
+        explicit_lock.match_status = MatchStatus::Locked;
+        assert!(!write_tmdb_match(&conn, &explicit_lock).unwrap());
+        assert!(!write_tmdb_match(&conn, &write(work_id, 348, None)).unwrap());
+        assert_eq!(match_state(&conn, work_id), ("locked".into(), Some(11)));
+        assert_eq!(row(&conn, work_id).0, "Alien 1979");
+    }
+
+    #[test]
+    fn unapplied_decisions_map_to_pending_and_unmatched() {
+        let conn = open_migrated();
+        let review = scanned_work(&conn);
+        let unresolved = scanned_work(&conn);
+        assert_eq!(
+            record_unapplied_decision(&conn, review, SafeDecision::Review.match_status()).unwrap(),
+            MatchStatus::Pending
+        );
+        assert_eq!(
+            record_unapplied_decision(&conn, unresolved, SafeDecision::Unresolved.match_status())
+                .unwrap(),
+            MatchStatus::Unmatched
+        );
+        assert_eq!(match_state(&conn, review), ("pending".into(), None));
+        assert_eq!(match_state(&conn, unresolved), ("unmatched".into(), None));
+    }
+
+    #[test]
+    fn automatic_decisions_do_not_touch_locked_or_matched_works() {
+        let conn = open_migrated();
+        let locked = scanned_work(&conn);
+        set_match(&conn, locked, "locked", Some(11));
+        let matched = scanned_work(&conn);
+        set_match(&conn, matched, "matched", Some(22));
+
+        for status in [MatchStatus::Pending, MatchStatus::Unmatched] {
+            assert_eq!(record_unapplied_decision(&conn, locked, status).unwrap(), MatchStatus::Locked);
+            assert_eq!(record_unapplied_decision(&conn, matched, status).unwrap(), MatchStatus::Matched);
+        }
+        assert_eq!(match_state(&conn, locked), ("locked".into(), Some(11)));
+        assert_eq!(match_state(&conn, matched), ("matched".into(), Some(22)));
+    }
+
+    #[test]
+    fn clearing_a_locked_work_requires_unlock() {
+        let conn = open_migrated();
+        let work_id = scanned_work(&conn);
+        set_match(&conn, work_id, "locked", Some(11));
+
+        assert_eq!(clear_match(&conn, work_id), Err(LOCKED_ERROR.to_string()));
+        assert_eq!(match_state(&conn, work_id), ("locked".into(), Some(11)));
+
+        assert_eq!(unlock_work(&conn, work_id).unwrap(), 1);
+        assert_eq!(match_state(&conn, work_id), ("matched".into(), Some(11)));
+        clear_match(&conn, work_id).unwrap();
+        assert_eq!(match_state(&conn, work_id), ("unmatched".into(), None));
+    }
+
+    #[test]
+    fn unlock_without_tmdb_id_returns_to_unmatched() {
+        let conn = open_migrated();
+        let work_id = scanned_work(&conn);
+        set_match(&conn, work_id, "locked", None);
+        assert_eq!(unlock_work(&conn, work_id).unwrap(), 1);
+        assert_eq!(match_state(&conn, work_id), ("unmatched".into(), None));
+        // locked 以外には何もしない
+        assert_eq!(unlock_work(&conn, work_id).unwrap(), 0);
+    }
 }

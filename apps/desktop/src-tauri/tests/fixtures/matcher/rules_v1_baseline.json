@@ -1,0 +1,91 @@
+[
+  {
+    "name": "exact Japanese title without year (rules-1 AUTO, rules-safe REVIEW)",
+    "raw": "アルマゲドン.mp4",
+    "movie_results": [
+      { "id": 95, "title": "アルマゲドン", "original_title": "Armageddon", "release_date": "1998-07-01" },
+      { "id": 1001, "title": "アルマゲドン2", "original_title": "Armageddon 2", "release_date": "2010-01-01" }
+    ],
+    "expected": [
+      { "tmdb_id": 95, "media_type": "movie", "confidence": 80 },
+      { "tmdb_id": 1001, "media_type": "movie", "confidence": 40 }
+    ],
+    "expected_best": 95,
+    "expected_safe": "REVIEW"
+  },
+  {
+    "name": "release-noise filename with year (AUTO in both)",
+    "raw": "Blade.Runner.2049.2017.1080p.BluRay.x264.mkv",
+    "movie_results": [
+      { "id": 335984, "title": "ブレードランナー 2049", "original_title": "Blade Runner 2049", "release_date": "2017-10-06" },
+      { "id": 78, "title": "ブレードランナー", "original_title": "Blade Runner", "release_date": "1982-06-25" }
+    ],
+    "expected": [
+      { "tmdb_id": 335984, "media_type": "movie", "confidence": 100 },
+      { "tmdb_id": 78, "media_type": "movie", "confidence": 40 }
+    ],
+    "expected_best": 335984,
+    "expected_safe": "AUTO"
+  },
+  {
+    "name": "TV episode pattern, movie candidate penalised below 40",
+    "raw": "Breaking.Bad.S01E03.1080p.BluRay.mkv",
+    "movie_results": [
+      { "id": 559969, "title": "El Camino: A Breaking Bad Movie", "original_title": "El Camino: A Breaking Bad Movie", "release_date": "2019-10-11" }
+    ],
+    "tv_results": [
+      { "id": 1396, "name": "ブレイキング・バッド", "original_name": "Breaking Bad", "first_air_date": "2008-01-20" }
+    ],
+    "expected": [
+      { "tmdb_id": 1396, "media_type": "tv", "confidence": 80 }
+    ],
+    "expected_best": 1396,
+    "expected_safe": "REVIEW"
+  },
+  {
+    "name": "same-title remake tie (rules-1 picks the last max, rules-safe REVIEW)",
+    "raw": "Suspiria.mkv",
+    "movie_results": [
+      { "id": 11906, "title": "サスペリア", "original_title": "Suspiria", "release_date": "1977-02-01" },
+      { "id": 361292, "title": "サスペリア", "original_title": "Suspiria", "release_date": "2018-10-26" }
+    ],
+    "expected": [
+      { "tmdb_id": 11906, "media_type": "movie", "confidence": 80 },
+      { "tmdb_id": 361292, "media_type": "movie", "confidence": 80 }
+    ],
+    "expected_best": 361292,
+    "expected_safe": "REVIEW"
+  },
+  {
+    "name": "same English title with a large year gap (rules-1 AUTO, rules-safe REVIEW)",
+    "raw": "Parasite (2020).mp4",
+    "movie_results": [
+      { "id": 496243, "title": "パラサイト 半地下の家族", "original_title": "기생충", "release_date": "2019-05-30" },
+      { "id": 9999, "title": "Parasite", "original_title": "Parasite", "release_date": "1982-03-12" }
+    ],
+    "expected": [
+      { "tmdb_id": 9999, "media_type": "movie", "confidence": 90 }
+    ],
+    "expected_best": 9999,
+    "expected_safe": "REVIEW"
+  },
+  {
+    "name": "no search results",
+    "raw": "unknown_file_xyz.mkv",
+    "expected": [],
+    "expected_best": null,
+    "expected_safe": "UNRESOLVED"
+  },
+  {
+    "name": "English + katakana folder name with year (cross-language bonus)",
+    "raw": "Unknown アンノウン (2011).mkv",
+    "movie_results": [
+      { "id": 48138, "title": "アンノウン", "original_title": "Unknown", "release_date": "2011-02-16" }
+    ],
+    "expected": [
+      { "tmdb_id": 48138, "media_type": "movie", "confidence": 95 }
+    ],
+    "expected_best": 48138,
+    "expected_safe": "AUTO"
+  }
+]
