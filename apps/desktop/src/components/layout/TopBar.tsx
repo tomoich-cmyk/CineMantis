@@ -12,6 +12,8 @@ export function TopBar() {
     isSelectMode,
     selectedWorkIds,
     toggleSelectMode,
+    viewMode,
+    setViewMode,
   } = useLibraryStore();
 
   const activeFilterCount = useActiveFilterCount();
@@ -35,6 +37,26 @@ export function TopBar() {
         />
 
         <div className="flex-1" />
+
+        {/* 表示切替（ポスター / リスト） */}
+        <div className="flex h-7 border border-[#24242a]" role="group" aria-label="表示切替">
+          {([
+            ["grid", "ポスター"],
+            ["list", "リスト"],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              aria-pressed={viewMode === mode}
+              className={clsx(
+                "px-3 text-gray-500 hover:text-gray-100 hover:bg-[#121212]",
+                viewMode === mode && "bg-[#1b1b20] text-gray-100",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
         <button
           onClick={toggleFilterBar}

@@ -169,6 +169,14 @@ export function WorkCard({ work, selected, onSelect }: Props) {
             未照合
           </span>
         )}
+        {work.matchStatus === "pending" && (
+          <span
+            className="absolute top-1.5 left-1.5 text-[10px] px-1 rounded bg-black/60 text-orange-400 pointer-events-none"
+            title="候補はあるが自動確定できなかった作品"
+          >
+            レビュー待ち
+          </span>
+        )}
 
         {/* 再開位置ラベル（視聴中 + 進捗あり） */}
         {work.watchStatus === "watching" && work.resumePositionSec !== null && (
