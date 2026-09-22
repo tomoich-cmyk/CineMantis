@@ -93,6 +93,21 @@ fn normalize_kana(ch: char) -> Option<char> {
     Some(normalized)
 }
 
+/// 英字（半角・全角）か
+fn is_latin_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ('Ａ'..='Ｚ').contains(&ch) || ('ａ'..='ｚ').contains(&ch)
+}
+
+/// 漢字（CJK 統合漢字・拡張A・互換漢字・々〆）か
+fn is_kanji(ch: char) -> bool {
+    matches!(ch,
+        '\u{4E00}'..='\u{9FFF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{3005}'
+        | '\u{3006}')
+}
+
 /// 清音ひらがなから行の代表文字を返す。例: 'き' → 'か'
 fn row_head(kana: char) -> char {
     match kana {
@@ -114,9 +129,34 @@ fn row_head(kana: char) -> char {
 /// `country_type` は "domestic"（邦画）か、それ以外（洋画扱い）。
 /// わ行のフォルダ名の揺れを吸収するために必要。
 ///
-/// よみに使える仮名が一文字も無ければ None（＝振り分け不可、一覧に残す）。
+/// 判定に使う仮名は、よみの先頭（空白を除く）の文字で決める。
+/// - 仮名で始まる → その仮名
+/// - 英字で始まる → 英題の部分とみなして仮名が出るまで読み飛ばす（「gifted ぎふてっど」→ ぎ）。
+///   ただし途中に漢字があれば読みが分からないので None
+/// - 数字・記号・漢字で始まる → 読み方がプログラムでは決まらないので None
+///   （「60せかんず」を【せ】、「戦争と平和」を【と】にしてしまわないように）
+///
+/// None のときは振り分け不可として一覧に残し、よみを入力してもらう。
 pub fn bucket_for(reading: &str, country_type: &str) -> Option<KanaBucket> {
-    let kana = reading.chars().find_map(normalize_kana)?;
+    let mut chars = reading.chars().skip_while(|c| c.is_whitespace());
+    let first = chars.next()?;
+    let kana = match normalize_kana(first) {
+        Some(k) => k,
+        None if is_latin_letter(first) => {
+            let mut found = None;
+            for ch in chars {
+                if let Some(k) = normalize_kana(ch) {
+                    found = Some(k);
+                    break;
+                }
+                if is_kanji(ch) {
+                    return None;
+                }
+            }
+            found?
+        }
+        None => return None,
+    };
     let head = row_head(kana);
 
     // わ行だけ洋画と邦画で既存フォルダ名が違う
@@ -184,11 +224,23 @@ mod tests {
         assert_eq!(b("あい", "domestic").0, "【あ-】");
     }
 
-    /// 先頭が記号や英数でも、最初に見つかった仮名で判定する
+    /// 先頭が英字なら英題とみなし、後ろの仮名で判定する（先頭の空白は無視）
     #[test]
-    fn skips_leading_non_kana() {
-        assert_eq!(b("  ！あい", "foreign"), ("【あ-】".into(), "【あ】".into()));
-        assert_eq!(b("2001ねん", "foreign"), ("【な-】".into(), "【ね】".into()));
+    fn leading_latin_title_uses_following_kana() {
+        assert_eq!(b("  あい", "foreign"), ("【あ-】".into(), "【あ】".into()));
+        assert_eq!(b("gifted ぎふてっど", "foreign"), ("【か-】".into(), "【き】".into()));
+        assert_eq!(b("mission: impossible 2 みっしょん", "foreign"), ("【ま-】".into(), "【み】".into()));
+        assert_eq!(b("ＡＢＣ　えーびーしー", "foreign"), ("【あ-】".into(), "【え】".into()));
+    }
+
+    /// 数字・記号で始まるよみは読み方が決まらないので判定しない
+    #[test]
+    fn leading_digit_or_symbol_is_not_guessed() {
+        assert_eq!(bucket_for("60せかんず", "foreign"), None);
+        assert_eq!(bucket_for("2001ねん", "foreign"), None);
+        assert_eq!(bucket_for("！あい", "foreign"), None);
+        assert_eq!(bucket_for("ーあ", "foreign"), None);
+        assert_eq!(b("ろくじゅうせかんず", "foreign"), ("【ら-】".into(), "【ろ】".into()));
     }
 
     /// 長音符だけ・英数だけ・漢字だけは判定不能
@@ -197,6 +249,18 @@ mod tests {
         assert_eq!(bucket_for("", "foreign"), None);
         assert_eq!(bucket_for("ーー", "foreign"), None);
         assert_eq!(bucket_for("matrix", "foreign"), None);
+        assert_eq!(bucket_for("東京物語", "foreign"), None);
+    }
+
+    /// 仮名より前に漢字があるよみは、後ろの仮名で判定しない（読みを入れてもらう）
+    #[test]
+    fn kanji_before_kana_is_not_guessed() {
         assert_eq!(bucket_for("戦争と平和", "foreign"), None);
+        assert_eq!(bucket_for("2001年宇宙の旅", "foreign"), None);
+        assert_eq!(b("せんそうとへいわ", "foreign"), ("【さ-】".into(), "【せ】".into()));
+        // 仮名が先なら後ろの漢字は関係ない
+        assert_eq!(b("ぼくの叔父さん", "domestic"), ("【は-】".into(), "【ほ】".into()));
+        // 英字の後ろの仮名は従来どおり使う（「air えあ」形式のよみ）
+        assert_eq!(b("air えあ", "foreign"), ("【あ-】".into(), "【え】".into()));
     }
 }

@@ -1,9 +1,9 @@
 //! 取り込みフォルダの作品を NAS の五十音フォルダへ振り分ける。
 //!
 //! 流れ:
-//!   1. 取り込み元フォルダを source として登録し、スキャン（既存機能）
+//!   1. 取り込み元フォルダを含むフォルダを source として登録し、スキャン（既存機能）
 //!   2. TMDb 照合・よみ入力で未整理を解消（既存機能）
-//!   3. plan_nas_sort で移動先を一覧表示 → ユーザーが確認
+//!   3. plan_nas_sort で、ユーザーが選んだ取り込み元フォルダ配下の作品の移動先を一覧表示
 //!   4. execute_nas_sort で実際に移動
 //!
 //! 移動先は必ずサーバ側で再計算する（クライアントから渡されたパスは信用しない）。
@@ -41,6 +41,8 @@ pub struct NasSortPlanRow {
     /// ready | no_reading | no_country | dest_exists | file_missing | same_path
     pub status: String,
     pub note: Option<String>,
+    /// works.match_status（振り分け画面から個別照合するときの表示用）
+    pub match_status: String,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -49,6 +51,8 @@ pub struct NasSortResult {
     pub failed: i64,
     pub skipped: i64,
     pub errors: Vec<NasSortError>,
+    /// 移動先を含むソースが無かったため新しく登録したソースのルート
+    pub registered_sources: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -134,6 +138,7 @@ struct PlanInput {
     file_size: Option<i64>,
     source_path: String,
     extension: Option<String>,
+    match_status: String,
 }
 
 fn build_plan_row(input: PlanInput, root: &str) -> NasSortPlanRow {
@@ -213,6 +218,7 @@ fn build_plan_row(input: PlanInput, root: &str) -> NasSortPlanRow {
         country_type: input.country_type,
         file_size: input.file_size,
         source_path: input.source_path,
+        match_status: input.match_status,
         dest_path,
         dest_display,
         status: status.to_string(),
@@ -228,23 +234,34 @@ fn paths_equal(a: &str, b: &str) -> bool {
 
 const PLAN_SQL: &str = "SELECT w.id, f.id, w.title, COALESCE(w.release_year, w.year),
             w.reading, COALESCE(w.country_type, 'unknown'),
-            f.file_size, f.file_path, f.extension
+            f.file_size, f.file_path, f.extension, w.match_status
      FROM works w
      JOIN work_parts wp ON wp.work_id = w.id
      JOIN files f       ON f.id = wp.file_id
-     WHERE f.source_id = ?1
-       AND f.availability_status = 'available'
+     WHERE f.availability_status = 'available'
      ORDER BY w.reading IS NULL, w.reading, w.title";
 
+/// ユーザーが選んだ取り込み元フォルダ（絶対パス）を検証する
+fn validate_folder(folder: &str) -> Result<String, String> {
+    let folder = folder.trim().trim_end_matches(['\\', '/']).to_string();
+    // UNC（\\server\share）かドライブ指定（C:\…）だけを受け付ける
+    let absolute = folder.starts_with(r"\\") || folder.as_bytes().get(1) == Some(&b':');
+    if folder.is_empty() || !absolute {
+        return Err("取り込み元フォルダを絶対パスで指定してください".to_string());
+    }
+    Ok(folder)
+}
+
+/// 取り込み元フォルダ配下（サブフォルダを含む）にあるファイルの振り分け計画を作る
 fn read_plan_rows(
     conn: &rusqlite::Connection,
-    source_id: i64,
+    folder: &str,
     only_work_ids: Option<&[i64]>,
 ) -> Result<Vec<NasSortPlanRow>, String> {
     let root = nas_root(conn);
     let mut stmt = conn.prepare(PLAN_SQL).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(rusqlite::params![source_id], |row| {
+        .query_map([], |row| {
             Ok(PlanInput {
                 work_id: row.get(0)?,
                 file_id: row.get(1)?,
@@ -255,6 +272,7 @@ fn read_plan_rows(
                 file_size: row.get(6)?,
                 source_path: row.get(7)?,
                 extension: row.get(8)?,
+                match_status: row.get(9)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -263,6 +281,9 @@ fn read_plan_rows(
 
     Ok(rows
         .into_iter()
+        .filter(|r| {
+            crate::services::prematch_inputs::relative_to_root(folder, &r.source_path).is_some()
+        })
         .filter(|r| match only_work_ids {
             Some(ids) => ids.contains(&r.work_id),
             None => true,
@@ -271,14 +292,28 @@ fn read_plan_rows(
         .collect())
 }
 
+#[derive(Debug, Serialize)]
+pub struct NasSortPlan {
+    pub rows: Vec<NasSortPlanRow>,
+    /// 取り込み元フォルダを含む登録済みソースのルート。未登録なら None（先にソース登録とスキャンが必要）
+    pub source_root: Option<String>,
+}
+
 /// 振り分け計画を返す（移動はしない）
 #[tauri::command]
-pub fn plan_nas_sort(
-    state: State<'_, DbState>,
-    source_id: i64,
-) -> Result<Vec<NasSortPlanRow>, String> {
+pub fn plan_nas_sort(state: State<'_, DbState>, folder: String) -> Result<NasSortPlan, String> {
+    let folder = validate_folder(&folder)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    read_plan_rows(&conn, source_id, None)
+    let rows = read_plan_rows(&conn, &folder, None)?;
+    let source_root = find_source_for_path(&conn, &folder).and_then(|id| {
+        conn.query_row(
+            "SELECT root_path FROM sources WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    });
+    Ok(NasSortPlan { rows, source_root })
 }
 
 // ─── 実行 ─────────────────────────────────────────────────────────────────────
@@ -322,14 +357,57 @@ fn find_source_for_path(conn: &rusqlite::Connection, path: &str) -> Option<i64> 
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
         .ok()?;
-    let needle = path.replace('/', "\\").to_lowercase();
+    let needle = path.replace('/', "\\").trim_end_matches('\\').to_lowercase();
     for row in rows.flatten() {
-        let root = row.1.replace('/', "\\").to_lowercase();
-        if needle.starts_with(&root) {
+        let root = row.1.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+        // 「【わ】」と「【わ-】」のような前方一致の取り違えを防ぐため、区切りまで一致させる
+        if needle == root || needle.starts_with(&format!("{root}\\")) {
             return Some(row.0);
         }
     }
     None
+}
+
+/// 移動先の行フォルダ（例: 【02】邦画\【さ-】）をソースとして登録し、その ID とルートを返す。
+/// 既存の洋画側と同じ「国\行」単位にそろえる。既存ソースと範囲が重なる、
+/// または NAS ルートの外などで登録できない場合は None。
+fn ensure_bucket_source(
+    conn: &rusqlite::Connection,
+    nas_root: &str,
+    dest: &str,
+) -> Option<(i64, String)> {
+    let relative = crate::services::prematch_inputs::relative_to_root(nas_root, dest)?;
+    let parts: Vec<&str> = relative.split('/').collect();
+    // 国\行\段\ファイル名 の形でなければ登録しない
+    if parts.len() < 4 {
+        return None;
+    }
+    let group_root = PathBuf::from(nas_root)
+        .join(parts[0])
+        .join(parts[1])
+        .to_string_lossy()
+        .to_string();
+
+    let existing: Vec<String> = conn
+        .prepare("SELECT root_path FROM sources")
+        .ok()?
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if existing
+        .iter()
+        .any(|root| crate::commands::source::paths_overlap(root, &group_root))
+    {
+        return None;
+    }
+
+    conn.execute(
+        "INSERT INTO sources (name, root_path, source_type, media_kind) VALUES (?1, ?2, 'local', 'unknown')",
+        rusqlite::params![parts[1], group_root],
+    )
+    .ok()?;
+    Some((conn.last_insert_rowid(), group_root))
 }
 
 /// 選択された作品を NAS へ移動する。
@@ -337,16 +415,17 @@ fn find_source_for_path(conn: &rusqlite::Connection, path: &str) -> Option<i64> 
 #[tauri::command]
 pub fn execute_nas_sort(
     state: State<'_, DbState>,
-    source_id: i64,
+    folder: String,
     work_ids: Vec<i64>,
 ) -> Result<NasSortResult, String> {
     if work_ids.is_empty() {
         return Ok(NasSortResult::default());
     }
+    let folder = validate_folder(&folder)?;
 
     let plans = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        read_plan_rows(&conn, source_id, Some(&work_ids))?
+        read_plan_rows(&conn, &folder, Some(&work_ids))?
     };
 
     let mut result = NasSortResult::default();
@@ -377,23 +456,32 @@ pub fn execute_nas_sort(
         match move_file(Path::new(&plan.source_path), &dest_path) {
             Ok(()) => {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                let new_source_id =
-                    find_source_for_path(&conn, &dest).unwrap_or(source_id);
+                // 移動先を含むソースが無ければ、今のソースに残す
+                let current_source_id: i64 = conn
+                    .query_row(
+                        "SELECT source_id FROM files WHERE id = ?1",
+                        rusqlite::params![plan.file_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                // 移動先を含むソースが無ければ、移動先の行フォルダをソースとして登録する
+                // （ライブラリから外れて次回スキャンで「実体なし」にならないように）
+                let new_source_id = match find_source_for_path(&conn, &dest) {
+                    Some(id) => id,
+                    None => match ensure_bucket_source(&conn, &nas_root(&conn), &dest) {
+                        Some((id, root)) => {
+                            result.registered_sources.push(root);
+                            id
+                        }
+                        None => current_source_id,
+                    },
+                };
                 let file_name = dest_path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                conn.execute(
-                    "UPDATE files
-                     SET source_id = ?1,
-                         file_path = ?2,
-                         file_name = ?3,
-                         availability_status = 'available',
-                         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                     WHERE id = ?4",
-                    rusqlite::params![new_source_id, dest, file_name, plan.file_id],
-                )
-                .map_err(|e| e.to_string())?;
+                record_moved_file(&conn, plan.file_id, new_source_id, &dest, &file_name)
+                    .map_err(|e| e.to_string())?;
                 result.moved += 1;
             }
             Err(message) => {
@@ -410,9 +498,170 @@ pub fn execute_nas_sort(
     Ok(result)
 }
 
+/// 移動後の場所を files に反映する。照合前入力の original_* は変更しない。
+fn record_moved_file(
+    conn: &rusqlite::Connection,
+    file_id: i64,
+    source_id: i64,
+    dest: &str,
+    file_name: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE files
+         SET source_id = ?1,
+             file_path = ?2,
+             file_name = ?3,
+             availability_status = 'available',
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = ?4",
+        rusqlite::params![source_id, dest, file_name, file_id],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_lookup_requires_a_path_boundary() {
+        use crate::db::test_support::*;
+        let conn = open_migrated();
+        let wa = insert_source(&conn, r"\\TYNAS\home\Movie\【01】洋画\【わ】");
+        let a = insert_source(&conn, r"\\TYNAS\home\Movie\【01】洋画\【あ-】");
+        assert_eq!(
+            find_source_for_path(&conn, r"\\TYNAS\home\Movie\【01】洋画\【わ】\【わ】\x.mp4"),
+            Some(wa)
+        );
+        assert_eq!(find_source_for_path(&conn, r"\\tynas\HOME\Movie\【01】洋画\【あ-】"), Some(a));
+        assert_eq!(
+            find_source_for_path(&conn, r"\\TYNAS\home\Movie\【01】洋画\【わ-】\【わ】\x.mp4"),
+            None
+        );
+    }
+
+    #[test]
+    fn moving_to_an_unregistered_bucket_registers_it_once() {
+        use crate::db::test_support::*;
+        let conn = open_migrated();
+        let root = r"\\TYNAS\home\Movie";
+        insert_source(&conn, r"\\TYNAS\home\Movie\【01】洋画\【さ-】");
+        let dest = r"\\TYNAS\home\Movie\【02】邦画\【さ-】\【さ】\THE FIRST SLAM DUNK (2022).mp4";
+
+        let (id, group_root) = ensure_bucket_source(&conn, root, dest).expect("registered");
+        assert_eq!(group_root, r"\\TYNAS\home\Movie\【02】邦画\【さ-】");
+        assert_eq!(find_source_for_path(&conn, dest), Some(id));
+        // 2回目は既存ソースと重なるので登録しない
+        assert!(ensure_bucket_source(&conn, root, dest).is_none());
+        // NAS ルートの外は登録しない
+        assert!(ensure_bucket_source(&conn, root, r"D:\Other\a\b\c.mp4").is_none());
+    }
+
+    #[test]
+    fn folder_must_be_absolute() {
+        assert_eq!(validate_folder(r"D:\Import\").unwrap(), r"D:\Import");
+        assert_eq!(validate_folder(r"\\TYNAS\home\Movie").unwrap(), r"\\TYNAS\home\Movie");
+        assert!(validate_folder("").is_err());
+        assert!(validate_folder(r"Import\sub").is_err());
+    }
+
+    #[test]
+    fn plan_only_includes_files_under_the_chosen_folder() {
+        use crate::commands::scan::{insert_scanned_file, insert_scanned_work, ScannedFile};
+        use crate::db::test_support::*;
+
+        let conn = open_migrated();
+        let root = r"D:\Import";
+        let source_id = insert_source(&conn, root);
+        let add = |path: &str, name: &str| {
+            let file_id = insert_scanned_file(
+                &conn,
+                &ScannedFile {
+                    source_id,
+                    root_path: root,
+                    file_path: path,
+                    file_name: name,
+                    extension: "mkv",
+                    file_size: None,
+                    mtime: None,
+                    duration_sec: None,
+                    width: None,
+                    height: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    container: "mkv",
+                },
+            )
+            .unwrap();
+            let work_id = insert_scanned_work(&conn, "movie", "unknown", name, "foreign").unwrap();
+            conn.execute(
+                "INSERT INTO work_parts (work_id, file_id) VALUES (?1, ?2)",
+                rusqlite::params![work_id, file_id],
+            )
+            .unwrap();
+            work_id
+        };
+        let in_folder = add(r"D:\Import\新着\a.mkv", "a.mkv");
+        let in_subfolder = add(r"D:\Import\新着\sub\b.mkv", "b.mkv");
+        let outside = add(r"D:\Import\保留\c.mkv", "c.mkv");
+        let similar_name = add(r"D:\Import\新着2\d.mkv", "d.mkv");
+
+        let ids: Vec<i64> = read_plan_rows(&conn, r"d:\import\新着", None)
+            .unwrap()
+            .iter()
+            .map(|r| r.work_id)
+            .collect();
+        assert!(ids.contains(&in_folder));
+        assert!(ids.contains(&in_subfolder));
+        assert!(!ids.contains(&outside));
+        assert!(!ids.contains(&similar_name));
+    }
+
+    #[test]
+    fn moving_a_file_keeps_original_inputs() {
+        use crate::commands::scan::{insert_scanned_file, ScannedFile};
+        use crate::db::test_support::*;
+
+        let conn = open_migrated();
+        let root = r"D:\Movies";
+        let source_id = insert_source(&conn, root);
+        let file_id = insert_scanned_file(
+            &conn,
+            &ScannedFile {
+                source_id,
+                root_path: root,
+                file_path: r"D:\Movies\Alien.1979.1080p.mkv",
+                file_name: "Alien.1979.1080p.mkv",
+                extension: "mkv",
+                file_size: None,
+                mtime: None,
+                duration_sec: None,
+                width: None,
+                height: None,
+                video_codec: None,
+                audio_codec: None,
+                container: "mkv",
+            },
+        )
+        .unwrap();
+
+        let dest = r"D:\Movies\洋画\あ\エイリアン (1979).mkv";
+        record_moved_file(&conn, file_id, source_id, dest, &build_file_name("エイリアン", Some(1979), "mkv"))
+            .unwrap();
+
+        let row: (String, String, String, String, i64) = conn
+            .query_row(
+                "SELECT file_name, file_path, original_file_name, original_rel_path, original_captured
+                 FROM files WHERE id = ?1",
+                rusqlite::params![file_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "エイリアン (1979).mkv");
+        assert_eq!(row.1, dest);
+        assert_eq!(row.2, "Alien.1979.1080p.mkv");
+        assert_eq!(row.3, "Alien.1979.1080p.mkv");
+        assert_eq!(row.4, 1);
+    }
 
     #[test]
     fn replaces_illegal_characters_with_fullwidth() {
@@ -453,6 +702,7 @@ mod tests {
             // 存在しないパスなので file_missing になる。分岐の確認用。
             source_path: r"C:\does-not-exist\x.mp4".to_string(),
             extension: Some("mp4".to_string()),
+            match_status: "unmatched".to_string(),
         }
     }
 

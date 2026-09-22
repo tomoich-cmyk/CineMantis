@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { MatchStatus } from "@cinemantis/shared-types";
 
 /** 振り分け判定の結果。ready 以外は移動されない。 */
 export type NasSortStatus =
@@ -22,6 +23,13 @@ export interface NasSortPlanRow {
   dest_display: string | null;
   status: NasSortStatus;
   note: string | null;
+  match_status: MatchStatus;
+}
+
+export interface NasSortPlan {
+  rows: NasSortPlanRow[];
+  /** 取り込み元フォルダを含む登録済みソースのルート。未登録なら null */
+  source_root: string | null;
 }
 
 export interface NasSortError {
@@ -35,11 +43,13 @@ export interface NasSortResult {
   failed: number;
   skipped: number;
   errors: NasSortError[];
+  /** 移動先を含むソースが無かったため新しく登録したソースのルート */
+  registered_sources: string[];
 }
 
-/** 振り分け計画を取得する（移動はしない） */
-export async function planNasSort(sourceId: number): Promise<NasSortPlanRow[]> {
-  return invoke<NasSortPlanRow[]>("plan_nas_sort", { sourceId });
+/** 取り込み元フォルダ（サブフォルダを含む）の振り分け計画を取得する（移動はしない） */
+export async function planNasSort(folder: string): Promise<NasSortPlan> {
+  return invoke<NasSortPlan>("plan_nas_sort", { folder });
 }
 
 /**
@@ -47,8 +57,8 @@ export async function planNasSort(sourceId: number): Promise<NasSortPlanRow[]> {
  * 移動先はバックエンドで再計算されるので work_id だけ渡す。
  */
 export async function executeNasSort(
-  sourceId: number,
+  folder: string,
   workIds: number[],
 ): Promise<NasSortResult> {
-  return invoke<NasSortResult>("execute_nas_sort", { sourceId, workIds });
+  return invoke<NasSortResult>("execute_nas_sort", { folder, workIds });
 }

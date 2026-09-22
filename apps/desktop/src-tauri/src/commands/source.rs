@@ -6,7 +6,7 @@ fn normalized_path(value: &str) -> String {
     value.trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase()
 }
 
-fn paths_overlap(a: &str, b: &str) -> bool {
+pub(crate) fn paths_overlap(a: &str, b: &str) -> bool {
     let a = normalized_path(a);
     let b = normalized_path(b);
     a == b || a.starts_with(&(b.clone() + "\\")) || b.starts_with(&(a + "\\"))
