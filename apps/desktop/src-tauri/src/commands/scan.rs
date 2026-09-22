@@ -581,7 +581,7 @@ pub(crate) fn insert_scanned_work(
 /// - Remove extension
 /// - Replace . _ - with spaces
 /// - Strip common release tags (1080p, BluRay, x264, …)
-fn estimate_title(file_name: &str) -> String {
+pub(crate) fn estimate_title(file_name: &str) -> String {
     let without_ext = file_name
         .rfind('.')
         .map(|i| &file_name[..i])
@@ -614,45 +614,11 @@ fn estimate_title(file_name: &str) -> String {
     collapsed
 }
 
+/// 判定規則は照合前スナップショットと共通にする（片方だけ直して食い違わないように）
 fn infer_country_type_from_path(file_path: &Path, root: &Path) -> &'static str {
     let relative = file_path.strip_prefix(root).unwrap_or(file_path);
-    let full = file_path.to_string_lossy().to_lowercase();
-    let rel = relative.to_string_lossy().to_lowercase();
-    let haystack = format!("{} {}", full, rel);
-
-    let domestic_markers = [
-        "邦画",
-        "国内",
-        "日本映画",
-        "日本",
-        "japanese",
-        "japan",
-        "jp-movie",
-        "jp_movie",
-        "domestic",
-    ];
-    let foreign_markers = [
-        "洋画",
-        "海外",
-        "外国映画",
-        "外国",
-        "foreign",
-        "western",
-        "world cinema",
-        "world_cinema",
-        "korean",
-        "chinese",
-        "europe",
-        "america",
-    ];
-
-    if domestic_markers.iter().any(|marker| haystack.contains(marker)) {
-        return "domestic";
-    }
-    if foreign_markers.iter().any(|marker| haystack.contains(marker)) {
-        return "foreign";
-    }
-    "unknown"
+    let haystack = format!("{} {}", file_path.to_string_lossy(), relative.to_string_lossy());
+    crate::services::prematch_snapshot::infer_country_type(&haystack)
 }
 
 /// Format unix timestamp as ISO 8601 string (no chrono dependency)

@@ -300,7 +300,7 @@ pub fn rules_safe_best_candidate<'a>(
 }
 
 /// 明示的な矛盾。候補は除外せず、AUTO だけを止める。
-fn explicit_conflicts(candidate: &TmdbCandidate, parsed: &ParsedTitle) -> Vec<&'static str> {
+pub fn explicit_conflicts(candidate: &TmdbCandidate, parsed: &ParsedTitle) -> Vec<&'static str> {
     let mut conflicts = Vec::new();
 
     // episode 表記（S01E03 / 1x03 / EP03 / 第N話）があるのに映画候補

@@ -51,6 +51,7 @@ const MIGRATION_AWARD_CATEGORY_QID_EXPANSION: &str = include_str!("../../../../p
 const MIGRATION_SYNC_OUTBOX: &str = include_str!("../../../../packages/db/migrations/018_sync_outbox.sql");
 const MIGRATION_BACKFILL_COUNTRY_MEDIA: &str = include_str!("../../../../packages/db/migrations/019_backfill_country_type_media_category.sql");
 const MIGRATION_PREMATCH_INPUTS: &str = include_str!("../../../../packages/db/migrations/020_prematch_inputs.sql");
+const MIGRATION_MATCH_HISTORY: &str = include_str!("../../../../packages/db/migrations/021_match_history.sql");
 
 /// 020 の files.original_* は一度値が入ったら変更させない。
 /// トリガー本体に ';' を含むため、';' 区切りで流す lenient migration ではなくここで作成する。
@@ -101,6 +102,8 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
     apply_lenient_migration(&conn, MIGRATION_PREMATCH_INPUTS)?;
     conn.execute_batch(PREMATCH_INPUTS_GUARD)?;
     backfill_prematch_inputs(&conn)?;
+    apply_lenient_migration(&conn, MIGRATION_MATCH_HISTORY)?;
+    backfill_match_source(&conn)?;
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
@@ -160,6 +163,17 @@ pub(crate) fn backfill_prematch_inputs(conn: &Connection) -> Result<usize> {
             rusqlite::params![file_name, rel_path, file_id],
         )?;
     }
+    Ok(filled)
+}
+
+/// 021 以前に照合された作品の出どころを `legacy` として印付ける。
+/// 021 以降に照合した作品は match_source が入っているので触らない。
+pub(crate) fn backfill_match_source(conn: &Connection) -> Result<usize> {
+    let filled = conn.execute(
+        "UPDATE works SET match_source = 'legacy'
+         WHERE match_source IS NULL AND tmdb_id IS NOT NULL",
+        [],
+    )?;
     Ok(filled)
 }
 
@@ -244,6 +258,37 @@ mod tests {
         apply_migrations(&conn).expect("third run");
     }
 
+    /// 021 より前からある照合は legacy として印を付け、その後は上書きしない
+    #[test]
+    fn match_source_backfill_only_touches_existing_matches() {
+        let conn = open_migrated();
+        let matched = insert_work(&conn, "A");
+        set_match(&conn, matched, "matched", Some(10));
+        let unmatched = insert_work(&conn, "B");
+        let auto = insert_work(&conn, "C");
+        set_match(&conn, auto, "matched", Some(20));
+        conn.execute(
+            "UPDATE works SET match_source = 'rules_safe_auto' WHERE id = ?1",
+            rusqlite::params![auto],
+        )
+        .unwrap();
+
+        assert_eq!(backfill_match_source(&conn).unwrap(), 1);
+        assert_eq!(backfill_match_source(&conn).unwrap(), 0, "2回目は何もしない");
+
+        let source = |id: i64| -> Option<String> {
+            conn.query_row(
+                "SELECT match_source FROM works WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(source(matched).as_deref(), Some("legacy"));
+        assert_eq!(source(unmatched), None);
+        assert_eq!(source(auto).as_deref(), Some("rules_safe_auto"));
+    }
+
     /// 既存 DB のコピーにマイグレーションを流して壊れないことを確かめる（手動実行用）。
     /// CINEMANTIS_DB_COPY に「コピーした」DB のパスを渡して `cargo test -- --ignored` で実行する。
     #[test]
@@ -279,13 +324,29 @@ mod tests {
             "SELECT COUNT(*) FROM files WHERE original_rel_path LIKE '_:%' OR original_rel_path LIKE '/%' OR original_rel_path LIKE '\\%'",
         );
         let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        // 021: 履歴テーブルと match_source の後埋め
+        let history_tables = count(
+            &conn,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+               ('metadata_match_runs','metadata_match_candidates','metadata_match_verdicts',
+                'metadata_review_tasks','metadata_match_labels','metadata_match_rejections')",
+        );
+        let legacy = count(&conn, "SELECT COUNT(*) FROM works WHERE match_source = 'legacy'");
+        let source_without_match = count(
+            &conn,
+            "SELECT COUNT(*) FROM works WHERE match_source IS NOT NULL AND tmdb_id IS NULL",
+        );
         println!(
-            "works={} files={} matched={} unfilled={unfilled} rel_path_null={no_rel} captured={captured} absolute={absolute} integrity={integrity}",
+            "works={} files={} matched={} unfilled={unfilled} rel_path_null={no_rel} captured={captured} absolute={absolute} history_tables={history_tables} legacy={legacy} integrity={integrity}",
             after.0, after.1, after.2
         );
         assert_eq!(unfilled, 0);
-        assert_eq!(captured, 0);
+        // captured = 1 は 020 以降にスキャンした行。後埋めした行が混ざっていてよい
+        assert!(captured <= after.1);
         assert_eq!(absolute, 0);
+        assert_eq!(history_tables, 6);
+        assert_eq!(legacy, after.2, "照合済みの作品はすべて legacy になる");
+        assert_eq!(source_without_match, 0);
         assert_eq!(integrity, "ok");
     }
 
