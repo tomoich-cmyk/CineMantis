@@ -320,6 +320,11 @@ export function NasSortScreen() {
           </button>
         </div>
       )}
+      {folder && plan && !plan.nas_available && (
+        <p className="text-xs text-red-400">
+          NAS（{plan.nas_root}）に接続できません。接続を確認してから再読み込みしてください。移動は実行できません。
+        </p>
+      )}
       {scanError && <p className="text-xs text-red-400">{scanError}</p>}
       {planError && (
         <p className="text-xs text-red-400">{String(planError)}</p>
@@ -361,7 +366,7 @@ export function NasSortScreen() {
         </button>
         <button
           onClick={run}
-          disabled={checkedReady.length === 0 || execute.isPending}
+          disabled={checkedReady.length === 0 || execute.isPending || plan?.nas_available === false}
           className="h-8 px-4 bg-mantis-600 text-black text-sm font-medium hover:bg-mantis-500 disabled:opacity-40 disabled:hover:bg-mantis-600"
         >
           {execute.isPending ? "移動中…" : `${checkedReady.length} 件を NAS へ移動`}

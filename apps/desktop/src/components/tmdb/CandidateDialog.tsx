@@ -174,7 +174,13 @@ export function CandidateDialog({ workId, workTitle, isLocked = false, onClose }
     const id = parseInt(directIdInput, 10);
     if (isNaN(id) || id <= 0 || isLocked) return;
     applyMatch(
-      { workId, tmdbId: id, mediaType: directMediaType, lock: lockOnApply },
+      {
+        workId,
+        tmdbId: id,
+        mediaType: directMediaType,
+        lock: lockOnApply,
+        method: "manual_direct_id",
+      },
       { onSuccess: onClose }
     );
   }

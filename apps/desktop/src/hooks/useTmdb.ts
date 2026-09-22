@@ -5,6 +5,7 @@ import {
   searchTmdbCandidates,
   autoMatchWork,
   applyTmdbMatch,
+  type ApplyMethod,
   refreshTmdbMetadata,
   clearTmdbMatch,
   unlockTmdbMatch,
@@ -60,12 +61,15 @@ export function useApplyTmdbMatch() {
       tmdbId,
       mediaType,
       lock,
+      method,
     }: {
       workId: number;
       tmdbId: number;
       mediaType: string;
       lock: boolean;
-    }) => applyTmdbMatch(workId, tmdbId, mediaType, lock),
+      /** 省略時は候補ダイアログからの適用 */
+      method?: ApplyMethod;
+    }) => applyTmdbMatch(workId, tmdbId, mediaType, lock, method ?? "manual_apply"),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: workKeys.detail(vars.workId) });
       qc.invalidateQueries({ queryKey: workKeys.all });

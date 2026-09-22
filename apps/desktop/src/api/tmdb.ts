@@ -79,17 +79,22 @@ export async function testTmdbApi(): Promise<string> {
   return invoke<string>("test_tmdb_api");
 }
 
+/** 人がどう確定したか（照合履歴のラベルに残る） */
+export type ApplyMethod = "manual_apply" | "manual_direct_id";
+
 export async function applyTmdbMatch(
   workId: number,
   tmdbId: number,
   mediaType: string,
-  lock: boolean
+  lock: boolean,
+  method: ApplyMethod = "manual_apply"
 ): Promise<AutoMatchResult> {
   return invoke<AutoMatchResult>("apply_tmdb_match", {
     workId,
     tmdbId,
     mediaType,
     lock,
+    method,
   });
 }
 

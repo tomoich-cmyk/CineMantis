@@ -1,6 +1,7 @@
 use crate::commands::tmdb::{CLEAR_MATCH_ASSIGNMENTS, UNLOCKED_STATUS_SQL};
 use crate::db::DbState;
 use crate::models::match_status::MatchStatus;
+use crate::services::match_history::{self, LabelMethod, LabelWrite, RejectionSource};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
@@ -180,6 +181,9 @@ pub(crate) fn bulk_set_match_status_inner(
     let ids_json = serde_json::to_string(&unique_ids).map_err(|e| e.to_string())?;
     const TARGET: &str = "id IN (SELECT CAST(je.value AS INTEGER) FROM json_each(?1) je)";
 
+    // 固定・解除の記録に使うので、変更前の照合内容を先に読む
+    let previous = read_previous_matches(conn, &ids_json)?;
+
     let sql = match status {
         MatchStatus::Locked => format!(
             "UPDATE works SET match_status = 'locked'
@@ -211,12 +215,91 @@ pub(crate) fn bulk_set_match_status_inner(
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
 
+    drop(stmt);
+    record_bulk_history(conn, &changed, &previous, status)?;
+
     let result = BulkMatchStatusResult {
         updated: changed.len(),
         skipped: unique_ids.len() - changed.len(),
     };
     let cleared = if status == MatchStatus::Unmatched { changed } else { Vec::new() };
     Ok((result, cleared))
+}
+
+/// 変更前の (work_id, tmdb_id, media_type, match_source)
+type PreviousMatch = (i64, Option<i64>, Option<String>, Option<String>);
+
+fn read_previous_matches(
+    conn: &rusqlite::Connection,
+    ids_json: &str,
+) -> Result<Vec<PreviousMatch>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, tmdb_id, tmdb_media_type, match_source FROM works
+             WHERE id IN (SELECT CAST(je.value AS INTEGER) FROM json_each(?1) je)",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![ids_json], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// 一括操作を照合履歴に残す。
+///   固定   … 弱いラベル（中身を確かめたとは限らないので strength = weak）
+///   解除   … 「この ID ではない」という否定の記録とラベルの取り下げ
+/// 固定解除とレビュー待ちは、正解についての情報を持たないので何も書かない。
+fn record_bulk_history(
+    conn: &rusqlite::Connection,
+    changed: &[i64],
+    previous: &[PreviousMatch],
+    status: MatchStatus,
+) -> Result<(), String> {
+    if !matches!(status, MatchStatus::Locked | MatchStatus::Unmatched) {
+        return Ok(());
+    }
+    for work_id in changed {
+        let Some((_, tmdb_id, media_type, match_source)) =
+            previous.iter().find(|(id, ..)| id == work_id)
+        else {
+            continue;
+        };
+        let (Some(tmdb_id), Some(media_type)) = (tmdb_id, media_type.as_deref()) else {
+            continue;
+        };
+        match status {
+            MatchStatus::Locked => {
+                match_history::record_label(
+                    conn,
+                    &LabelWrite {
+                        work_id: *work_id,
+                        run_id: match_history::latest_run_id(conn, *work_id),
+                        tmdb: Some((*tmdb_id, media_type)),
+                        method: LabelMethod::Lock,
+                        note: None,
+                    },
+                )?;
+            }
+            MatchStatus::Unmatched => {
+                match_history::record_rejection(
+                    conn,
+                    *work_id,
+                    *tmdb_id,
+                    media_type,
+                    match_source.as_deref(),
+                    RejectionSource::Clear,
+                )?;
+                match_history::withdraw_active_label(conn, *work_id)?;
+                match_history::set_match_source(conn, *work_id, None)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -281,6 +364,101 @@ mod tests {
         assert_eq!(cleared, vec![matched]);
         assert_eq!(match_state(&conn, matched), ("unmatched".into(), None));
         assert_eq!(match_state(&conn, locked), ("locked".into(), Some(20)));
+    }
+
+    /// 一括固定は「中身を確かめた」とは限らないので弱いラベルとして残す
+    #[test]
+    fn bulk_lock_records_a_weak_label() {
+        let conn = open_migrated();
+        let matched = insert_work(&conn, "A");
+        set_match(&conn, matched, "matched", Some(10));
+        let unmatched = insert_work(&conn, "B");
+
+        bulk_set_match_status_inner(&conn, &[matched, unmatched], MatchStatus::Locked).unwrap();
+
+        let labels: Vec<(i64, i64, String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT work_id, tmdb_id, method, strength FROM metadata_match_labels")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(labels, vec![(matched, 10, "lock".to_string(), "weak".to_string())]);
+    }
+
+    /// 一括解除は「この ID ではない」だけが分かる。ラベルは取り下げる
+    #[test]
+    fn bulk_clear_records_a_rejection_and_withdraws_the_label() {
+        let conn = open_migrated();
+        let work_id = insert_work(&conn, "A");
+        set_match(&conn, work_id, "matched", Some(10));
+        conn.execute(
+            "UPDATE works SET match_source = 'rules_safe_auto' WHERE id = ?1",
+            rusqlite::params![work_id],
+        )
+        .unwrap();
+        match_history::record_label(
+            &conn,
+            &LabelWrite {
+                work_id,
+                run_id: None,
+                tmdb: Some((10, "movie")),
+                method: LabelMethod::ManualApply,
+                note: None,
+            },
+        )
+        .unwrap();
+
+        bulk_set_match_status_inner(&conn, &[work_id], MatchStatus::Unmatched).unwrap();
+
+        let (tmdb_id, source, previous): (i64, String, Option<String>) = conn
+            .query_row(
+                "SELECT tmdb_id, source, previous_match_source FROM metadata_match_rejections
+                 WHERE work_id = ?1",
+                rusqlite::params![work_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((tmdb_id, source.as_str(), previous.as_deref()), (10, "clear", Some("rules_safe_auto")));
+
+        let active: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metadata_match_labels
+                 WHERE work_id = ?1 AND superseded_at IS NULL",
+                rusqlite::params![work_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, 0);
+        let match_source: Option<String> = conn
+            .query_row(
+                "SELECT match_source FROM works WHERE id = ?1",
+                rusqlite::params![work_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(match_source, None);
+    }
+
+    /// 固定解除とレビュー待ちは、正解についての情報を持たないので履歴を書かない
+    #[test]
+    fn unlock_and_pending_do_not_write_history() {
+        let conn = open_migrated();
+        let locked = insert_work(&conn, "A");
+        set_match(&conn, locked, "locked", Some(10));
+        let unmatched = insert_work(&conn, "B");
+
+        bulk_set_match_status_inner(&conn, &[locked], MatchStatus::Matched).unwrap();
+        bulk_set_match_status_inner(&conn, &[unmatched], MatchStatus::Pending).unwrap();
+
+        for table in ["metadata_match_labels", "metadata_match_rejections"] {
+            let rows: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(rows, 0, "{table}");
+        }
     }
 
     #[test]

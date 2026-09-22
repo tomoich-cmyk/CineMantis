@@ -297,6 +297,23 @@ pub struct NasSortPlan {
     pub rows: Vec<NasSortPlanRow>,
     /// 取り込み元フォルダを含む登録済みソースのルート。未登録なら None（先にソース登録とスキャンが必要）
     pub source_root: Option<String>,
+    /// 移動先の NAS ルート
+    pub nas_root: String,
+    /// NAS に到達できるか。false なら移動は実行しない
+    pub nas_available: bool,
+}
+
+/// NAS ルートに到達できるか確かめる。
+/// NAS が落ちているときに1件ずつ移動を試して全部失敗する（os error 53）のを防ぐため、
+/// 計画の表示時と実行前に1回だけ確認する。
+fn check_nas_reachable(root: &str) -> Result<(), String> {
+    match std::fs::metadata(root) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(format!("NAS のルートがフォルダではありません: {root}")),
+        Err(error) => Err(format!(
+            "NAS に接続できません（{root}）。接続を確認してからやり直してください: {error}"
+        )),
+    }
 }
 
 /// 振り分け計画を返す（移動はしない）
@@ -313,7 +330,9 @@ pub fn plan_nas_sort(state: State<'_, DbState>, folder: String) -> Result<NasSor
         )
         .ok()
     });
-    Ok(NasSortPlan { rows, source_root })
+    let nas_root = nas_root(&conn);
+    let nas_available = check_nas_reachable(&nas_root).is_ok();
+    Ok(NasSortPlan { rows, source_root, nas_root, nas_available })
 }
 
 // ─── 実行 ─────────────────────────────────────────────────────────────────────
@@ -425,6 +444,8 @@ pub fn execute_nas_sort(
 
     let plans = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
+        // NAS が落ちているまま1件ずつ移動を試すと、全件が同じエラーで失敗する
+        check_nas_reachable(&nas_root(&conn))?;
         read_plan_rows(&conn, &folder, Some(&work_ids))?
     };
 
@@ -499,6 +520,8 @@ pub fn execute_nas_sort(
 }
 
 /// 移動後の場所を files に反映する。照合前入力の original_* は変更しない。
+/// ファイル名を CineMantis が書き換えた場合は renamed_by_app に印を残す
+/// （元ファイル名が失われた作品を、照合の評価から外すため）。
 fn record_moved_file(
     conn: &rusqlite::Connection,
     file_id: i64,
@@ -511,6 +534,11 @@ fn record_moved_file(
          SET source_id = ?1,
              file_path = ?2,
              file_name = ?3,
+             renamed_by_app = CASE
+                                WHEN original_file_name IS NOT NULL AND original_file_name <> ?3
+                                  THEN 'nas_sort'
+                                ELSE renamed_by_app
+                              END,
              availability_status = 'available',
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
          WHERE id = ?4",
@@ -554,6 +582,17 @@ mod tests {
         assert!(ensure_bucket_source(&conn, root, dest).is_none());
         // NAS ルートの外は登録しない
         assert!(ensure_bucket_source(&conn, root, r"D:\Other\a\b\c.mp4").is_none());
+    }
+
+    /// NAS が落ちているときは、移動を1件も試さずに止める
+    #[test]
+    fn unreachable_nas_root_is_detected_before_moving() {
+        let existing = std::env::temp_dir();
+        check_nas_reachable(&existing.to_string_lossy()).expect("temp dir is reachable");
+
+        let missing = existing.join("cinemantis-nas-not-there-4f2a");
+        let error = check_nas_reachable(&missing.to_string_lossy()).unwrap_err();
+        assert!(error.contains("NAS に接続できません"), "{error}");
     }
 
     #[test]
@@ -648,12 +687,13 @@ mod tests {
         record_moved_file(&conn, file_id, source_id, dest, &build_file_name("エイリアン", Some(1979), "mkv"))
             .unwrap();
 
-        let row: (String, String, String, String, i64) = conn
+        let row: (String, String, String, String, i64, Option<String>) = conn
             .query_row(
-                "SELECT file_name, file_path, original_file_name, original_rel_path, original_captured
+                "SELECT file_name, file_path, original_file_name, original_rel_path,
+                        original_captured, renamed_by_app
                  FROM files WHERE id = ?1",
                 rusqlite::params![file_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )
             .unwrap();
         assert_eq!(row.0, "エイリアン (1979).mkv");
@@ -661,6 +701,56 @@ mod tests {
         assert_eq!(row.2, "Alien.1979.1080p.mkv");
         assert_eq!(row.3, "Alien.1979.1080p.mkv");
         assert_eq!(row.4, 1);
+        // 改名したので、この作品は照合の評価に使えない
+        assert_eq!(row.5.as_deref(), Some("nas_sort"));
+    }
+
+    /// 名前が変わらない移動では改名の印を付けない
+    #[test]
+    fn moving_without_renaming_keeps_the_file_usable_for_evaluation() {
+        use crate::commands::scan::{insert_scanned_file, ScannedFile};
+        use crate::db::test_support::*;
+
+        let conn = open_migrated();
+        let root = r"D:\Movies";
+        let source_id = insert_source(&conn, root);
+        let file_id = insert_scanned_file(
+            &conn,
+            &ScannedFile {
+                source_id,
+                root_path: root,
+                file_path: r"D:\Movies\エイリアン (1979).mkv",
+                file_name: "エイリアン (1979).mkv",
+                extension: "mkv",
+                file_size: None,
+                mtime: None,
+                duration_sec: None,
+                width: None,
+                height: None,
+                video_codec: None,
+                audio_codec: None,
+                container: "mkv",
+            },
+        )
+        .unwrap();
+
+        record_moved_file(
+            &conn,
+            file_id,
+            source_id,
+            r"D:\Movies\洋画\あ\エイリアン (1979).mkv",
+            "エイリアン (1979).mkv",
+        )
+        .unwrap();
+
+        let renamed: Option<String> = conn
+            .query_row(
+                "SELECT renamed_by_app FROM files WHERE id = ?1",
+                rusqlite::params![file_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(renamed, None);
     }
 
     #[test]

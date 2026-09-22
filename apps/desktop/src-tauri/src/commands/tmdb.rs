@@ -1,12 +1,18 @@
 use crate::commands::settings::get_api_key_internal;
 use crate::db::DbState;
+use crate::models::match_source::MatchSource;
 use crate::models::match_status::MatchStatus;
 use crate::models::tmdb::*;
 use crate::services::{
+    match_history::{
+        self, LabelMethod, LabelWrite, RejectionSource, RunInput, SearchQuery, TriggerKind,
+    },
     metadata_matcher::{
-        merge_and_rank, rules_safe_best_candidate, score_movie, score_tv, SafeDecision,
+        best_candidate, merge_and_rank, rules_safe_best_candidate, score_movie, score_tv,
+        SafeDecision,
     },
     poster_store::store_poster_for_work,
+    prematch_snapshot::{LocalEvidence, PreMatchSnapshot},
     title_parser::{parse_title, ParsedTitle},
     tmdb_client::TmdbClient,
 };
@@ -29,22 +35,25 @@ pub(crate) const CLEAR_MATCH_ASSIGNMENTS: &str = "tmdb_id = NULL, tmdb_media_typ
     poster_path = NULL, match_status = 'unmatched', match_confidence = NULL,
     metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
-/// 照合前の状態（locked 判定とポスター整理に使う）
+/// 照合前の状態（locked 判定・ポスター整理・付け替えの記録に使う）
 struct CurrentMatch {
     status: String,
     tmdb_id: Option<i64>,
     media_type: Option<String>,
+    /// 今ある照合の出どころ（rules_safe_auto / manual / legacy）
+    match_source: Option<String>,
 }
 
 fn load_current_match(conn: &Connection, work_id: i64) -> Result<CurrentMatch, String> {
     conn.query_row(
-        "SELECT match_status, tmdb_id, tmdb_media_type FROM works WHERE id = ?1",
+        "SELECT match_status, tmdb_id, tmdb_media_type, match_source FROM works WHERE id = ?1",
         rusqlite::params![work_id],
         |row| {
             Ok(CurrentMatch {
                 status: row.get(0)?,
                 tmdb_id: row.get(1)?,
                 media_type: row.get(2)?,
+                match_source: row.get(3)?,
             })
         },
     )
@@ -221,60 +230,73 @@ fn unapplied_result(
 
 // ─── 内部ヘルパー ─────────────────────────────────────────────────────────────
 
-/// works テーブルから 1件の照合用情報を取得
-struct WorkForMatch {
-    id: i64,
-    title: String,
-    title_guess: Option<String>,
-    media_kind: String,
-    year: Option<i32>,
+/// 照合対象の状態。照合の入力そのものは [`PreMatchSnapshot`] からしか作らない
+struct MatchTarget {
+    snapshot: PreMatchSnapshot,
     match_status: String,
 }
 
-fn get_work_for_match(db: &DbState, work_id: i64) -> Result<Option<WorkForMatch>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    conn.query_row(
-        "SELECT id, title, title_guess, media_kind, year, match_status
-         FROM works WHERE id = ?1",
-        rusqlite::params![work_id],
-        |row| {
-            Ok(WorkForMatch {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                title_guess: row.get(2)?,
-                media_kind: row.get(3)?,
-                year: row.get(4)?,
-                match_status: row.get(5)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+fn load_match_target(conn: &Connection, work_id: i64) -> Result<MatchTarget, String> {
+    let match_status: String = conn
+        .query_row(
+            "SELECT match_status FROM works WHERE id = ?1",
+            rusqlite::params![work_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("work {work_id} not found"))?;
+    Ok(MatchTarget {
+        snapshot: PreMatchSnapshot::capture(conn, work_id)?,
+        match_status,
+    })
 }
 
-/// 候補を検索して scored candidates を返す（内部共通処理）。
-/// rules-safe 判定用に、照合前入力を parse した結果も返す。
+fn load_match_target_locked(db: &DbState, work_id: i64) -> Result<MatchTarget, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    load_match_target(&conn, work_id)
+}
+
+/// 1回の検索で分かったこと（履歴にそのまま残す）
+struct CandidateSearch {
+    /// merge_and_rank を通した候補（閾値以上・最大10件）
+    ranked: Vec<TmdbCandidate>,
+    /// 落ちた候補も含む全候補（検索結果の順）
+    all: Vec<TmdbCandidate>,
+    parsed: ParsedTitle,
+    queries: Vec<SearchQuery>,
+    tmdb_calls: usize,
+}
+
+/// 候補を検索してスコアを付ける。入力は照合前スナップショット由来の [`LocalEvidence`] だけ。
+/// 年ヒントもファイル名側の値を使う（works.year は TMDB 適用で書き換わるため）。
 async fn fetch_candidates(
     client: &TmdbClient,
-    work: &WorkForMatch,
-) -> Result<(Vec<TmdbCandidate>, ParsedTitle), String> {
-    // 検索に使うタイトルを決定
-    let raw_title = work.title_guess.as_deref().unwrap_or(&work.title);
-    let parsed = parse_title(raw_title);
-    let year = work.year.or(parsed.year_hint);
+    evidence: &LocalEvidence,
+) -> Result<CandidateSearch, String> {
+    let parsed = parse_title(evidence.title());
+    let year = parsed.year_hint;
 
     let mut all: Vec<TmdbCandidate> = Vec::new();
+    let mut queries: Vec<SearchQuery> = Vec::new();
+    let mut tmdb_calls = 0usize;
     let mut attempted = 0usize;
     let mut succeeded = 0usize;
     let mut errors = Vec::new();
 
-    // media_kind に応じて検索種別を決める
-    let search_movie = work.media_kind != "tv";
-    let search_tv = work.media_kind != "movie";
+    // ソースの設定（movie / tv / unknown）に応じて検索種別を決める
+    let search_movie = evidence.media_kind() != "tv";
+    let search_tv = evidence.media_kind() != "movie";
 
     // 映画検索
     if search_movie {
         attempted += 1;
+        tmdb_calls += 1;
+        queries.push(SearchQuery {
+            kind: "movie",
+            query: parsed.normalized_title.clone(),
+            year,
+        });
         eprintln!(
             "[TMDb] search_movie: '{}' year={:?}",
             &parsed.normalized_title, year
@@ -290,6 +312,12 @@ async fn fetch_candidates(
                 }
                 // 年ヒントがある場合は年なし検索も追加
                 if year.is_some() {
+                    tmdb_calls += 1;
+                    queries.push(SearchQuery {
+                        kind: "movie",
+                        query: parsed.normalized_title.clone(),
+                        year: None,
+                    });
                     if let Ok(results2) = client.search_movie(&parsed.normalized_title, None).await
                     {
                         for r in &results2 {
@@ -311,6 +339,12 @@ async fn fetch_candidates(
     // TV 検索
     if search_tv {
         attempted += 1;
+        tmdb_calls += 1;
+        queries.push(SearchQuery {
+            kind: "tv",
+            query: parsed.normalized_title.clone(),
+            year,
+        });
         eprintln!(
             "[TMDb] search_tv: '{}' year={:?}",
             &parsed.normalized_title, year
@@ -336,7 +370,141 @@ async fn fetch_candidates(
         return Err(format!("TMDb search failed: {}", errors.join(" / ")));
     }
 
-    Ok((merge_and_rank(all), parsed))
+    Ok(CandidateSearch {
+        ranked: merge_and_rank(all.clone()),
+        all,
+        parsed,
+        queries,
+        tmdb_calls,
+    })
+}
+
+/// 検索 → 判定 → 記録 → （AUTO なら）適用。単体照合と一括照合で共通。
+/// TMDB 検索が失敗した場合も ERROR の run として残してから Err を返す。
+async fn match_once(
+    app: &AppHandle,
+    db: &DbState,
+    client: &TmdbClient,
+    snapshot: &PreMatchSnapshot,
+    trigger_kind: TriggerKind,
+    batch_id: Option<&str>,
+) -> Result<AutoMatchResult, String> {
+    let work_id = snapshot.work_id;
+    let evidence = snapshot.local_evidence();
+    let started = std::time::Instant::now();
+
+    // 照合に使えるタイトルが無い作品は TMDB を呼ばずに UNRESOLVED
+    let search = if evidence.title().trim().is_empty() {
+        Ok(CandidateSearch {
+            ranked: Vec::new(),
+            all: Vec::new(),
+            parsed: parse_title(""),
+            queries: Vec::new(),
+            tmdb_calls: 0,
+        })
+    } else {
+        fetch_candidates(client, &evidence).await
+    };
+
+    let search = match search {
+        Ok(search) => search,
+        Err(error) => {
+            // 失敗も記録して、失敗率を後から数えられるようにする
+            let parsed = parse_title(evidence.title());
+            let outcome = rules_safe_best_candidate(&[], &parsed);
+            let conn = db.0.lock().map_err(|e| e.to_string())?;
+            let _ = match_history::record_run(
+                &conn,
+                &RunInput {
+                    work_id,
+                    batch_id,
+                    trigger_kind,
+                    snapshot,
+                    parsed: &parsed,
+                    queries: &[],
+                    ranked: &[],
+                    all: &[],
+                    rules_safe: &outcome,
+                    rules_one: None,
+                    tmdb_calls: 0,
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    error_text: Some(error.clone()),
+                },
+            );
+            return Err(error);
+        }
+    };
+
+    let outcome = rules_safe_best_candidate(&search.ranked, &search.parsed);
+    let reasons: Vec<String> = outcome.reasons.iter().map(|r| r.to_string()).collect();
+    let top_confidence = outcome.top.map(|c| c.confidence).unwrap_or(0);
+    let applied_candidate = outcome
+        .top
+        .map(|c| (c.tmdb_id, c.media_type.clone(), c.confidence));
+
+    let run_id = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        match_history::record_run(
+            &conn,
+            &RunInput {
+                work_id,
+                batch_id,
+                trigger_kind,
+                snapshot,
+                parsed: &search.parsed,
+                queries: &search.queries,
+                ranked: &search.ranked,
+                all: &search.all,
+                rules_safe: &outcome,
+                rules_one: best_candidate(&search.ranked),
+                tmdb_calls: search.tmdb_calls,
+                latency_ms: started.elapsed().as_millis() as u64,
+                error_text: None,
+            },
+        )?
+    };
+
+    match (outcome.decision, applied_candidate) {
+        (SafeDecision::Auto, Some((tmdb_id, media_type, confidence))) => {
+            let result = apply_match_internal(
+                app,
+                db,
+                client,
+                work_id,
+                tmdb_id,
+                &media_type,
+                MatchStatus::Matched,
+                ConfidenceWrite::Score(confidence),
+            )
+            .await?;
+            let conn = db.0.lock().map_err(|e| e.to_string())?;
+            match_history::mark_run_applied(
+                &conn,
+                run_id,
+                work_id,
+                tmdb_id,
+                &media_type,
+                MatchStatus::Matched,
+                MatchSource::RulesSafeAuto,
+            )?;
+            Ok(AutoMatchResult {
+                decision: Some(SafeDecision::Auto.as_str().to_string()),
+                ..result
+            })
+        }
+        (decision, _) => {
+            let conn = db.0.lock().map_err(|e| e.to_string())?;
+            let status = record_unapplied_decision(&conn, work_id, decision.match_status())?;
+            match_history::finish_run(&conn, run_id, status)?;
+            Ok(unapplied_result(
+                work_id,
+                status,
+                Some(decision),
+                top_confidence,
+                reasons,
+            ))
+        }
+    }
 }
 
 /// 詳細取得 + DB 更新 + ポスター保存（movie / tv 共通）
@@ -567,24 +735,16 @@ pub async fn search_tmdb_candidates(
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
 
-    let mut work =
-        get_work_for_match(&state, work_id)?.ok_or_else(|| format!("work {work_id} not found"))?;
+    let target = load_match_target_locked(&state, work_id)?;
+    // 検索語と種別だけはユーザーの指定を優先する（自動照合の入力は変えない）
+    let evidence = target
+        .snapshot
+        .local_evidence()
+        .with_user_override(query_override.as_deref(), media_type_hint.as_deref());
 
-    // ユーザーによるオーバーライドを反映
-    if let Some(q) = query_override {
-        if !q.trim().is_empty() {
-            work.title_guess = Some(q.trim().to_string());
-        }
-    }
-    if let Some(mt) = media_type_hint {
-        if mt == "movie" || mt == "tv" {
-            work.media_kind = mt;
-        }
-    }
-
-    fetch_candidates(&client, &work)
+    fetch_candidates(&client, &evidence)
         .await
-        .map(|(candidates, _)| candidates)
+        .map(|search| search.ranked)
 }
 
 /// locked を解除する（固定解除）
@@ -607,10 +767,10 @@ pub async fn auto_match_work(
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
 
-    let work =
-        get_work_for_match(&state, work_id)?.ok_or_else(|| format!("work {work_id} not found"))?;
+    let target = load_match_target_locked(&state, work_id)?;
 
-    if work.match_status == MatchStatus::Locked.as_str() {
+    if target.match_status == MatchStatus::Locked.as_str() {
+        // 固定中の作品は run も作らない（照合そのものを行わない）
         return Ok(unapplied_result(
             work_id,
             MatchStatus::Locked,
@@ -620,37 +780,15 @@ pub async fn auto_match_work(
         ));
     }
 
-    let (candidates, parsed) = fetch_candidates(&client, &work).await?;
-    let outcome = rules_safe_best_candidate(&candidates, &parsed);
-    let reasons: Vec<String> = outcome.reasons.iter().map(|r| r.to_string()).collect();
-    let top_confidence = outcome.top.map(|c| c.confidence).unwrap_or(0);
-
-    match (outcome.decision, outcome.top) {
-        (SafeDecision::Auto, Some(best)) => {
-            apply_match_internal(
-                &app,
-                &state,
-                &client,
-                work_id,
-                best.tmdb_id,
-                &best.media_type,
-                MatchStatus::Matched,
-                ConfidenceWrite::Score(best.confidence),
-            )
-            .await
-            .map(|result| AutoMatchResult {
-                decision: Some(SafeDecision::Auto.as_str().to_string()),
-                ..result
-            })
-        }
-        (decision, _) => {
-            let status = {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                record_unapplied_decision(&conn, work_id, decision.match_status())?
-            };
-            Ok(unapplied_result(work_id, status, Some(decision), top_confidence, reasons))
-        }
-    }
+    match_once(
+        &app,
+        &state,
+        &client,
+        &target.snapshot,
+        TriggerKind::Single,
+        None,
+    )
+    .await
 }
 
 /// ソース単位で未照合の作品を一括照合
@@ -672,14 +810,25 @@ pub async fn apply_tmdb_match(
     tmdb_id: i64,
     media_type: String,
     lock: bool,
+    // method: "manual_apply"（候補を選んだ）か "manual_direct_id"（ID を直接指定した）
+    method: Option<String>,
 ) -> Result<AutoMatchResult, String> {
     if media_type != "movie" && media_type != "tv" {
         return Err(format!("不正な media_type です: {media_type}"));
     }
+    let method = match method.as_deref() {
+        Some("manual_direct_id") => LabelMethod::ManualDirectId,
+        _ => LabelMethod::ManualApply,
+    };
     let api_key = get_api_key_internal(&state)?;
     let client = TmdbClient::new(api_key);
     let match_status = if lock { MatchStatus::Locked } else { MatchStatus::Matched };
-    apply_match_internal(
+
+    let previous = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        load_current_match(&conn, work_id)?
+    };
+    let result = apply_match_internal(
         &app,
         &state,
         &client,
@@ -689,7 +838,37 @@ pub async fn apply_tmdb_match(
         match_status,
         ConfidenceWrite::Clear,
     )
-    .await
+    .await?;
+
+    // 人が確定した正解として残す。付け替えなら「前の ID ではない」も残す
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        if let (Some(previous_id), Some(previous_type)) = (previous.tmdb_id, previous.media_type.as_deref()) {
+            if previous_id != tmdb_id || previous_type != media_type {
+                match_history::record_rejection(
+                    &conn,
+                    work_id,
+                    previous_id,
+                    previous_type,
+                    previous.match_source.as_deref(),
+                    RejectionSource::Repick,
+                )?;
+            }
+        }
+        let run_id = match_history::latest_run_id(&conn, work_id);
+        match_history::record_label(
+            &conn,
+            &LabelWrite {
+                work_id,
+                run_id,
+                tmdb: Some((tmdb_id, &media_type)),
+                method,
+                note: None,
+            },
+        )?;
+        match_history::set_match_source(&conn, work_id, Some(MatchSource::Manual))?;
+    }
+    Ok(result)
 }
 
 /// 既に tmdb_id がある作品のメタデータを再取得（locked の作品は先に固定解除が必要）
@@ -737,7 +916,23 @@ pub fn clear_tmdb_match(
 ) -> Result<(), String> {
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let previous = load_current_match(&conn, work_id)?;
         clear_match(&conn, work_id)?;
+        // 「この ID ではない」という否定の記録。正解は分からないのでラベルは取り下げる
+        if let (Some(previous_id), Some(previous_type)) =
+            (previous.tmdb_id, previous.media_type.as_deref())
+        {
+            match_history::record_rejection(
+                &conn,
+                work_id,
+                previous_id,
+                previous_type,
+                previous.match_source.as_deref(),
+                RejectionSource::Clear,
+            )?;
+        }
+        match_history::withdraw_active_label(&conn, work_id)?;
+        match_history::set_match_source(&conn, work_id, None)?;
     }
     crate::services::poster_store::delete_poster_for_work(&app, work_id);
     Ok(())
@@ -766,24 +961,37 @@ pub async fn auto_match_source_inner(
         }
     };
     let client = TmdbClient::new(api_key);
+    // 一括照合1回分の識別子（同じ実行の run をまとめて見るために使う）
+    let batch_id = format!(
+        "b{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
 
     // 照合対象を取得
-    let targets: Vec<(i64, String, Option<String>, String, Option<i32>)> = {
+    let targets: Vec<(i64, bool)> = {
         let base_filter = if source_id.is_some() {
             "AND EXISTS (SELECT 1 FROM work_parts wp INNER JOIN files f ON f.id = wp.file_id WHERE wp.work_id = w.id AND f.source_id = ?1)"
         } else {
             ""
         };
 
+        // 未照合（一度も試していない）に加えて、PR1 以前の pending も1回だけ付け直す。
+        // run が1件でもあれば対象から外れるので、繰り返し実行されない。
         let sql = format!(
-            "SELECT w.id, w.title, w.title_guess, w.media_kind, w.year
+            "SELECT w.id,
+                    CASE WHEN w.match_status = 'pending' THEN 1 ELSE 0 END AS legacy
              FROM works w
-             WHERE (w.tmdb_id IS NULL)
-               AND (w.match_status IS NULL OR w.match_status IN ('unmatched'))
-               AND w.title IS NOT NULL AND w.title != ''
-               AND w.match_status != 'locked'
-               -- 一度も照合を試していない作品だけ（UNRESOLVED の作品を毎回再試行しない）
-               AND w.metadata_updated_at IS NULL
+             WHERE w.tmdb_id IS NULL
+               AND w.match_status <> 'locked'
+               AND (
+                    ((w.match_status IS NULL OR w.match_status = 'unmatched')
+                      AND w.metadata_updated_at IS NULL)
+                 OR (w.match_status = 'pending'
+                      AND NOT EXISTS (SELECT 1 FROM metadata_match_runs r WHERE r.work_id = w.id))
+               )
              {base_filter}
              ORDER BY w.id
              LIMIT 10"
@@ -791,32 +999,19 @@ pub async fn auto_match_source_inner(
 
         let conn = db.0.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let read = |row: &rusqlite::Row| -> rusqlite::Result<(i64, bool)> {
+            Ok((row.get(0)?, row.get::<_, i64>(1)? == 1))
+        };
         let result: Vec<_> = if let Some(sid) = source_id {
-            stmt.query_map(rusqlite::params![sid], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?
-            .flatten()
-            .collect()
+            stmt.query_map(rusqlite::params![sid], read)
+                .map_err(|e| e.to_string())?
+                .flatten()
+                .collect()
         } else {
-            stmt.query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            })
-            .map_err(|e| e.to_string())?
-            .flatten()
-            .collect()
+            stmt.query_map([], read)
+                .map_err(|e| e.to_string())?
+                .flatten()
+                .collect()
         };
         result
     };
@@ -841,88 +1036,52 @@ pub async fn auto_match_source_inner(
         },
     );
 
-    for (work_id, title, title_guess, media_kind, year) in targets {
-        let work = WorkForMatch {
-            id: work_id,
-            title: title.clone(),
-            title_guess,
-            media_kind,
-            year,
-            match_status: "unmatched".to_string(),
+    for (work_id, legacy_pending) in targets {
+        let target = {
+            let conn = db.0.lock().map_err(|e| e.to_string())?;
+            load_match_target(&conn, work_id)
         };
-        let (candidates, parsed) = match fetch_candidates(&client, &work).await {
-            Ok(result) => result,
+        let target = match target {
+            Ok(target) => target,
             Err(error) => {
-                eprintln!("[TMDb] search error for \"{}\": {}", title, error);
-                last_error = Some(format!("\"{title}\": {error}"));
+                last_error = Some(format!("work {work_id}: {error}"));
                 failed += 1;
                 processed += 1;
-                let _ = app.emit(
-                    "metadata:batch_progress",
-                    MetadataBatchProgress {
-                        source_id,
-                        processed,
-                        total,
-                        matched,
-                        skipped,
-                        failed,
-                        last_error: last_error.clone(),
-                    },
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(260)).await;
                 continue;
             }
         };
+        let title = target.snapshot.derived_title.clone();
+        let trigger_kind = if legacy_pending {
+            TriggerKind::LegacyRescan
+        } else {
+            TriggerKind::Batch
+        };
 
-        let outcome = rules_safe_best_candidate(&candidates, &parsed);
-        match (outcome.decision, outcome.top) {
-            (SafeDecision::Auto, Some(best)) => {
-                eprintln!(
-                    "[TMDb] MATCH: \"{}\" → \"{}\" ({})",
-                    title, best.title, best.confidence
-                );
-                match apply_match_internal(
-                    app,
-                    db,
-                    &client,
-                    work_id,
-                    best.tmdb_id,
-                    &best.media_type,
-                    MatchStatus::Matched,
-                    ConfidenceWrite::Score(best.confidence),
-                )
-                .await
-                {
-                    Ok(_) => matched += 1,
-                    Err(e) => {
-                        eprintln!("[TMDb] apply_match_internal error: {}", e);
-                        last_error = Some(e);
-                        failed += 1;
-                    }
-                }
+        match match_once(app, db, &client, &target.snapshot, trigger_kind, Some(&batch_id)).await {
+            Ok(result) if result.matched => {
+                eprintln!("[TMDb] MATCH: \"{}\" → {:?}", title, result.tmdb_id);
+                matched += 1;
             }
-            (decision, top) => {
+            Ok(result) => {
                 // 自動確定できない理由を診断情報として残す
-                let msg = match top {
-                    None => format!("\"{}\" → no TMDb results", title),
-                    Some(top) => format!(
-                        "\"{}\" → best={} score={} ({})",
-                        title,
-                        top.title,
-                        top.confidence,
-                        outcome.reasons.join(", ")
-                    ),
-                };
-                eprintln!("[TMDb] {}: {}", decision.as_str(), msg);
+                let msg = format!(
+                    "\"{}\" → best score={} ({})",
+                    title,
+                    result.confidence,
+                    result.reasons.join(", ")
+                );
+                eprintln!("[TMDb] {}: {}", result.status, msg);
                 last_error = Some(msg);
-                // REVIEW → pending（レビュー待ち）、UNRESOLVED → unmatched
-                let conn = db.0.lock().map_err(|e| e.to_string())?;
-                let _ = record_unapplied_decision(&conn, work_id, decision.match_status());
-                if decision == SafeDecision::Review {
+                if result.decision.as_deref() == Some(SafeDecision::Review.as_str()) {
                     skipped += 1;
                 } else {
                     failed += 1;
                 }
+            }
+            Err(error) => {
+                eprintln!("[TMDb] error for \"{}\": {}", title, error);
+                last_error = Some(format!("\"{title}\": {error}"));
+                failed += 1;
             }
         }
 
