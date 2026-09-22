@@ -5,6 +5,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { WorkList } from "@/components/works/WorkList";
 import { DetailPane } from "@/components/detail/DetailPane";
 import { SourcesScreen } from "@/components/sources/SourcesScreen";
+import { NasSortScreen } from "@/components/nassort/NasSortScreen";
 import { SettingsScreen } from "@/components/settings/SettingsScreen";
 import { SeriesScreen } from "@/components/series/SeriesScreen";
 import { SeriesDetailScreen } from "@/components/series/SeriesDetailScreen";
@@ -21,7 +22,7 @@ import { useThumbnailEvents } from "@/hooks/useThumbnails";
 import { useMetadataEvents } from "@/hooks/useTmdb";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
-const UTILITY_SECTIONS = new Set(["sources", "settings", "backup", "needs-attention", "audit", "about"]);
+const UTILITY_SECTIONS = new Set(["sources", "nas-sort", "settings", "backup", "needs-attention", "audit", "about"]);
 
 export default function App() {
   const {
@@ -58,6 +59,7 @@ export default function App() {
 
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {activeSection === "sources" && <SourcesScreen />}
+          {activeSection === "nas-sort" && <NasSortScreen />}
           {activeSection === "settings" && <SettingsScreen />}
           {isBackup && <BackupScreen />}
           {isNeedsAttention && <AttentionCenterScreen />}

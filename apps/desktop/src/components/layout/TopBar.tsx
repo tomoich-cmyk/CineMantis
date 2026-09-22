@@ -38,6 +38,7 @@ export function TopBar() {
 
         <button
           onClick={toggleFilterBar}
+          title={activeFilterCount > 0 ? `${activeFilterCount}件のフィルタが有効` : "絞り込み条件を設定"}
           className={clsx(
             "relative h-7 px-3 border border-[#24242a] text-gray-500 hover:text-gray-100 hover:bg-[#121212]",
             filterBarOpen && "bg-mantis-900/30 text-mantis-300 border-mantis-700/60",

@@ -68,6 +68,7 @@ export function SideNav() {
         {(
           [
             { id: "sources", icon: "💾", label: "ソース管理" },
+            { id: "nas-sort", icon: "📤", label: "NAS振り分け" },
             { id: "backup", icon: "▣", label: "バックアップ" },
             { id: "audit", icon: "🔬", label: "監査レポート" },
             { id: "settings", icon: "⚙", label: "設定" },

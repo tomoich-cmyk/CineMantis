@@ -210,6 +210,23 @@ async fn apply_match_internal(
         .and_then(|y| y.parse::<i32>().ok());
     let inferred_reading = crate::services::reading::infer_reading(&title);
 
+    // country_type を国情報から推定（JP含む → domestic, それ以外 → foreign）
+    // 国情報が空配列のときは判断材料がないので NULL のまま据え置く
+    let inferred_country_type: Option<&str> = country_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+        .filter(|codes| !codes.is_empty())
+        .map(|codes| {
+            if codes.iter().any(|c| c.eq_ignore_ascii_case("JP")) {
+                "domestic"
+            } else {
+                "foreign"
+            }
+        });
+
+    // media_category を media_type から推定（手動設定済みなら SQL 側で保持）
+    let inferred_media_category = if media_type == "movie" { "movie" } else { "drama" };
+
     // ポスター保存
     let poster_local_path = if let Some(ref rp) = poster_remote {
         store_poster_for_work(app, client, work_id, rp).await
@@ -236,9 +253,11 @@ async fn apply_match_internal(
                media_kind       = ?9,
                external_rating  = ?12,
                external_rating_source = 'tmdb',
-               reading          = COALESCE(reading, ?13),
+               reading          = COALESCE(NULLIF(TRIM(COALESCE(reading, '')), ''), ?13),
                match_status     = ?14,
                match_confidence = ?15,
+               country_type     = COALESCE(NULLIF(country_type, 'unknown'), ?17, country_type),
+               media_category   = COALESCE(NULLIF(media_category, 'other'), ?18),
                metadata_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
              WHERE id = ?16",
             rusqlite::params![
@@ -258,6 +277,8 @@ async fn apply_match_internal(
                 new_match_status,
                 confidence,
                 work_id,
+                inferred_country_type,
+                inferred_media_category,
             ],
         )
         .map_err(|e| e.to_string())?;

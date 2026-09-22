@@ -12,6 +12,7 @@ export type NavSection =
   | "unorganized"
   | "needs-attention"
   | "sources"
+  | "nas-sort"
   | "settings"
   | "backup"
   | "audit"

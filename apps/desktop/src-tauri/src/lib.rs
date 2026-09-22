@@ -38,6 +38,9 @@ pub fn run() {
             commands::source::deduplicate_library_files,
             commands::sync::list_sync_outbox,
             commands::sync::process_sync_outbox,
+            // NAS 振り分け
+            commands::nas_sort::plan_nas_sort,
+            commands::nas_sort::execute_nas_sort,
             // Works
             commands::work::list_works,
             commands::work::get_work,

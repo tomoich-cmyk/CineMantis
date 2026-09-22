@@ -3,6 +3,23 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+/// media_category の実効値。NULL のときは work_type から補完する。
+/// 一覧表示（SELECT 句）と未整理判定で必ず同じ式を使うこと。
+const MEDIA_CATEGORY_EXPR: &str =
+    "COALESCE(w.media_category, CASE WHEN w.work_type IN ('movie', 'drama', 'ova') THEN w.work_type ELSE 'other' END)";
+
+/// 「未整理」判定。どれか一つでも欠けていれば未整理。
+/// media_category は表示と同じ実効値で判定する（NULL+work_type=movie を未整理にしない）。
+fn build_unorganized_sql() -> String {
+    format!(
+        "AND (COALESCE(w.release_year, w.year) IS NULL
+              OR COALESCE(w.country_type, 'unknown') = 'unknown'
+              OR NULLIF(TRIM(COALESCE(w.reading, '')), '') IS NULL
+              OR {MEDIA_CATEGORY_EXPR} = 'other'
+              OR NULLIF(TRIM(COALESCE(w.title, '')), '') IS NULL)"
+    )
+}
+
 #[derive(Debug, Serialize)]
 pub struct WorkSummaryRow {
     pub id: i64,
@@ -160,11 +177,12 @@ pub fn list_works(
     };
 
     // 要確認フィルタ (allowlist 検証してそのまま埋め込み)
+    let unorganized_clause = build_unorganized_sql();
     let attention_filter_sql: &str = match attention_filter.as_deref() {
         Some("unmatched")    => "AND COALESCE(w.match_status, 'unmatched') = 'unmatched'",
         Some("no_poster")    => "AND w.poster_path IS NULL AND w.thumb_path IS NULL",
         Some("missing_meta") => "AND (w.year IS NULL OR w.genres_json IS NULL)",
-        Some("unorganized") => "AND (COALESCE(w.release_year, w.year) IS NULL OR COALESCE(w.country_type, 'unknown') = 'unknown' OR NULLIF(TRIM(COALESCE(w.reading, '')), '') IS NULL OR COALESCE(w.media_category, 'other') = 'other' OR NULLIF(TRIM(COALESCE(w.title, '')), '') IS NULL)",
+        Some("unorganized")  => unorganized_clause.as_str(),
         Some("no_persons")   =>
             "AND NOT EXISTS (SELECT 1 FROM work_persons wp2 WHERE wp2.work_id = w.id)",
         Some("file_missing") =>
@@ -184,18 +202,14 @@ pub fn list_works(
     };
 
     let unorganized_sql = if unorganized_only.unwrap_or(false) {
-        "AND (COALESCE(w.release_year, w.year) IS NULL
-              OR COALESCE(w.country_type, 'unknown') = 'unknown'
-              OR NULLIF(TRIM(COALESCE(w.reading, '')), '') IS NULL
-              OR COALESCE(w.media_category, 'other') = 'other'
-              OR NULLIF(TRIM(COALESCE(w.title, '')), '') IS NULL)"
+        unorganized_clause.as_str()
     } else {
         ""
     };
 
     let sql = format!(
         "SELECT w.id, w.title, w.year, COALESCE(w.release_year, w.year), w.work_type,
-                COALESCE(w.media_category, CASE WHEN w.work_type IN ('movie', 'drama', 'ova') THEN w.work_type ELSE 'other' END),
+                {MEDIA_CATEGORY_EXPR},
                 COALESCE(w.country_type, 'unknown'),
                 w.reading,
                 COALESCE(w.genre_text, w.genres_json),
@@ -239,8 +253,8 @@ pub fn list_works(
            AND (?6  IS NULL OR COALESCE(w.release_year, w.year) <= ?6)
            AND (?7  IS NULL OR COALESCE(w.genre_text, w.genres_json) LIKE '%' || ?7  || '%')
            AND (?8  IS NULL OR w.country_json LIKE '%' || ?8  || '%')
-           AND (?9  IS NULL OR w.country_type = ?9)
-           AND (?10 IS NULL OR w.media_category = ?10)
+           AND (?9  IS NULL OR COALESCE(w.country_type, 'unknown') = ?9)
+           AND (?10 IS NULL OR {MEDIA_CATEGORY_EXPR} = ?10)
            AND (?11 IS NULL OR COALESCE(w.date_added, w.created_at) >= ?11)
            AND (?12 IS NULL OR COALESCE(w.date_added, w.created_at) <= ?12)
            AND (?13 IS NULL OR EXISTS (
@@ -319,9 +333,10 @@ pub fn get_work(state: State<'_, DbState>, work_id: i64) -> Result<Option<WorkDe
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
+            &format!(
             "SELECT w.id, w.title, w.original_title, w.year, COALESCE(w.release_year, w.year),
                     w.work_type,
-                    COALESCE(w.media_category, CASE WHEN w.work_type IN ('movie', 'drama', 'ova') THEN w.work_type ELSE 'other' END),
+                    {MEDIA_CATEGORY_EXPR},
                     COALESCE(w.country_type, 'unknown'), w.reading,
                     w.synopsis, w.runtime_sec, w.genres_json, COALESCE(w.genre_text, w.genres_json),
                     w.poster_path, w.thumb_path,
@@ -343,7 +358,8 @@ pub fn get_work(state: State<'_, DbState>, work_id: i64) -> Result<Option<WorkDe
                     us.personal_note
              FROM works w
              LEFT JOIN user_stats us ON us.work_id = w.id
-             WHERE w.id = ?1",
+             WHERE w.id = ?1"
+            ),
         )
         .map_err(|e| e.to_string())?;
 
@@ -451,12 +467,13 @@ pub fn get_filter_options(state: State<'_, DbState>) -> Result<FilterOptions, St
     };
 
     let media_categories: Vec<String> = {
+        // 一覧表示・絞込条件と同じ実効値を出す（生カラムだと選んでも 0 件になる）
         let mut stmt = conn
-            .prepare(
-                "SELECT DISTINCT COALESCE(media_category, 'other')
-                 FROM works
-                 ORDER BY 1",
-            )
+            .prepare(&format!(
+                "SELECT DISTINCT {MEDIA_CATEGORY_EXPR}
+                 FROM works w
+                 ORDER BY 1"
+            ))
             .map_err(|e| e.to_string())?;
         let x = stmt.query_map([], |row| row.get(0))
             .map_err(|e| e.to_string())?
