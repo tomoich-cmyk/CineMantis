@@ -12,8 +12,8 @@
 //! - 最終選択は **Choice**（選択肢・各選択肢の確率・confidence を返す）。
 //!   `best_match` 自身が confidence を返すので、**別の certainty 質問は作らない**。
 //! - Noul の値も Choice の confidence も、CineMantis では「正解確率」として扱わない。
-//!   当面は shadow 評価用のモデル出力として記録するだけ（TypeSafe の confidence は
-//!   回答分布の集中度であって、CineMantis の正解率ではない）。
+//!   当面は shadow 評価用のモデル出力として記録するだけ（Choice の confidence は
+//!   TypeSafe が報告した selected label の confidence であって、CineMantis の正解確率ではない）。
 //! - **Score は `jev-contract-1` では扱わない。** 生成も検証もしない。
 //!   導入するときは contract の版を上げ、その時点の TypeSafe 仕様に合わせて実装する。
 //!
@@ -449,15 +449,21 @@ fn parse_answer(id: &str, value: &Value) -> Result<RawAnswer, JevContractError> 
                 .get("confidence")
                 .and_then(Value::as_f64)
                 .ok_or_else(|| JevContractError::Parse(format!("{id}: confidence がありません")))?;
-            let probabilities = value
-                .get("probabilities")
-                .and_then(Value::as_object)
-                .map(|map| {
-                    map.iter()
-                        .filter_map(|(key, value)| value.as_f64().map(|v| (key.clone(), v)))
-                        .collect()
-                })
-                .unwrap_or_default();
+            // probabilities は必須。entry を1つも捨てない（捨てると後段の
+            // exact-key 検証をすり抜ける）。数値でない値が1つでもあれば即 Parse error。
+            let raw = value.get("probabilities").ok_or_else(|| {
+                JevContractError::Parse(format!("{id}: probabilities がありません"))
+            })?;
+            let raw = raw.as_object().ok_or_else(|| {
+                JevContractError::Parse(format!("{id}: probabilities がオブジェクトではありません"))
+            })?;
+            let mut probabilities = BTreeMap::new();
+            for (key, value) in raw {
+                let value = value.as_f64().ok_or_else(|| {
+                    JevContractError::Parse(format!("{id}: probabilities.{key} が数値ではありません"))
+                })?;
+                probabilities.insert(key.clone(), value);
+            }
             Ok(RawAnswer::Choice { label, probabilities, confidence })
         }
         other => Err(JevContractError::Parse(format!("{id}: 未知の回答種別 {other}"))),
@@ -473,7 +479,7 @@ pub struct JevAnswers {
     pub best_match: Option<CandidateIdentity>,
     /// `best_match` の選択肢ごとの確率
     pub best_match_probabilities: BTreeMap<String, f64>,
-    /// Choice が返した confidence（回答分布の集中度。CineMantis の正解率ではない）
+    /// TypeSafe が報告した selected label の confidence。CineMantis の正解確率ではない
     pub best_match_confidence: f64,
 }
 
@@ -1010,6 +1016,91 @@ mod tests {
             validate_response(&build_questions(&keys(1)).unwrap(), &identity(1), &answers),
             Err(JevContractError::ValueOutOfRange { .. })
         ));
+    }
+
+    /// Choice の probabilities は entry を1つも捨てずに読む（C3A.2 の回帰テスト）
+    #[test]
+    fn choice_probabilities_are_parsed_fail_closed() {
+        let choice = |probabilities: Value| {
+            let mut answer = Map::new();
+            answer.insert("type".into(), json!("choice"));
+            answer.insert("choice".into(), json!("c1"));
+            answer.insert("confidence".into(), json!(0.8));
+            if !probabilities.is_null() {
+                answer.insert("probabilities".into(), probabilities);
+            }
+            parse_answers(&json!({ BEST_MATCH_ID: Value::Object(answer) }))
+        };
+
+        // 1. 正常
+        let ok = choice(json!({"c1": 0.8, "NONE": 0.2})).unwrap();
+        assert_eq!(
+            ok[BEST_MATCH_ID],
+            RawAnswer::Choice {
+                label: "c1".to_string(),
+                probabilities: BTreeMap::from([
+                    ("c1".to_string(), 0.8),
+                    ("NONE".to_string(), 0.2)
+                ]),
+                confidence: 0.8,
+            }
+        );
+
+        // 2. 欠落
+        assert!(matches!(choice(Value::Null), Err(JevContractError::Parse(_))));
+
+        // 3. object 以外
+        for not_object in [json!([0.8, 0.2]), json!(0.8), json!("0.8")] {
+            assert!(
+                matches!(choice(not_object.clone()), Err(JevContractError::Parse(_))),
+                "{not_object} が通ってしまう"
+            );
+        }
+
+        // 4. 想定キーの値が文字列
+        assert!(matches!(
+            choice(json!({"c1": "0.8", "NONE": 0.2})),
+            Err(JevContractError::Parse(_))
+        ));
+
+        // 5. 余分なキー（値は数値）→ parse は通るが exact-key 検証で落ちる
+        let extra_numeric = choice(json!({"c1": 0.8, "NONE": 0.2, "unexpected": 0.0})).unwrap();
+        assert_eq!(
+            extra_numeric[BEST_MATCH_ID],
+            RawAnswer::Choice {
+                label: "c1".to_string(),
+                probabilities: BTreeMap::from([
+                    ("c1".to_string(), 0.8),
+                    ("NONE".to_string(), 0.2),
+                    ("unexpected".to_string(), 0.0),
+                ]),
+                confidence: 0.8,
+            },
+            "余分なキーを黙って捨てない"
+        );
+        let questions = build_questions(&keys(1)).unwrap();
+        let mut answers = extra_numeric;
+        answers.insert("c1_same_work".to_string(), RawAnswer::Noul { value: 0.8 });
+        assert!(matches!(
+            validate_response(&questions, &identity(1), &answers),
+            Err(JevContractError::ProbabilityKeysMismatch { .. })
+        ));
+
+        // 6. 余分なキーの値が文字列 → parse 段階で落とす（黙って消して素通りさせない）
+        assert!(
+            matches!(
+                choice(json!({"c1": 0.8, "NONE": 0.2, "unexpected": "bad"})),
+                Err(JevContractError::Parse(_))
+            ),
+            "数値でない probability entry が黙って消えている"
+        );
+
+        // 7. 想定キーだけ・すべて数値 → 検証まで通る
+        let mut good = choice(json!({"c1": 0.8, "NONE": 0.2})).unwrap();
+        good.insert("c1_same_work".to_string(), RawAnswer::Noul { value: 0.8 });
+        let validated = validate_response(&questions, &identity(1), &good).unwrap();
+        assert_eq!(validated.best_match.unwrap().tmdb_id, 101);
+        assert_eq!(validated.best_match_probabilities.len(), 2);
     }
 
     /// 公式の answers map 以外は受け付けない
