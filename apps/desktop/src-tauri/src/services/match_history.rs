@@ -137,6 +137,29 @@ pub struct SearchQuery {
     pub source: &'static str,
 }
 
+/// rules-1（凍結した比較基準）の結論。
+/// `services::rules_v1` の出力をそのまま受け取るための入れ物で、
+/// 共有の `TmdbCandidate` には依存しない。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RulesOneVerdict {
+    pub tmdb_id: Option<i64>,
+    pub media_type: Option<String>,
+    pub score: Option<i32>,
+    /// 凍結側が検知した注意書き（例: 本番の検索語とずれた）
+    pub notes: Vec<&'static str>,
+}
+
+impl RulesOneVerdict {
+    pub fn from_outcome(outcome: &crate::services::rules_v1::RulesV1Outcome) -> Self {
+        RulesOneVerdict {
+            tmdb_id: outcome.top.as_ref().map(|c| c.tmdb_id),
+            media_type: outcome.top.as_ref().map(|c| c.media_type.clone()),
+            score: outcome.top.as_ref().map(|c| c.confidence),
+            notes: outcome.notes.clone(),
+        }
+    }
+}
+
 /// 候補がどの検索語から出てきたか（legacy / embedded / both）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateSource {
@@ -173,8 +196,8 @@ pub struct RunInput<'a> {
     /// 落ちた候補も含む全候補（検索結果の順）。こちらも combined
     pub all: &'a [TmdbCandidate],
     pub rules_safe: &'a SafeMatchOutcome<'a>,
-    /// rules-1（比較基準）の結論。旧経路の候補だけから選ぶ
-    pub rules_one: Option<&'a TmdbCandidate>,
+    /// rules-1（比較基準）の結論。凍結実装 `services::rules_v1` が旧経路の候補だけから出す
+    pub rules_one: RulesOneVerdict,
     /// rules-tags-shadow（PR2.5 の記録専用判定）
     pub shadow: Option<&'a SafeMatchOutcome<'a>>,
     /// 候補ごとの検索語の出どころ
@@ -364,20 +387,22 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
         input.rules_safe.decision,
         &reasons,
     )?;
-    // rules-1（比較基準）。閾値以上の最良候補が無ければ UNRESOLVED
-    let rules_one_decision = if input.rules_one.is_some() {
+    // rules-1（凍結した比較基準）。閾値以上の最良候補が無ければ UNRESOLVED
+    let rules_one_decision = if input.rules_one.tmdb_id.is_some() {
         SafeDecision::Auto
     } else {
         SafeDecision::Unresolved
     };
-    insert_verdict(
+    insert_verdict_row(
         &tx,
         run_id,
         "rules-1",
         RULES_V1_VERSION,
-        input.rules_one,
+        input.rules_one.tmdb_id,
+        input.rules_one.media_type.clone(),
+        input.rules_one.score.map(|s| s as f64),
         rules_one_decision,
-        &[],
+        &input.rules_one.notes,
     )?;
     // rules-tags-shadow（記録専用。works には反映しない）
     if let Some(shadow) = input.shadow {
@@ -414,6 +439,31 @@ fn insert_verdict(
     decision: SafeDecision,
     reasons: &[&str],
 ) -> Result<(), String> {
+    insert_verdict_row(
+        conn,
+        run_id,
+        matcher,
+        matcher_version,
+        candidate.map(|c| c.tmdb_id),
+        candidate.map(|c| c.media_type.clone()),
+        candidate.map(|c| c.confidence as f64),
+        decision,
+        reasons,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_verdict_row(
+    conn: &Connection,
+    run_id: i64,
+    matcher: &str,
+    matcher_version: &str,
+    tmdb_id: Option<i64>,
+    media_type: Option<String>,
+    score: Option<f64>,
+    decision: SafeDecision,
+    reasons: &[&str],
+) -> Result<(), String> {
     conn.execute(
         "INSERT INTO metadata_match_verdicts
            (run_id, matcher, matcher_version, tmdb_id, media_type, decision, score, reasons_json)
@@ -422,10 +472,10 @@ fn insert_verdict(
             run_id,
             matcher,
             matcher_version,
-            candidate.map(|c| c.tmdb_id),
-            candidate.map(|c| c.media_type.clone()),
+            tmdb_id,
+            media_type,
             decision.as_str(),
-            candidate.map(|c| c.confidence as f64),
+            score,
             json_array(reasons),
         ],
     )
@@ -791,12 +841,26 @@ mod tests {
             ranked,
             all,
             rules_safe: outcome,
-            rules_one: metadata_matcher::best_candidate(ranked),
+            rules_one: rules_one_for(ranked),
             shadow: None,
             candidate_sources: &[],
             tmdb_calls: 1,
             latency_ms: 12,
             error_text: None,
+        }
+    }
+
+    /// テスト用: 共有の候補から rules-1 相当の verdict を作る
+    /// （凍結実装の判定そのものは rules_v1 のテストで固定している）
+    fn rules_one_for(ranked: &[TmdbCandidate]) -> RulesOneVerdict {
+        match metadata_matcher::best_candidate(ranked) {
+            Some(best) => RulesOneVerdict {
+                tmdb_id: Some(best.tmdb_id),
+                media_type: Some(best.media_type.clone()),
+                score: Some(best.confidence),
+                notes: Vec::new(),
+            },
+            None => RulesOneVerdict::default(),
         }
     }
 

@@ -5,15 +5,16 @@ use crate::models::match_status::MatchStatus;
 use crate::models::tmdb::*;
 use crate::services::{
     match_history::{
-        self, CandidateSource, LabelMethod, LabelWrite, RejectionSource, RunInput, SearchQuery,
-        TriggerKind,
+        self, CandidateSource, LabelMethod, LabelWrite, RejectionSource, RulesOneVerdict, RunInput,
+        SearchQuery, TriggerKind,
     },
     metadata_matcher::{
-        best_candidate, merge_and_rank, rules_safe_best_candidate, rules_safe_with_embedded,
+        merge_and_rank, rules_safe_best_candidate, rules_safe_with_embedded,
         rules_tags_shadow_best_candidate, score_movie, score_tv, SafeDecision,
     },
     poster_store::store_poster_for_work,
     prematch_snapshot::{LocalEvidence, PreMatchSnapshot, QuerySource, SearchInput},
+    rules_v1,
     title_parser::{parse_title, ParsedTitle},
     tmdb_client::TmdbClient,
 };
@@ -269,7 +270,9 @@ struct CandidateSearch {
     combined_all: Vec<TmdbCandidate>,
     /// 候補がどの検索語から出てきたか
     sources: Vec<CandidateSource>,
-    /// 旧経路の検索語を解析したもの（rules-1 / rules-safe の入力）
+    /// rules-1（凍結した比較基準）の判定。旧経路の生結果だけを凍結実装で採点したもの
+    rules_one: RulesOneVerdict,
+    /// 旧経路の検索語を解析したもの（rules-safe の入力）
     parsed: ParsedTitle,
     queries: Vec<SearchQuery>,
     tmdb_calls: usize,
@@ -290,6 +293,54 @@ pub(crate) fn parsed_for_query(input: &SearchInput) -> ParsedTitle {
         }
     }
     parsed
+}
+
+/// 1回の検索の中身（検索語・年・検索種別）。
+/// 旧経路の値は凍結実装 `rules_v1::search_plan_v1` が決める
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct QueryPlan {
+    pub query: String,
+    pub year: Option<i32>,
+    pub search_movie: bool,
+    pub search_tv: bool,
+    /// 年ヒントがあるときの「年なし再検索」
+    pub retry_without_year: bool,
+}
+
+impl From<rules_v1::SearchPlanV1> for QueryPlan {
+    fn from(plan: rules_v1::SearchPlanV1) -> Self {
+        QueryPlan {
+            query: plan.query,
+            year: plan.year,
+            search_movie: plan.search_movie,
+            search_tv: plan.search_tv,
+            retry_without_year: plan.movie_retry_without_year,
+        }
+    }
+}
+
+/// 検索語・年・検索種別を決める。
+///
+/// **旧経路（legacy）は凍結実装が支配する。** 共有の `title_parser` を PR3 以降で変えても、
+/// rules-1 が見る検索語・年・検索種別・年なし再検索、ひいては候補集合と verdict は動かない。
+/// 引数も raw title と media_kind だけで、共有 parser の出力を受け取らない。
+///
+/// 埋め込み由来（embedded）の検索は本番側の実装（共有 parser + タグの年）のままにする。
+pub(crate) fn query_plan_for(input: &SearchInput, media_kind: &str) -> QueryPlan {
+    match input.source {
+        QuerySource::Legacy => rules_v1::search_plan_v1(&input.title, media_kind).into(),
+        QuerySource::Embedded => {
+            let parsed = parsed_for_query(input);
+            let year = input.year.or(parsed.year_hint);
+            QueryPlan {
+                query: parsed.normalized_title,
+                year,
+                search_movie: media_kind != "tv",
+                search_tv: media_kind != "movie",
+                retry_without_year: year.is_some(),
+            }
+        }
+    }
 }
 
 /// 同じ作品の候補を1つにまとめる（スコアは高い方を採る）。
@@ -345,6 +396,10 @@ async fn fetch_candidates(
     let inputs = evidence.search_inputs();
     let mut legacy_all: Vec<TmdbCandidate> = Vec::new();
     let mut embedded_all: Vec<TmdbCandidate> = Vec::new();
+    // rules-1（凍結）へ渡す旧経路の生結果。TMDB の呼び出しは増やさず、同じ応答を写すだけ
+    let mut legacy_raw_movies: Vec<rules_v1::RawMovieV1> = Vec::new();
+    let mut legacy_raw_tv: Vec<rules_v1::RawTvV1> = Vec::new();
+    let mut legacy_query: Option<String> = None;
     let mut legacy_parsed: Option<ParsedTitle> = None;
     let mut queries: Vec<SearchQuery> = Vec::new();
     let mut tmdb_calls = 0usize;
@@ -352,14 +407,12 @@ async fn fetch_candidates(
     let mut succeeded = 0usize;
     let mut errors = Vec::new();
 
-    // ソースの設定（movie / tv / unknown）に応じて検索種別を決める
-    let search_movie = evidence.media_kind() != "tv";
-    let search_tv = evidence.media_kind() != "movie";
-
     for input in &inputs {
+        // 旧経路の検索は凍結実装が決める（共有 parser を変えても rules-1 が動かないように）。
+        // 採点そのものは本番側（rules-safe / shadow）が共有実装で行う
+        let plan = query_plan_for(input, evidence.media_kind());
         let parsed = parsed_for_query(input);
-        // 旧経路は「検索語から解析した年」だけを使う（PR2.5 で経路を変えない）
-        let year = input.year.or(parsed.year_hint);
+        let year = plan.year;
         let source = input.source.as_str();
         let bucket: &mut Vec<TmdbCandidate> = match input.source {
             QuerySource::Legacy => &mut legacy_all,
@@ -367,42 +420,43 @@ async fn fetch_candidates(
         };
 
         // 映画検索
-        if search_movie {
+        if plan.search_movie {
             attempted += 1;
             tmdb_calls += 1;
             queries.push(SearchQuery {
                 kind: "movie",
-                query: parsed.normalized_title.clone(),
+                query: plan.query.clone(),
                 year,
                 source,
             });
-            eprintln!(
-                "[TMDb] search_movie({source}): '{}' year={:?}",
-                &parsed.normalized_title, year
-            );
-            match client.search_movie(&parsed.normalized_title, year).await {
+            eprintln!("[TMDb] search_movie({source}): '{}' year={:?}", &plan.query, year);
+            match client.search_movie(&plan.query, year).await {
                 Ok(results) => {
                     succeeded += 1;
                     eprintln!("[TMDb] got {} movie results", results.len());
                     for r in &results {
                         let c = score_movie(r, &parsed);
+                        if input.source == QuerySource::Legacy {
+                            legacy_raw_movies.push(rules_v1::RawMovieV1::from(r));
+                        }
                         bucket.push(c);
                     }
                     // 年ヒントがある場合は年なし検索も追加
-                    if year.is_some() {
+                    if plan.retry_without_year {
                         tmdb_calls += 1;
                         queries.push(SearchQuery {
                             kind: "movie",
-                            query: parsed.normalized_title.clone(),
+                            query: plan.query.clone(),
                             year: None,
                             source,
                         });
-                        if let Ok(results2) =
-                            client.search_movie(&parsed.normalized_title, None).await
-                        {
+                        if let Ok(results2) = client.search_movie(&plan.query, None).await {
                             for r in &results2 {
                                 let scored = score_movie(r, &parsed);
                                 if !bucket.iter().any(|c| c.tmdb_id == scored.tmdb_id) {
+                                    if input.source == QuerySource::Legacy {
+                                        legacy_raw_movies.push(rules_v1::RawMovieV1::from(r));
+                                    }
                                     bucket.push(scored);
                                 }
                             }
@@ -417,25 +471,25 @@ async fn fetch_candidates(
         }
 
         // TV 検索
-        if search_tv {
+        if plan.search_tv {
             attempted += 1;
             tmdb_calls += 1;
             queries.push(SearchQuery {
                 kind: "tv",
-                query: parsed.normalized_title.clone(),
+                query: plan.query.clone(),
                 year,
                 source,
             });
-            eprintln!(
-                "[TMDb] search_tv({source}): '{}' year={:?}",
-                &parsed.normalized_title, year
-            );
-            match client.search_tv(&parsed.normalized_title, year).await {
+            eprintln!("[TMDb] search_tv({source}): '{}' year={:?}", &plan.query, year);
+            match client.search_tv(&plan.query, year).await {
                 Ok(results) => {
                     succeeded += 1;
                     eprintln!("[TMDb] got {} tv results", results.len());
                     for r in &results {
                         let c = score_tv(r, &parsed);
+                        if input.source == QuerySource::Legacy {
+                            legacy_raw_tv.push(rules_v1::RawTvV1::from(r));
+                        }
                         bucket.push(c);
                     }
                 }
@@ -447,6 +501,7 @@ async fn fetch_candidates(
         }
 
         if input.source == QuerySource::Legacy {
+            legacy_query = Some(plan.query.clone());
             legacy_parsed = Some(parsed);
         }
     }
@@ -456,6 +511,14 @@ async fn fetch_candidates(
     }
 
     let parsed = legacy_parsed.unwrap_or_else(|| parse_title(evidence.title()));
+    // rules-1 は凍結実装で、旧経路の生結果だけを採点する（埋め込み由来は渡さない）
+    let rules_one = RulesOneVerdict::from_outcome(&rules_v1::evaluate(&rules_v1::RulesV1Input {
+        raw_title: evidence.title(),
+        media_kind: evidence.media_kind(),
+        movies: &legacy_raw_movies,
+        tv: &legacy_raw_tv,
+        production_query: legacy_query.as_deref(),
+    }));
     let (combined_all, sources) = merge_candidate_sets(&legacy_all, &embedded_all);
     Ok(CandidateSearch {
         legacy_ranked: merge_and_rank(legacy_all.clone()),
@@ -463,6 +526,7 @@ async fn fetch_candidates(
         combined_ranked: merge_and_rank(combined_all.clone()),
         combined_all,
         sources,
+        rules_one,
         parsed,
         queries,
         tmdb_calls,
@@ -491,6 +555,7 @@ async fn match_once(
             combined_ranked: Vec::new(),
             combined_all: Vec::new(),
             sources: Vec::new(),
+            rules_one: RulesOneVerdict::default(),
             parsed: parse_title(""),
             queries: Vec::new(),
             tmdb_calls: 0,
@@ -518,7 +583,7 @@ async fn match_once(
                     ranked: &[],
                     all: &[],
                     rules_safe: &outcome,
-                    rules_one: None,
+                    rules_one: RulesOneVerdict::default(),
                     shadow: None,
                     candidate_sources: &[],
                     tmdb_calls: 0,
@@ -557,8 +622,8 @@ async fn match_once(
                 ranked: &search.combined_ranked,
                 all: &search.combined_all,
                 rules_safe: &outcome,
-                // rules-1 は旧経路の候補だけから選ぶ（凍結）
-                rules_one: best_candidate(&search.legacy_ranked),
+                // rules-1 は凍結実装 services::rules_v1 が旧経路の生結果から出した結論
+                rules_one: search.rules_one.clone(),
                 shadow: Some(&shadow),
                 candidate_sources: &search.sources,
                 tmdb_calls: search.tmdb_calls,
@@ -1576,6 +1641,63 @@ mod tests {
             vote_average: None,
             genre_ids: None,
         }
+    }
+
+    /// 旧経路の検索は凍結実装が決める（共有 parser を変えても動かない）
+    #[test]
+    fn legacy_search_is_driven_by_the_frozen_plan() {
+        let input = SearchInput {
+            source: QuerySource::Legacy,
+            title: "Blade.Runner.2049.2017.1080p.BluRay.x264.mkv".to_string(),
+            year: None,
+        };
+        let plan = query_plan_for(&input, "unknown");
+
+        // 期待値は rules_v1 側に固定した値。共有 parser の出力は使わない
+        assert_eq!(plan.query, "Blade Runner 2049");
+        assert_eq!(plan.year, Some(2017));
+        assert!(plan.search_movie && plan.search_tv);
+        assert!(plan.retry_without_year);
+        assert_eq!(plan, QueryPlan::from(rules_v1::search_plan_v1(&input.title, "unknown")));
+
+        // 共有 parser が将来別の結果を返すようになっても（ここでは書き換えて再現）、
+        // 旧経路の検索計画は変わらない。計画の入力は raw title と media_kind だけ
+        let mut future_shared = parse_title(&input.title);
+        future_shared.normalized_title = "Blade Runner".to_string();
+        future_shared.year_hint = Some(2049);
+        future_shared.media_kind = "tv".to_string();
+        assert_ne!(future_shared.normalized_title, plan.query);
+        assert_ne!(future_shared.year_hint, plan.year);
+        assert_eq!(query_plan_for(&input, "unknown"), plan);
+
+        // ソースの設定だけは従来どおり検索種別に効く
+        let movie_only = query_plan_for(&input, "movie");
+        assert!(movie_only.search_movie && !movie_only.search_tv);
+        assert_eq!(movie_only.query, plan.query);
+        let tv_only = query_plan_for(&input, "tv");
+        assert!(!tv_only.search_movie && tv_only.search_tv);
+    }
+
+    /// 埋め込み由来の検索は本番側の実装のまま（凍結の対象外）
+    #[test]
+    fn embedded_search_plan_uses_the_tag_year() {
+        let input = SearchInput {
+            source: QuerySource::Embedded,
+            title: "THE GUILTY/ギルティ".to_string(),
+            year: Some(2019),
+        };
+        let plan = query_plan_for(&input, "unknown");
+        assert_eq!(plan.query, "THE GUILTY/ギルティ");
+        assert_eq!(plan.year, Some(2019));
+        assert!(plan.retry_without_year);
+
+        // 旧経路の計画は同じ検索語でも年を持たない（タグの年を使わない）
+        let legacy = query_plan_for(
+            &SearchInput { source: QuerySource::Legacy, ..input },
+            "unknown",
+        );
+        assert_eq!(legacy.year, None);
+        assert!(!legacy.retry_without_year);
     }
 
     /// 旧経路の検索語と点数は PR2 から変わらない

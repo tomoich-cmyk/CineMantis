@@ -8,3 +8,4 @@ pub mod poster_store;
 pub mod prematch_inputs;
 pub mod prematch_snapshot;
 pub mod reading;
+pub mod rules_v1;
