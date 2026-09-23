@@ -77,18 +77,70 @@ const REDACTED: &[u8] = b"[REDACTED]";
 // ─── シークレット ────────────────────────────────────────────────────────────
 
 /// API キー。`Debug` も `Display` も実装しない（そもそも文字列化できないようにする）。
-struct SecretKey(String);
+struct SecretKey {
+    /// redaction の照合に使う生のバイト列
+    raw: String,
+    /// 構築時に検証済みの Authorization。送信時は clone するだけで失敗しない
+    authorization: HeaderValue,
+}
 
 impl SecretKey {
-    fn header_value(&self) -> Option<HeaderValue> {
-        let mut value = HeaderValue::from_str(&format!("Bearer {}", self.0)).ok()?;
-        value.set_sensitive(true);
-        Some(value)
+    /// ヘッダとして成立しないキー（空・空白のみ・CR/LF・制御文字）は here で弾く。
+    /// ここを通らなければ client 自体が作れないので、送信時に header が欠ける経路がない。
+    fn new(raw: String) -> Result<Self, TypeSafeClientError> {
+        if raw.trim().is_empty() {
+            return Err(TypeSafeClientError::simple(
+                TypeSafeErrorKind::Auth,
+                format!("{API_KEY_ENV} が空です"),
+            ));
+        }
+        // from_str は制御文字（CR / LF を含む）を拒否する。エラーには入力を載せない。
+        let mut authorization =
+            HeaderValue::from_str(&format!("Bearer {raw}")).map_err(|_| {
+                TypeSafeClientError::simple(
+                    TypeSafeErrorKind::Auth,
+                    format!("{API_KEY_ENV} をヘッダに載せられません"),
+                )
+            })?;
+        authorization.set_sensitive(true);
+        Ok(SecretKey { raw, authorization })
+    }
+
+    fn authorization(&self) -> HeaderValue {
+        self.authorization.clone()
     }
 
     fn bytes(&self) -> &[u8] {
-        self.0.as_bytes()
+        self.raw.as_bytes()
     }
+
+    fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+/// JSON の値そのものにシークレットが含まれるか再帰的に見る。
+///
+/// serialize 後の byte 列だけを見ると、`"` や `\` を含むキーが escape されて
+/// 一致しなくなる（`abc"def` は wire 上 `abc\"def`）。意味の側でも照合して、
+/// 二重で塞ぐ。
+fn value_contains_secret(value: &Value, secret: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(secret),
+        Value::Array(items) => items.iter().any(|item| value_contains_secret(item, secret)),
+        Value::Object(map) => map
+            .iter()
+            .any(|(key, item)| key.contains(secret) || value_contains_secret(item, secret)),
+        Value::Number(_) | Value::Bool(_) | Value::Null => false,
+    }
+}
+
+/// `haystack` に `needle` がそのまま含まれるか。
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|window| window == needle)
 }
 
 /// 保存用のバイト列からキーの完全一致部分を消す。
@@ -224,27 +276,42 @@ impl<'a> BoundedCollector<'a> {
         }
     }
 
-    fn finish(self) -> ResponseCapture {
+    fn finish(self) -> BoundedResponse {
         let truncated = self.total > MAX_RESPONSE_BYTES;
 
         // 4KiB へ縮める前に、overlap 込みの window 全体で消す
         let mut prefix_bytes = self.redactor.redact(&self.raw_window);
         prefix_bytes.truncate(RESPONSE_PREFIX_BYTES);
 
-        let body = if truncated {
-            None
-        } else {
-            self.buffered.map(|bytes| self.redactor.redact(&bytes))
-        };
+        let raw_body = if truncated { None } else { self.buffered };
+        let body = raw_body.as_ref().map(|bytes| self.redactor.redact(bytes));
 
-        ResponseCapture {
-            sha256: hex(&self.hasher.finalize()),
-            byte_count: self.total,
-            prefix: String::from_utf8_lossy(&prefix_bytes).into_owned(),
-            truncated,
-            body,
+        BoundedResponse {
+            raw_body,
+            capture: ResponseCapture {
+                sha256: hex(&self.hasher.finalize()),
+                byte_count: self.total,
+                prefix: String::from_utf8_lossy(&prefix_bytes).into_owned(),
+                truncated,
+                body,
+            },
         }
     }
+}
+
+/// bounded reader の結果。`raw_body` はこのモジュールの外へ出さない。
+///
+/// 意味の解析（JSON parse）は **raw のまま** 行う。redaction はあくまで
+/// 「C4 が保存する証跡」のための加工なので、TypeSafe が返した内容そのものを
+/// C3A へ渡すには raw を読む必要がある。
+///
+/// 不変条件:
+/// - 上限以内: `raw_body = Some(raw)`, `capture.body = Some(redacted)`
+/// - 上限超過: `raw_body = None`, `capture.body = None`、`capture.prefix` は redacted、
+///   `capture.sha256` と `capture.byte_count` は raw 全体
+struct BoundedResponse {
+    raw_body: Option<Vec<u8>>,
+    capture: ResponseCapture,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -390,6 +457,8 @@ struct AttemptFailure {
 struct AttemptSuccess {
     http_status: u16,
     request_id: Option<String>,
+    /// JSON 解析用。public な結果には出さない
+    raw_body: Option<Vec<u8>>,
     capture: ResponseCapture,
 }
 
@@ -429,12 +498,8 @@ impl TypeSafeClient {
                 format!("{API_KEY_ENV} が設定されていません"),
             )
         })?;
-        if raw.trim().is_empty() {
-            return Err(TypeSafeClientError::simple(
-                TypeSafeErrorKind::Auth,
-                format!("{API_KEY_ENV} が空です"),
-            ));
-        }
+        // 前後の偶発的な空白を Bearer token に含めない（空白のみは下で auth reject）
+        let api_key = SecretKey::new(raw.trim().to_string())?;
 
         let http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -448,7 +513,6 @@ impl TypeSafeClient {
                 )
             })?;
 
-        let api_key = SecretKey(raw);
         let redactor = Redactor::new(&api_key);
         Ok(TypeSafeClient {
             http,
@@ -467,6 +531,15 @@ impl TypeSafeClient {
     /// 製品バイナリに入ることはない（`#[cfg(test)]` なのでコンパイルもされない）。
     #[cfg(test)]
     pub(crate) fn with_key_for_test(key: impl Into<String>, base_url: impl Into<String>) -> Self {
+        Self::try_with_key_for_test(key, base_url).expect("テスト用クライアント")
+    }
+
+    /// production と同じ API キー検証を通す。reject の確認に使う。
+    #[cfg(test)]
+    pub(crate) fn try_with_key_for_test(
+        key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, TypeSafeClientError> {
         let base_url = base_url.into();
         let parsed = Url::parse(&base_url).expect("テスト用 base_url が URL として不正");
         let host = parsed.host_str().unwrap_or_default();
@@ -475,15 +548,16 @@ impl TypeSafeClient {
             "テスト用クライアントは loopback 以外へ向けられない: {host}"
         );
 
+        let api_key = SecretKey::new(key.into())?;
+
         let http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(CLIENT_USER_AGENT)
             .build()
             .expect("テスト用 HTTP クライアント");
 
-        let api_key = SecretKey(key.into());
         let redactor = Redactor::new(&api_key);
-        TypeSafeClient {
+        Ok(TypeSafeClient {
             http,
             base_url,
             api_key,
@@ -491,7 +565,7 @@ impl TypeSafeClient {
             per_attempt_timeout: PER_ATTEMPT_TIMEOUT,
             max_retries: MAX_RETRIES,
             backoff_base: Duration::from_millis(BACKOFF_BASE_MS),
-        }
+        })
     }
 
     #[cfg(test)]
@@ -529,7 +603,7 @@ impl TypeSafeClient {
             .await?;
 
         let latency_ms = elapsed_ms(started);
-        let body = success.capture.body().ok_or_else(|| {
+        let body = success.raw_body.as_deref().ok_or_else(|| {
             // 2xx で上限超過。body が無いので解析できない
             self.error_from_capture(
                 TypeSafeErrorKind::ResponseTooLarge,
@@ -615,16 +689,43 @@ impl TypeSafeClient {
             "state": state,
             "questions": questions,
         });
+
+        // C2 / C3A が渡してきた state / questions に万一キーが混ざっていたら送らない。
+        // 秘密情報の preflight failure なので auth として扱い、送信回数は 0 にする。
+        //
+        // ① 意味の側で見る。escape される文字を含むキーはここでしか捕まえられない。
+        if value_contains_secret(&payload, self.api_key.as_str()) {
+            return Err(self.secret_in_body_error());
+        }
+
+        // 実際に送る byte 列を一度だけ作り、その byte 列そのものを検査する。
+        // 「検査した bytes」と「送る bytes」を必ず一致させるため、ここで作った
+        // body をそのまま reqwest へ渡す（.json() で再 serialize しない）。
+        let body = serde_json::to_vec(&payload).map_err(|_| {
+            TypeSafeClientError::simple(
+                TypeSafeErrorKind::Other,
+                "POST /v1/systemone の body を組み立てられませんでした",
+            )
+        })?;
+
+        // ② 実際の wire bytes でも見る。
+        if contains_bytes(&body, self.api_key.bytes()) {
+            return Err(self.secret_in_body_error());
+        }
+
         let started = std::time::Instant::now();
 
         let (success, retry_count) = self
             .run_with_retry("POST /v1/systemone", started, || {
-                self.http.post(&url).headers(self.common_headers()).json(&payload)
+                self.http
+                    .post(&url)
+                    .headers(self.common_headers())
+                    .body(body.clone())
             })
             .await?;
 
         let latency_ms = elapsed_ms(started);
-        let body = success.capture.body().ok_or_else(|| {
+        let body = success.raw_body.as_deref().ok_or_else(|| {
             self.error_from_capture(
                 TypeSafeErrorKind::ResponseTooLarge,
                 "POST /v1/systemone",
@@ -681,11 +782,18 @@ impl TypeSafeClient {
 
     // ─── 共通処理 ────────────────────────────────────────────────────────
 
+    /// 送信前に止めたときの定型エラー。キーそのものは絶対に載せない。
+    fn secret_in_body_error(&self) -> TypeSafeClientError {
+        TypeSafeClientError::simple(
+            TypeSafeErrorKind::Auth,
+            "送信 body に API キーが含まれていたため送信しませんでした",
+        )
+    }
+
     fn common_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        if let Some(value) = self.api_key.header_value() {
-            headers.insert(AUTHORIZATION, value);
-        }
+        // 構築時に検証済みなので、ここで失敗する余地はない
+        headers.insert(AUTHORIZATION, self.api_key.authorization());
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(USER_AGENT, HeaderValue::from_static(CLIENT_USER_AGENT));
@@ -769,8 +877,8 @@ impl TypeSafeClient {
         let retry_after = parse_retry_after(response.headers());
         let content_length = response.content_length();
 
-        let capture = match self.read_bounded(response, content_length, deadline).await {
-            Ok(capture) => capture,
+        let bounded = match self.read_bounded(response, content_length, deadline).await {
+            Ok(bounded) => bounded,
             Err(kind) => {
                 return Err(AttemptFailure {
                     kind,
@@ -782,6 +890,7 @@ impl TypeSafeClient {
                 })
             }
         };
+        let BoundedResponse { raw_body, capture } = bounded;
 
         if status.is_success() {
             if capture.truncated {
@@ -800,6 +909,7 @@ impl TypeSafeClient {
             return Ok(AttemptSuccess {
                 http_status: status.as_u16(),
                 request_id,
+                raw_body,
                 capture,
             });
         }
@@ -826,7 +936,7 @@ impl TypeSafeClient {
         mut response: Response,
         content_length: Option<u64>,
         deadline: tokio::time::Instant,
-    ) -> Result<ResponseCapture, TypeSafeErrorKind> {
+    ) -> Result<BoundedResponse, TypeSafeErrorKind> {
         let mut collector = BoundedCollector::new(content_length, &self.redactor);
         loop {
             // reqwest 側の timeout と同じ deadline を見る（別タイマーを作らない）
@@ -1199,14 +1309,22 @@ mod tests {
         hex(&hasher.finalize())
     }
 
-    fn collect(chunks: &[&[u8]], content_length: Option<u64>, key: &str) -> ResponseCapture {
-        let secret = SecretKey(key.to_string());
+    fn collect_full(
+        chunks: &[&[u8]],
+        content_length: Option<u64>,
+        key: &str,
+    ) -> BoundedResponse {
+        let secret = SecretKey::new(key.to_string()).expect("テスト用キー");
         let redactor = Redactor::new(&secret);
         let mut collector = BoundedCollector::new(content_length, &redactor);
         for chunk in chunks {
             collector.push(chunk);
         }
         collector.finish()
+    }
+
+    fn collect(chunks: &[&[u8]], content_length: Option<u64>, key: &str) -> ResponseCapture {
+        collect_full(chunks, content_length, key).capture
     }
 
     // ─── bounded collector（Content-Length の申告は判定に使わない）──────────
@@ -1915,6 +2033,249 @@ mod tests {
         assert!(!request_line.contains(DUMMY_KEY), "URL にキーが入っている");
         assert!(!request_line.contains('?'), "query を付けない");
         assert!(sent.to_lowercase().contains("authorization: bearer"));
+    }
+
+    // ─── C3B.1: 送信 body の secret guard ────────────────────────────────
+
+    /// state / questions に API キーが混ざっていたら、送らずに失敗する
+    #[tokio::test]
+    async fn request_body_containing_the_key_is_never_sent() {
+        let leaky = json!({"note": format!("key={DUMMY_KEY}")});
+
+        for (label, state, questions) in [
+            ("state", leaky.clone(), json!({})),
+            ("questions", json!({}), leaky.clone()),
+        ] {
+            let server = stub::start(vec![stub::json(200, &systemone_json(MODEL))]).await;
+            let error = client(&server.base)
+                .ask_systemone(MODEL, &state, &questions)
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.kind, TypeSafeErrorKind::Auth, "{label}");
+            assert_eq!(server.hits(), 0, "{label}: request を送ってしまった");
+            assert_eq!(error.http_status, None, "{label}");
+            assert!(error.capture.is_none(), "{label}");
+            assert!(!error.safe_text.contains(DUMMY_KEY), "{label}: safe_text に漏れている");
+            assert!(!format!("{error}").contains(DUMMY_KEY), "{label}: Display に漏れている");
+            assert!(!format!("{error:?}").contains(DUMMY_KEY), "{label}: Debug に漏れている");
+        }
+
+        // 通常の body は送れる
+        let server = stub::start(vec![stub::json(200, &systemone_json(MODEL))]).await;
+        let result = client(&server.base)
+            .ask_systemone(MODEL, &json!({"title": "普通の状態"}), &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result.http_status, 200);
+        assert_eq!(server.hits(), 1);
+    }
+
+    /// 検査した byte 列と、実際に送った byte 列が一致していること
+    #[tokio::test]
+    async fn the_inspected_bytes_are_the_bytes_that_are_sent() {
+        let server = stub::start(vec![stub::json(200, &systemone_json(MODEL))]).await;
+        let state = json!({"a": 1, "b": [1, 2, 3]});
+        let questions = json!({"q": {"type": "noul"}});
+        let _ = client(&server.base)
+            .ask_systemone(MODEL, &state, &questions)
+            .await
+            .unwrap();
+
+        let sent = server.requests().remove(0);
+        let body = sent.split("\r\n\r\n").nth(1).unwrap();
+        let expected = serde_json::to_vec(&json!({
+            "model": MODEL, "state": state, "questions": questions
+        }))
+        .unwrap();
+        assert_eq!(body.as_bytes(), expected.as_slice(), "serialize し直されている");
+        assert!(sent.to_lowercase().contains("content-type: application/json"));
+    }
+
+    /// escape が必要な文字を含むキーは、wire bytes の一致検索では見逃し得る。
+    /// 意味の側の走査で必ず止める。
+    #[tokio::test]
+    async fn keys_needing_json_escaping_are_caught_by_the_semantic_scan() {
+        // 1 文字目は " を含むキー、2 つ目は \ を含むキー
+        let quote_key = "sk-abc\"def-123";
+        let backslash_key = "sk-abc\\def-123";
+
+        for key in [quote_key, backslash_key] {
+            // 前提の確認: serialize すると escape されるので raw byte 検索では一致しない
+            let payload = json!({"model": MODEL, "state": {"note": key}, "questions": {}});
+            let wire = serde_json::to_vec(&payload).unwrap();
+            assert!(
+                !contains_bytes(&wire, key.as_bytes()),
+                "この鍵は wire 上で escape されないのでテストの前提が崩れている: {key}"
+            );
+            // 意味の側では捕まる
+            assert!(value_contains_secret(&payload, key));
+
+            // 実際に送信が止まる
+            let server = stub::start(vec![stub::json(200, &systemone_json(MODEL))]).await;
+            let client = TypeSafeClient::try_with_key_for_test(key, &server.base)
+                .unwrap()
+                .with_backoff_for_test(Duration::from_millis(1));
+            let error = client
+                .ask_systemone(MODEL, &json!({"note": key}), &json!({}))
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.kind, TypeSafeErrorKind::Auth, "{key}");
+            assert_eq!(server.hits(), 0, "{key}: 送信してしまった");
+            assert!(!error.safe_text.contains(key));
+            assert!(!format!("{error}").contains(key));
+            assert!(!format!("{error:?}").contains(key));
+        }
+    }
+
+    /// object の「キー側」に混ざった場合も止める
+    #[tokio::test]
+    async fn a_secret_used_as_an_object_key_is_rejected() {
+        let server = stub::start(vec![stub::json(200, &systemone_json(MODEL))]).await;
+        let state = json!({ DUMMY_KEY: "value" });
+        let error = client(&server.base)
+            .ask_systemone(MODEL, &state, &json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, TypeSafeErrorKind::Auth);
+        assert_eq!(server.hits(), 0);
+
+        // 入れ子の配列・オブジェクトの奥でも同じ
+        let server = stub::start(vec![stub::json(200, &systemone_json(MODEL))]).await;
+        let questions = json!({"outer": [{"inner": {"deep": format!("x{DUMMY_KEY}y")}}]});
+        let error = client(&server.base)
+            .ask_systemone(MODEL, &json!({}), &questions)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, TypeSafeErrorKind::Auth);
+        assert_eq!(server.hits(), 0);
+    }
+
+    #[test]
+    fn semantic_scan_walks_the_whole_payload() {
+        let secret = "sk-test-normal-123";
+        assert!(value_contains_secret(&json!({"a": secret}), secret));
+        assert!(value_contains_secret(&json!({"a": format!("prefix {secret} suffix")}), secret));
+        assert!(value_contains_secret(&json!({ secret: 1 }), secret));
+        assert!(value_contains_secret(&json!([1, [2, {"x": secret}]]), secret));
+        assert!(value_contains_secret(&json!(secret), secret));
+
+        assert!(!value_contains_secret(&json!({"a": "harmless"}), secret));
+        assert!(!value_contains_secret(&json!({"a": 123, "b": true, "c": null}), secret));
+        assert!(!value_contains_secret(&json!([]), secret));
+    }
+
+    /// production の env 値は前後の空白を落としてから Bearer にする
+    #[test]
+    fn api_keys_are_trimmed_and_blank_ones_rejected() {
+        let padded = SecretKey::new(" valid-key ".trim().to_string()).unwrap();
+        assert_eq!(padded.as_str(), "valid-key", "前後の空白を含めない");
+        assert_eq!(padded.bytes(), b"valid-key");
+
+        for blank in ["", "   ", "\t\n"] {
+            // SecretKey は Debug を持たないので unwrap_err は使えない
+            match SecretKey::new(blank.trim().to_string()) {
+                Ok(_) => panic!("{blank:?} が通ってしまった"),
+                Err(error) => assert_eq!(error.kind, TypeSafeErrorKind::Auth, "{blank:?}"),
+            }
+        }
+    }
+
+    // ─── C3B.1: raw parse body と redacted capture の分離 ────────────────
+
+    /// 応答がキーを正当な JSON 値として含む場合でも、
+    /// 意味の解析は raw から行い、保存用の証跡だけ redact する
+    #[tokio::test]
+    async fn semantics_use_the_raw_body_while_the_capture_is_redacted() {
+        let body = json!({
+            "model": MODEL,
+            "answers": {"echoed": {"type": "noul", "noul": 0.5, "note": DUMMY_KEY}},
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        })
+        .to_string();
+
+        let server = stub::start(vec![stub::json(200, &body)]).await;
+        let result = client(&server.base)
+            .ask_systemone(MODEL, &json!({}), &json!({}))
+            .await
+            .unwrap();
+
+        // C3A へは TypeSafe が返した意味のまま渡る
+        assert_eq!(result.answers["echoed"]["note"], json!(DUMMY_KEY));
+        assert_eq!(result.answers["echoed"]["noul"], json!(0.5));
+
+        // 保存用の証跡からは消えている
+        let capture = &result.capture;
+        assert!(!capture.body_text().unwrap().contains(DUMMY_KEY), "capture.body に漏れている");
+        assert!(!capture.prefix().contains(DUMMY_KEY), "capture.prefix に漏れている");
+        assert!(capture.body_text().unwrap().contains("[REDACTED]"));
+
+        // hash と byte 数は raw 基準
+        assert_eq!(capture.sha256(), sha_of(body.as_bytes()));
+        assert_eq!(capture.byte_count(), body.len() as u64);
+    }
+
+    #[test]
+    fn bounded_response_keeps_raw_and_redacted_apart() {
+        let mut body = b"{\"k\":\"".to_vec();
+        body.extend_from_slice(DUMMY_KEY.as_bytes());
+        body.extend_from_slice(b"\"}");
+
+        let bounded = collect_full(&[&body], None, DUMMY_KEY);
+        assert_eq!(bounded.raw_body.as_deref(), Some(body.as_slice()), "raw は無加工");
+        assert!(bounded.capture.body_text().unwrap().contains("[REDACTED]"));
+        assert_ne!(bounded.raw_body.as_deref(), bounded.capture.body());
+
+        // 上限超過なら両方とも持たない
+        let big = vec![b'x'; MAX_RESPONSE_BYTES as usize + 1];
+        let bounded = collect_full(&[&big], None, DUMMY_KEY);
+        assert_eq!(bounded.raw_body, None);
+        assert_eq!(bounded.capture.body(), None);
+        assert!(bounded.capture.truncated());
+        assert_eq!(bounded.capture.sha256(), sha_of(&big));
+        assert_eq!(bounded.capture.byte_count(), MAX_RESPONSE_BYTES + 1);
+    }
+
+    // ─── C3B.1: Authorization header の fail closed ──────────────────────
+
+    #[test]
+    fn unusable_api_keys_are_rejected_at_construction() {
+        let bad = [
+            ("empty", ""),
+            ("whitespace", "   "),
+            ("tab newline", "\t\n"),
+            ("cr", "sk-abc\rdef"),
+            ("lf", "sk-abc\ndef"),
+            ("crlf injection", "sk-abc\r\nX-Injected: 1"),
+            ("control", "sk-abc\u{0}def"),
+            ("bell", "sk-abc\u{7}def"),
+        ];
+        for (label, key) in bad {
+            let error = TypeSafeClient::try_with_key_for_test(key, "http://127.0.0.1:9")
+                .err()
+                .unwrap_or_else(|| panic!("{label} が通ってしまった"));
+            assert_eq!(error.kind, TypeSafeErrorKind::Auth, "{label}");
+            assert!(!format!("{error}").contains(key.trim()) || key.trim().is_empty(), "{label}");
+            assert!(!format!("{error:?}").contains("sk-abc"), "{label}: Debug に漏れている");
+            assert!(!error.safe_text.contains("sk-abc"), "{label}");
+        }
+
+        // 通常のキーは通る
+        assert!(TypeSafeClient::try_with_key_for_test(DUMMY_KEY, "http://127.0.0.1:9").is_ok());
+    }
+
+    /// 送信時に Authorization が欠ける経路が無いこと
+    #[tokio::test]
+    async fn authorization_is_always_attached() {
+        let server = stub::start(vec![stub::json(200, &models_json())]).await;
+        let _ = client(&server.base).list_models().await.unwrap();
+        let sent = server.requests().remove(0).to_lowercase();
+        assert_eq!(
+            sent.matches("authorization: bearer").count(),
+            1,
+            "Authorization が 1 つだけ載る"
+        );
     }
 
     // ─── live smoke（既定では走らせない）────────────────────────────────
