@@ -53,6 +53,7 @@ const MIGRATION_BACKFILL_COUNTRY_MEDIA: &str = include_str!("../../../../package
 const MIGRATION_PREMATCH_INPUTS: &str = include_str!("../../../../packages/db/migrations/020_prematch_inputs.sql");
 const MIGRATION_MATCH_HISTORY: &str = include_str!("../../../../packages/db/migrations/021_match_history.sql");
 const MIGRATION_CONTAINER_TAGS: &str = include_str!("../../../../packages/db/migrations/022_container_tags.sql");
+const MIGRATION_JEV_SHADOW: &str = include_str!("../../../../packages/db/migrations/023_jev_shadow.sql");
 
 /// 022 で CHECK 制約を広げるテーブル。SQLite は CHECK を後から変えられないので作り直す。
 /// 毎起動で作り直さないよう、CHECK に目印の値が無いときだけ実行する。
@@ -150,6 +151,8 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
     apply_lenient_migration(&conn, MIGRATION_CONTAINER_TAGS)?;
     rebuild_review_tasks_if_needed(&conn)?;
     rebuild_verdicts_if_needed(&conn)?;
+    apply_lenient_migration(&conn, MIGRATION_JEV_SHADOW)?;
+    backfill_legacy_candidate_scores(&conn)?;
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
@@ -338,6 +341,34 @@ pub(crate) fn rebuild_verdicts_if_needed(conn: &Connection) -> Result<bool> {
     )
 }
 
+/// 023: 既存候補のうち、legacy 検索だけで見つかったものの score を
+/// `metadata_match_candidate_scores` へ移送する。
+///
+/// `metadata_match_candidates.rules_score` は combined candidate set 上の最良値なので、
+/// `query_source = 'legacy'`（旧経路だけで見つかった候補）に限り旧経路の score と同値である。
+/// matcher は経路を表す `legacy`、matcher_version は採点式の版 `rules-1` として入れる
+/// （guard 込みの判定器である rules-safe を候補スコアの出どころにしない）。
+/// **rank は移送しない**。legacy-only の候補でも、combined set では上位に embedded 由来の候補が
+/// 挿入されうるため、保存済みの `rules_rank` は legacy の順位とは限らない。
+/// 推測で埋めるより NULL のままにする。
+pub(crate) fn backfill_legacy_candidate_scores(conn: &Connection) -> Result<usize> {
+    let moved = conn.execute(
+        "INSERT INTO metadata_match_candidate_scores
+           (run_id, candidate_id, cand_key, matcher, matcher_version, score, rank, in_candidate_set)
+         SELECT c.run_id, c.id, c.cand_key, 'legacy', 'rules-1', c.rules_score, NULL, 1
+         FROM metadata_match_candidates c
+         WHERE c.query_source = 'legacy'
+           AND NOT EXISTS (
+             SELECT 1 FROM metadata_match_candidate_scores s
+             WHERE s.run_id = c.run_id AND s.cand_key = c.cand_key
+               AND s.matcher = 'legacy' AND s.matcher_version = 'rules-1'
+               AND s.jev_call_id IS NULL
+           )",
+        [],
+    )?;
+    Ok(moved)
+}
+
 /// 021 以前に照合された作品の出どころを `legacy` として印付ける。
 /// 021 以降に照合した作品は match_source が入っているので触らない。
 pub(crate) fn backfill_match_source(conn: &Connection) -> Result<usize> {
@@ -428,6 +459,312 @@ mod tests {
         let conn = open_migrated();
         apply_migrations(&conn).expect("second run");
         apply_migrations(&conn).expect("third run");
+    }
+
+    // ─── 023: Jev shadow schema ─────────────────────────────────────────────
+
+    /// 023 のテーブルが出来ていて、2回流しても壊れないこと
+    #[test]
+    fn jev_shadow_tables_are_created_and_idempotent() {
+        let conn = open_migrated();
+        apply_migrations(&conn).unwrap();
+
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+                   ('jev_contracts','metadata_match_jev_calls','metadata_match_candidate_scores')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 3);
+
+        // verdict の CHECK は 022 のまま（jev-packed を足していない）
+        let verdict_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'metadata_match_verdicts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(verdict_sql.contains("jev-policy"));
+        assert!(!verdict_sql.contains("jev-packed"), "raw call は verdict に入れない");
+    }
+
+    /// Jev の call 行は、isolated が1 run に複数入っても保存できること
+    #[test]
+    fn jev_calls_allow_several_isolated_calls_per_run() {
+        let conn = open_migrated();
+        let (run_id, candidates) = jev_fixture(&conn);
+
+        for (seq, candidate_id) in candidates.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, subject_candidate_id, subject_cand_key,
+                    contract_version, state_schema_version, requested_model,
+                    state_json, questions_json, candidate_order_json, status)
+                 VALUES (?1, ?2, 'isolated', ?3, ?4, 'jev-contract-1', 'jev-state-1',
+                         'jev-1.13.0', '{}', '[]', '[]', 'skipped')",
+                rusqlite::params![run_id, seq as i64 + 2, candidate_id, format!("c{}", seq + 1)],
+            )
+            .unwrap();
+        }
+        let calls: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metadata_match_jev_calls WHERE run_id = ?1 AND call_kind = 'isolated'",
+                rusqlite::params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(calls, 2);
+
+        // call_seq は run 内で一意
+        assert!(conn
+            .execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                    requested_model, state_json, questions_json, candidate_order_json, status)
+                 VALUES (?1, 2, 'packed', 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                         '{}', '[]', '[]', 'skipped')",
+                rusqlite::params![run_id],
+            )
+            .is_err());
+    }
+
+    /// call 行の歯止め（CHECK）が効いていること
+    #[test]
+    fn jev_call_constraints_reject_inconsistent_rows() {
+        let conn = open_migrated();
+        let (run_id, candidates) = jev_fixture(&conn);
+        let insert = |seq: i64, extra_cols: &str, extra_vals: &str| -> rusqlite::Result<usize> {
+            conn.execute(
+                &format!(
+                    "INSERT INTO metadata_match_jev_calls
+                       (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                        requested_model, state_json, questions_json, candidate_order_json, status{extra_cols})
+                     VALUES (?1, {seq}, 'packed', 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                             '{{}}', '[]', '[]', 'ok'{extra_vals})"
+                ),
+                rusqlite::params![run_id],
+            )
+        };
+
+        // ok なのに正規化回答が無い
+        assert!(insert(10, "", "").is_err());
+        // NONE と答えたのに候補を選んでいる
+        assert!(insert(
+            11,
+            ", parsed_answer_json, answered_none, selected_candidate_id",
+            &format!(", '{{}}', 1, {}", candidates[0])
+        )
+        .is_err());
+        // 応答を切り詰めたのに hash が無い
+        assert!(insert(12, ", parsed_answer_json, response_truncated", ", '{}', 1").is_err());
+        // isolated なのに対象候補が無い
+        assert!(conn
+            .execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                    requested_model, state_json, questions_json, candidate_order_json, status)
+                 VALUES (?1, 13, 'isolated', 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                         '{}', '[]', '[]', 'skipped')",
+                rusqlite::params![run_id],
+            )
+            .is_err());
+        // 正しい行は入る
+        insert(14, ", parsed_answer_json", ", '{\"best_match\":null}'").unwrap();
+    }
+
+    /// 候補ごとの matcher 別 score は matcher ごとに1行、Jev は call ごとに1行
+    #[test]
+    fn candidate_scores_are_unique_per_matcher_and_per_jev_call() {
+        let conn = open_migrated();
+        let (run_id, candidates) = jev_fixture(&conn);
+        let score = |matcher: &str, version: &str, call: Option<i64>| -> rusqlite::Result<usize> {
+            conn.execute(
+                "INSERT INTO metadata_match_candidate_scores
+                   (run_id, candidate_id, cand_key, matcher, matcher_version, score, rank, jev_call_id)
+                 VALUES (?1, ?2, 'c1', ?3, ?4, 80, 1, ?5)",
+                rusqlite::params![run_id, candidates[0], matcher, version, call],
+            )
+        };
+
+        score("legacy", "rules-1", None).unwrap();
+        // 同じ matcher / version は2行目を許さない
+        assert!(score("legacy", "rules-1", None).is_err());
+        // 版が違えば別行として残せる（採点式を変えたときの比較用）
+        score("legacy", "rules-2", None).unwrap();
+        score("rules-tags-shadow", "rules-tags-shadow-2", None).unwrap();
+        // guard 込みの判定器は候補スコアの出どころにしない
+        assert!(score("rules-safe", "rules-safe-2", None).is_err());
+        // jev-call は call_id が必須
+        assert!(score("jev-call", "jev-contract-1", None).is_err());
+
+        conn.execute(
+            "INSERT INTO metadata_match_jev_calls
+               (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                requested_model, state_json, questions_json, candidate_order_json, status)
+             VALUES (?1, 1, 'packed', 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                     '{}', '[]', '[]', 'skipped')",
+            rusqlite::params![run_id],
+        )
+        .unwrap();
+        let call_id = conn.last_insert_rowid();
+        score("jev-call", "jev-contract-1", Some(call_id)).unwrap();
+        // 同じ call では1行だけ
+        assert!(score("jev-call", "jev-contract-1", Some(call_id)).is_err());
+    }
+
+    /// run をまたいだ紐付けを DB が拒否すること（複合外部キー）
+    #[test]
+    fn cross_run_references_are_rejected() {
+        let conn = open_migrated();
+        let (run_a, candidates_a) = jev_fixture(&conn);
+        let (run_b, candidates_b) = jev_fixture(&conn);
+        assert_ne!(run_a, run_b);
+
+        let insert_call = |run_id: i64, seq: i64, kind: &str, subject: Option<i64>, selected: Option<i64>| {
+            conn.execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, subject_candidate_id, selected_candidate_id,
+                    contract_version, state_schema_version, requested_model,
+                    state_json, questions_json, candidate_order_json, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                         '{}', '[]', '[]', 'skipped')",
+                rusqlite::params![run_id, seq, kind, subject, selected],
+            )
+        };
+
+        // 参照先の UNIQUE が無いと "foreign key mismatch" になってしまうので、
+        // 「外部キー違反」で弾かれていることまで確かめる
+        let rejected_by_fk = |result: rusqlite::Result<usize>, what: &str| {
+            let error = result.expect_err(what).to_string();
+            assert!(
+                error.contains("FOREIGN KEY constraint failed"),
+                "{what}: 想定外のエラー {error}"
+            );
+        };
+
+        // 1. run A の call が run B の候補を subject にする
+        rejected_by_fk(
+            insert_call(run_a, 1, "isolated", Some(candidates_b[0]), None),
+            "他 run の候補を subject にできてしまう",
+        );
+        // 2. run A の call が run B の候補を selected にする
+        rejected_by_fk(
+            insert_call(run_a, 2, "packed", None, Some(candidates_b[0])),
+            "他 run の候補を selected にできてしまう",
+        );
+        // 同じ run の候補なら入る
+        insert_call(run_a, 3, "isolated", Some(candidates_a[0]), Some(candidates_a[1])).unwrap();
+        let call_a = conn.last_insert_rowid();
+        insert_call(run_b, 1, "packed", None, None).unwrap();
+        let call_b = conn.last_insert_rowid();
+
+        let insert_score = |run_id: i64, candidate: Option<i64>, call: Option<i64>, matcher: &str| {
+            conn.execute(
+                "INSERT INTO metadata_match_candidate_scores
+                   (run_id, candidate_id, cand_key, matcher, matcher_version, score, jev_call_id)
+                 VALUES (?1, ?2, 'c1', ?3, 'v1', 50, ?4)",
+                rusqlite::params![run_id, candidate, matcher, call],
+            )
+        };
+
+        // 3. run A の score が run B の候補を参照する
+        rejected_by_fk(
+            insert_score(run_a, Some(candidates_b[0]), None, "legacy"),
+            "他 run の候補を参照できてしまう",
+        );
+        // 4. run A の score が run B の Jev call を参照する
+        rejected_by_fk(
+            insert_score(run_a, Some(candidates_a[0]), Some(call_b), "jev-call"),
+            "他 run の call を参照できてしまう",
+        );
+        // 同じ run 同士なら入る
+        insert_score(run_a, Some(candidates_a[0]), Some(call_a), "jev-call").unwrap();
+        insert_score(run_a, Some(candidates_a[1]), None, "legacy").unwrap();
+    }
+
+    /// legacy 候補の score だけを移送し、rank は NULL のままにする
+    #[test]
+    fn legacy_candidate_scores_move_without_rank() {
+        let conn = open_migrated();
+        let (run_id, _) = jev_fixture(&conn);
+        // 出どころ別に候補を足す
+        let add = |key: &str, tmdb: i64, score: i64, rank: Option<i64>, source: Option<&str>| {
+            conn.execute(
+                "INSERT INTO metadata_match_candidates
+                   (run_id, cand_key, tmdb_id, media_type, rules_rank, rules_score,
+                    rules_reasons_json, tmdb_snapshot_json, query_source)
+                 VALUES (?1, ?2, ?3, 'movie', ?4, ?5, '[]', '{}', ?6)",
+                rusqlite::params![run_id, key, tmdb, rank, score, source],
+            )
+            .unwrap();
+        };
+        add("c3", 301, 80, Some(1), Some("legacy"));
+        add("c4", 302, 90, Some(2), Some("both"));
+        add("c5", 303, 70, Some(3), Some("embedded"));
+        add("c6", 304, 60, Some(4), None); // PR2 期（出どころ不明）
+
+        assert_eq!(backfill_legacy_candidate_scores(&conn).unwrap(), 1);
+        assert_eq!(backfill_legacy_candidate_scores(&conn).unwrap(), 0, "2回目は何もしない");
+
+        let rows: Vec<(String, f64, Option<i64>)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT cand_key, score, rank FROM metadata_match_candidate_scores
+                     WHERE run_id = ?1 AND matcher = 'legacy' AND matcher_version = 'rules-1'
+                     ORDER BY cand_key",
+                )
+                .unwrap();
+            stmt.query_map(rusqlite::params![run_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        // legacy だけが移送され、rank は入らない
+        assert_eq!(rows, vec![("c3".to_string(), 80.0, None)]);
+    }
+
+    /// 023 のテスト用に run と候補を2件作る
+    fn jev_fixture(conn: &Connection) -> (i64, Vec<i64>) {
+        let work_id = insert_work(conn, "A");
+        conn.execute(
+            "INSERT INTO metadata_match_runs
+               (work_id, trigger_kind, mode, evidence_class, state_schema_version,
+                input_snapshot_json, search_queries_json, policy_version, policy_snapshot_json,
+                governing_matcher, decision, decision_reasons_json)
+             VALUES (?1, 'single', 'safe', 'live', 'cm-prematch-2', '{}', '[]',
+                     'rules-safe-2', '{}', 'rules-safe', 'REVIEW', '[]')",
+            rusqlite::params![work_id],
+        )
+        .unwrap();
+        let run_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT OR IGNORE INTO jev_contracts
+               (contract_version, state_schema_version, instructions_text, questions_template_json,
+                criteria_json, validation_policy_json, canonical_sha256, default_model)
+             VALUES ('jev-contract-1', 'jev-state-1', 'judge only from the supplied state',
+                     '[]', '{}', '{}', 'deadbeef', 'jev-1.13.0')",
+            [],
+        )
+        .unwrap();
+
+        let mut candidates = Vec::new();
+        for (key, tmdb_id) in [("c1", 101), ("c2", 102)] {
+            conn.execute(
+                "INSERT INTO metadata_match_candidates
+                   (run_id, cand_key, tmdb_id, media_type, rules_score, rules_reasons_json,
+                    tmdb_snapshot_json, query_source)
+                 VALUES (?1, ?2, ?3, 'movie', 80, '[]', '{}', 'both')",
+                rusqlite::params![run_id, key, tmdb_id],
+            )
+            .unwrap();
+            candidates.push(conn.last_insert_rowid());
+        }
+        (run_id, candidates)
     }
 
     /// 022 のテーブル作り直しは、必要なときだけ・何度流しても同じ結果になること
@@ -663,6 +1000,28 @@ mod tests {
             &conn,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ux_mrt_open'",
         );
+        // 023: Jev shadow のテーブルと、legacy score の移送
+        let jev_tables = count(
+            &conn,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+               ('jev_contracts','metadata_match_jev_calls','metadata_match_candidate_scores')",
+        );
+        let legacy_candidates = count(
+            &conn,
+            "SELECT COUNT(*) FROM metadata_match_candidates WHERE query_source = 'legacy'",
+        );
+        let moved_scores = count(
+            &conn,
+            "SELECT COUNT(*) FROM metadata_match_candidate_scores WHERE matcher = 'legacy'",
+        );
+        let moved_with_rank = count(
+            &conn,
+            "SELECT COUNT(*) FROM metadata_match_candidate_scores WHERE matcher = 'legacy' AND rank IS NOT NULL",
+        );
+        let verdict_has_packed = count(
+            &conn,
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'metadata_match_verdicts' AND sql LIKE '%jev-packed%'",
+        );
         // 022 で触るテーブルだけを見る（awards には 021 以前からの不整合が残っている）
         let broken_foreign_keys: i64 = [
             "metadata_review_tasks",
@@ -703,7 +1062,7 @@ mod tests {
             "SELECT COUNT(*) FROM works WHERE tmdb_id IS NOT NULL AND match_source IS NULL",
         );
         println!(
-            "works={} files={} matched={} unfilled={unfilled} rel_path_null={no_rel} captured={captured} absolute={absolute} history_tables={history_tables} legacy={legacy} tag_columns={tag_columns} query_source={query_source_column} details={details_column} new_checks={new_checks} open_task_index={open_task_index} broken_fk={broken_foreign_keys} integrity={integrity}",
+            "works={} files={} matched={} unfilled={unfilled} rel_path_null={no_rel} captured={captured} absolute={absolute} history_tables={history_tables} legacy={legacy} tag_columns={tag_columns} query_source={query_source_column} details={details_column} new_checks={new_checks} open_task_index={open_task_index} broken_fk={broken_foreign_keys} jev_tables={jev_tables} legacy_candidates={legacy_candidates} moved_scores={moved_scores} integrity={integrity}",
             after.0, after.1, after.2
         );
         assert_eq!(tag_columns, 7);
@@ -712,6 +1071,11 @@ mod tests {
         assert_eq!(new_checks, 2);
         assert_eq!(open_task_index, 1);
         assert_eq!(broken_foreign_keys, 0);
+        assert_eq!(jev_tables, 3);
+        // legacy 候補の score だけが移送され、rank は1件も入らない
+        assert_eq!(moved_scores, legacy_candidates);
+        assert_eq!(moved_with_rank, 0);
+        assert_eq!(verdict_has_packed, 0, "verdict の CHECK は変えない");
         assert_eq!(unfilled, 0);
         // captured = 1 は 020 以降にスキャンした行。後埋めした行が混ざっていてよい
         assert!(captured <= after.1);
