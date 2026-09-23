@@ -82,6 +82,7 @@ pub struct JevPayload {
     pub candidates: Vec<JevCandidate>,
     /// 長さ・件数の上限で値を削った箇所（コードが生成する固定のフィールドパスだけ）。
     /// 削っていなければ省略する。Jev 側に「この項目は完全ではない」と伝えるために送る。
+    /// 切り詰めの記録はここが source of truth。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub truncated_fields: Vec<String>,
 }
@@ -190,8 +191,6 @@ pub struct MaterializedState {
     pub payload: JevPayload,
     /// cand_key ↔ TMDB 候補
     pub identity: Vec<CandidateIdentity>,
-    /// 長さ上限で切り詰めた項目（監査用。payload には入れない）
-    pub truncated_fields: Vec<String>,
 }
 
 impl MaterializedState {
@@ -202,6 +201,11 @@ impl MaterializedState {
 
     pub fn identity_for(&self, cand_key: &str) -> Option<&CandidateIdentity> {
         self.identity.iter().find(|i| i.cand_key == cand_key)
+    }
+
+    /// 上限で削った箇所（source of truth は payload 側）
+    pub fn truncated_fields(&self) -> &[String] {
+        &self.payload.truncated_fields
     }
 }
 
@@ -221,6 +225,8 @@ pub enum JevStateError {
     Serialization(String),
     /// 区分値が state schema の値域から外れている
     InvalidCategoricalValue { field: String, value: String },
+    /// state の形式が想定と違う（このコードが知らない schema は送らない）
+    InvalidStateSchemaVersion { expected: String, found: String },
     /// 禁止パターン（パス・URL・秘密など）が値やキーに現れた
     ForbiddenContent { pattern: String, location: String },
 }
@@ -252,6 +258,9 @@ impl std::fmt::Display for JevStateError {
             JevStateError::Serialization(message) => write!(f, "JSON にできません: {message}"),
             JevStateError::InvalidCategoricalValue { field, value } => {
                 write!(f, "{field} に使えない値です: {value}")
+            }
+            JevStateError::InvalidStateSchemaVersion { expected, found } => {
+                write!(f, "state の形式が違います（期待 {expected}、実際 {found}）")
             }
             JevStateError::ForbiddenContent { pattern, location } => {
                 write!(f, "送ってはいけない内容が含まれています（{pattern} / {location}）")
@@ -389,12 +398,12 @@ pub fn materialize(
         state_schema_version: JEV_STATE_SCHEMA_VERSION.to_string(),
         local: local_evidence,
         candidates: built,
-        truncated_fields: truncated.clone(),
+        truncated_fields: truncated,
     };
     // 組み立てた時点で検証も通しておく（通らない payload を返さない）
     validate_outbound_state(&payload, &[])?;
 
-    Ok(MaterializedState { payload, identity, truncated_fields: truncated })
+    Ok(MaterializedState { payload, identity })
 }
 
 fn clean_field(
@@ -468,6 +477,14 @@ pub fn validate_outbound_state(
     payload: &JevPayload,
     forbidden_extra: &[&str],
 ) -> Result<String, JevStateError> {
+    // このコードが知っている形式だけを送る
+    if payload.state_schema_version != JEV_STATE_SCHEMA_VERSION {
+        return Err(JevStateError::InvalidStateSchemaVersion {
+            expected: JEV_STATE_SCHEMA_VERSION.to_string(),
+            found: payload.state_schema_version.clone(),
+        });
+    }
+
     // 候補の件数と並び
     if payload.candidates.is_empty() {
         return Err(JevStateError::NoCandidates);
@@ -915,8 +932,8 @@ mod tests {
         assert!(title.len() <= MAX_TITLE_BYTES);
         assert!(title.chars().all(|c| c == 'あ'), "文字が壊れていない");
         assert!(state.payload.local.cast[0].len() <= MAX_PERSON_BYTES);
-        assert!(state.truncated_fields.contains(&"local.derived_title".to_string()));
-        assert!(state.truncated_fields.contains(&"local.cast".to_string()));
+        assert!(state.payload.truncated_fields.contains(&"local.derived_title".to_string()));
+        assert!(state.truncated_fields().contains(&"local.cast".to_string()));
         // 切り詰めた結果は検証を通る
         state.to_validated_json().unwrap();
     }
@@ -1204,6 +1221,47 @@ mod tests {
             validate_outbound_state(&payload, &[]),
             Err(JevStateError::ForbiddenContent { .. })
         ));
+    }
+
+    /// state の形式は検証で固定する（公開型を書き換えて validator に渡す）
+    #[test]
+    fn state_schema_version_is_enforced_by_the_validator() {
+        let state = materialize(full_local(), vec![candidate(1, "A")]).unwrap();
+
+        // 現行の形式は通る
+        let mut payload = state.payload.clone();
+        assert_eq!(payload.state_schema_version, JEV_STATE_SCHEMA_VERSION);
+        assert!(validate_outbound_state(&payload, &[]).is_ok());
+
+        // 知らない形式は拒否
+        payload.state_schema_version = "cm-jev-state-999".to_string();
+        assert_eq!(
+            validate_outbound_state(&payload, &[]),
+            Err(JevStateError::InvalidStateSchemaVersion {
+                expected: JEV_STATE_SCHEMA_VERSION.to_string(),
+                found: "cm-jev-state-999".to_string(),
+            })
+        );
+
+        // 空文字も拒否
+        payload.state_schema_version = String::new();
+        assert_eq!(
+            validate_outbound_state(&payload, &[]),
+            Err(JevStateError::InvalidStateSchemaVersion {
+                expected: JEV_STATE_SCHEMA_VERSION.to_string(),
+                found: String::new(),
+            })
+        );
+    }
+
+    /// 切り詰めの記録は payload 側だけ（二重管理しない）
+    #[test]
+    fn truncation_is_tracked_only_in_the_payload() {
+        let mut local = LocalEvidenceInput::default();
+        local.derived_title = Some("あ".repeat(400));
+        let state = materialize(local, vec![candidate(1, "A")]).unwrap();
+        assert_eq!(state.truncated_fields(), state.payload.truncated_fields.as_slice());
+        assert_eq!(state.truncated_fields(), ["local.derived_title"]);
     }
 
     // ─── 区分値の値域 ────────────────────────────────────────────────────────
