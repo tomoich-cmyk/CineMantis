@@ -21,8 +21,10 @@ use serde::Serialize;
 
 /// rules-safe のバージョン（閾値や矛盾ルールを変えたら上げる）
 pub const POLICY_VERSION: &str = "rules-safe-1";
-/// 比較基準（現行の score_movie / score_tv / best_candidate）
+/// 比較基準（現行の score_movie / score_tv / best_candidate）。旧経路のまま凍結する
 pub const RULES_V1_VERSION: &str = "rules-1";
+/// 埋め込みメタデータを使う影判定（PR2.5 では記録・比較専用）
+pub const SHADOW_VERSION: &str = "rules-tags-shadow-1";
 /// 1 run に残す候補の最大件数
 const MAX_STORED_CANDIDATES: usize = 20;
 
@@ -129,6 +131,16 @@ pub struct SearchQuery {
     pub kind: &'static str,
     pub query: String,
     pub year: Option<i32>,
+    /// 検索語の出どころ（legacy / embedded）
+    pub source: &'static str,
+}
+
+/// 候補がどの検索語から出てきたか（legacy / embedded / both）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateSource {
+    pub tmdb_id: i64,
+    pub media_type: String,
+    pub query_source: String,
 }
 
 /// run に残す1回分の照合
@@ -144,8 +156,12 @@ pub struct RunInput<'a> {
     /// 落ちた候補も含む全候補（検索結果の順）
     pub all: &'a [TmdbCandidate],
     pub rules_safe: &'a SafeMatchOutcome<'a>,
-    /// rules-1（比較基準）の結論
+    /// rules-1（比較基準）の結論。旧経路の候補だけから選ぶ
     pub rules_one: Option<&'a TmdbCandidate>,
+    /// rules-tags-shadow（PR2.5 の記録専用判定）
+    pub shadow: Option<&'a SafeMatchOutcome<'a>>,
+    /// 候補ごとの検索語の出どころ
+    pub candidate_sources: &'a [CandidateSource],
     pub tmdb_calls: usize,
     pub latency_ms: u64,
     /// TMDB 検索が失敗した run（decision は ERROR になる）
@@ -257,11 +273,17 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
         candidates_to_store(input.ranked, input.all).into_iter().enumerate()
     {
         let conflicts = metadata_matcher::explicit_conflicts(candidate, input.parsed);
+        let query_source = input
+            .candidate_sources
+            .iter()
+            .find(|s| s.tmdb_id == candidate.tmdb_id && s.media_type == candidate.media_type)
+            .map(|s| s.query_source.clone());
         tx.execute(
             "INSERT INTO metadata_match_candidates
                (run_id, cand_key, tmdb_id, media_type, search_rank, rules_rank,
-                rules_score, rules_reasons_json, tmdb_snapshot_json, explicit_conflicts_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rules_score, rules_reasons_json, tmdb_snapshot_json, explicit_conflicts_json,
+                query_source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 run_id,
                 format!("c{}", index + 1),
@@ -279,6 +301,7 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
                 })
                 .unwrap_or_else(|_| "{}".to_string()),
                 json_array(&conflicts),
+                query_source,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -309,6 +332,19 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
         rules_one_decision,
         &[],
     )?;
+    // rules-tags-shadow（記録専用。works には反映しない）
+    if let Some(shadow) = input.shadow {
+        let shadow_reasons: Vec<&str> = shadow.reasons.to_vec();
+        insert_verdict(
+            &tx,
+            run_id,
+            "rules-tags-shadow",
+            SHADOW_VERSION,
+            shadow.top,
+            shadow.decision,
+            &shadow_reasons,
+        )?;
+    }
 
     if input.error_text.is_none() && input.rules_safe.decision == SafeDecision::Review {
         let reason = match input.trigger_kind {
@@ -434,6 +470,52 @@ fn open_review_task_in(
     )
     .map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
+}
+
+/// タグと既存照合の食い違い（PR2.5）。works は一切変更しない。
+/// 同じ作品に未解決の metadata_conflict があれば作らない。
+pub fn open_metadata_conflict(
+    conn: &Connection,
+    work_id: i64,
+    details: &MetadataConflictDetails,
+) -> Result<Option<i64>, String> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM metadata_review_tasks
+             WHERE work_id = ?1 AND reason = 'metadata_conflict' AND resolved_at IS NULL",
+            rusqlite::params![work_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if existing.is_some() {
+        return Ok(None);
+    }
+    conn.execute(
+        "INSERT INTO metadata_review_tasks (work_id, reason, details_json)
+         VALUES (?1, 'metadata_conflict', ?2)",
+        rusqlite::params![
+            work_id,
+            serde_json::to_string(details).unwrap_or_else(|_| "{}".to_string())
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some(conn.last_insert_rowid()))
+}
+
+/// metadata_conflict の理由を後から確認できるようにする
+#[derive(Debug, Clone, Serialize)]
+pub struct MetadataConflictDetails {
+    pub kind: &'static str,
+    pub embedded_year: Option<i32>,
+    pub matched_year: Option<i32>,
+    pub embedded_title: Option<String>,
+    pub matched_title: Option<String>,
+    pub tmdb_id: Option<i64>,
+    pub media_type: Option<String>,
+    pub match_source: Option<String>,
+    pub tags_provenance: Option<String>,
+    pub tags_provider_hint: Option<String>,
 }
 
 /// 人が確定した正解
@@ -625,6 +707,7 @@ mod tests {
             year,
             poster_path: None,
             overview: Some("記録しない".to_string()),
+            original_language: None,
             confidence,
             reasons: vec!["title match(60)".to_string()],
         }
@@ -662,6 +745,8 @@ mod tests {
             all,
             rules_safe: outcome,
             rules_one: metadata_matcher::best_candidate(ranked),
+            shadow: None,
+            candidate_sources: &[],
             tmdb_calls: 1,
             latency_ms: 12,
             error_text: None,
@@ -778,6 +863,67 @@ mod tests {
             .unwrap();
         assert_eq!(reason, "review_decision");
         assert_eq!(resolved, None);
+    }
+
+    /// PR2.5: 影判定と候補の出どころが残ること
+    #[test]
+    fn shadow_verdict_and_query_sources_are_recorded() {
+        let f = fixture("Alien.mkv"); // 年ヒントなし
+        let snapshot = PreMatchSnapshot::capture(&f.conn, f.work_id).unwrap();
+        let ranked = vec![candidate(348, "エイリアン", Some(1979), 95)];
+        let outcome = metadata_matcher::rules_safe_best_candidate(&ranked, &f.parsed);
+        let evidence = metadata_matcher::EmbeddedEvidence {
+            embedded_year: Some(1979),
+            ..Default::default()
+        };
+        let shadow =
+            metadata_matcher::rules_tags_shadow_best_candidate(&ranked, &f.parsed, &evidence);
+        assert_eq!(outcome.decision, SafeDecision::Review, "本番はタグで AUTO にしない");
+        assert_eq!(shadow.decision, SafeDecision::Auto, "影判定はタグの年を使う");
+
+        let sources = vec![CandidateSource {
+            tmdb_id: 348,
+            media_type: "movie".to_string(),
+            query_source: "both".to_string(),
+        }];
+        let mut input = run_for(&f, &snapshot, &ranked, &ranked, &outcome, TriggerKind::Single);
+        input.shadow = Some(&shadow);
+        input.candidate_sources = &sources;
+        let run_id = record_run(&f.conn, &input).unwrap();
+
+        let verdicts: Vec<(String, String)> = {
+            let mut stmt = f
+                .conn
+                .prepare(
+                    "SELECT matcher, decision FROM metadata_match_verdicts
+                     WHERE run_id = ?1 ORDER BY matcher",
+                )
+                .unwrap();
+            stmt.query_map(rusqlite::params![run_id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            verdicts,
+            vec![
+                ("rules-1".to_string(), "AUTO".to_string()),
+                ("rules-safe".to_string(), "REVIEW".to_string()),
+                ("rules-tags-shadow".to_string(), "AUTO".to_string()),
+            ]
+        );
+        // 実際に works へ反映されるのは rules-safe の判定（run の decision）
+        assert_eq!(run_row(&f.conn, run_id).0, "REVIEW");
+
+        let query_source: Option<String> = f
+            .conn
+            .query_row(
+                "SELECT query_source FROM metadata_match_candidates WHERE run_id = ?1",
+                rusqlite::params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(query_source.as_deref(), Some("both"));
     }
 
     #[test]

@@ -22,7 +22,9 @@ pub const STATE_SCHEMA_VERSION: &str = "cm-prematch-1";
 
 const WORK_COLUMNS: &str = "w.id, w.title_guess, w.created_at";
 const FILE_COLUMNS: &str = "f.original_file_name, f.original_rel_path, f.original_captured, \
-                            f.renamed_by_app, f.extension, f.duration_sec, f.file_path";
+                            f.renamed_by_app, f.extension, f.duration_sec, f.file_path, \
+                            f.container_tags_json, f.tags_provenance, f.tags_provider_hint, \
+                            f.tags_captured";
 const SOURCE_COLUMNS: &str = "s.media_kind";
 
 /// 照合に使ったタイトルの出どころ
@@ -79,6 +81,65 @@ pub struct SnapshotFile {
     pub extension: Option<String>,
     pub duration_sec: Option<f64>,
     pub source_media_kind: String,
+    /// 1 = scan 時にタグを取得、0 = 後埋め
+    pub tags_captured: bool,
+}
+
+/// 埋め込みメタデータ由来の入力（PR2.5）。
+/// 年は出どころを潰さずに別々に持つ。
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct EmbeddedInputs {
+    /// 検索に使える形に整えたタグのタイトル
+    pub title: Option<String>,
+    /// 整形前のタグのタイトル
+    pub title_raw: Option<String>,
+    pub show: Option<String>,
+    /// タグの年（配信年のことがある）
+    pub year: Option<i32>,
+    /// 作品そのものが変わりうる版の表記
+    pub cut_editions: Vec<String>,
+    pub audio_languages: Vec<String>,
+    pub subtitle_languages: Vec<String>,
+    /// 出演者（PR2.5 では判断に使わず、記録だけ）
+    pub cast: Vec<String>,
+    /// あらすじ（PR2.5 では判断に使わず、PR3 の初期 state にも入れない）
+    pub description: Option<String>,
+    pub episode_id: Option<String>,
+    /// 配信元の慣習で「映画」と分かるか（provider が分かるときだけ true）
+    pub episode_id_marks_movie: bool,
+    /// provider_known / pipeline_known / unknown / suspicious
+    pub provenance: Option<String>,
+    pub provider_hint: Option<String>,
+    /// 長さ上限で切り詰めた値があるか
+    pub truncated: bool,
+}
+
+/// 検索語の出どころ
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuerySource {
+    /// ファイル名・title_guess 由来（rules-1 と同じ旧経路）
+    Legacy,
+    /// 埋め込みメタデータ由来
+    Embedded,
+}
+
+impl QuerySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QuerySource::Legacy => "legacy",
+            QuerySource::Embedded => "embedded",
+        }
+    }
+}
+
+/// 1回分の検索指示
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchInput {
+    pub source: QuerySource,
+    pub title: String,
+    /// 明示した年。None なら検索語から解析した年を使う（旧経路と同じ）
+    pub year: Option<i32>,
 }
 
 /// 照合前スナップショット。run の input_snapshot_json に丸ごと保存する
@@ -95,6 +156,12 @@ pub struct PreMatchSnapshot {
     pub media_kind: String,
     /// パスから推定した洋邦（works.country_type は使わない）
     pub country_type: String,
+    /// 元ファイル名から取れた年
+    pub filename_year: Option<i32>,
+    /// title_guess から取れた年
+    pub title_guess_year: Option<i32>,
+    /// 埋め込みメタデータ（PR2.5）
+    pub embedded: EmbeddedInputs,
     pub files: Vec<SnapshotFile>,
     pub embedded_ids: Vec<EmbeddedId>,
     pub evidence_class: EvidenceClass,
@@ -104,18 +171,58 @@ pub struct PreMatchSnapshot {
 /// （フィールドが private なので他のモジュールからは組み立てられない）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalEvidence {
+    /// 旧経路（rules-1 / rules-safe）の検索語。ファイル名・title_guess 由来
     title: String,
+    /// 埋め込みメタデータ由来の検索語（PR2.5）
+    embedded_title: Option<String>,
     media_kind: String,
+    filename_year: Option<i32>,
+    embedded_year: Option<i32>,
     user_override: bool,
 }
 
 impl LocalEvidence {
+    /// 旧経路の検索語（rules-1 の入力はこれだけ）
     pub fn title(&self) -> &str {
         &self.title
     }
 
+    pub fn embedded_title(&self) -> Option<&str> {
+        self.embedded_title.as_deref()
+    }
+
     pub fn media_kind(&self) -> &str {
         &self.media_kind
+    }
+
+    pub fn embedded_year(&self) -> Option<i32> {
+        self.embedded_year
+    }
+
+    pub fn filename_year(&self) -> Option<i32> {
+        self.filename_year
+    }
+
+    /// 投げる検索の一覧。旧経路の検索語は必ず先頭に入る。
+    /// 埋め込み由来が同じ（正規化して一致し、年も同じ）なら1回しか投げない。
+    pub fn search_inputs(&self) -> Vec<SearchInput> {
+        let mut inputs = vec![SearchInput {
+            source: QuerySource::Legacy,
+            title: self.title.clone(),
+            year: None,
+        }];
+        if let Some(embedded) = self.embedded_title.as_deref() {
+            let same_title = normalize_for_compare(embedded) == normalize_for_compare(&self.title);
+            let adds_year = self.embedded_year.is_some() && self.embedded_year != self.filename_year;
+            if !same_title || adds_year {
+                inputs.push(SearchInput {
+                    source: QuerySource::Embedded,
+                    title: embedded.to_string(),
+                    year: self.embedded_year,
+                });
+            }
+        }
+        inputs
     }
 
     /// ユーザーが検索語や種別を指定したか（true の run は自動照合の評価から外す）。
@@ -134,6 +241,8 @@ impl LocalEvidence {
         let mut next = self.clone();
         if let Some(query) = query.map(str::trim).filter(|q| !q.is_empty()) {
             next.title = query.to_string();
+            // ユーザーが打った語を優先し、タグ由来の検索語は足さない
+            next.embedded_title = None;
             next.user_override = true;
         }
         if let Some(hint) = media_type_hint.filter(|h| *h == "movie" || *h == "tv") {
@@ -149,8 +258,22 @@ impl PreMatchSnapshot {
     pub fn local_evidence(&self) -> LocalEvidence {
         LocalEvidence {
             title: self.derived_title.clone(),
+            embedded_title: self.embedded.title.clone(),
             media_kind: self.media_kind.clone(),
+            filename_year: self.filename_year.or(self.title_guess_year),
+            embedded_year: self.embedded.year,
             user_override: false,
+        }
+    }
+
+    /// rules-safe / rules-tags-shadow に渡す、埋め込みメタデータ由来の材料
+    pub fn embedded_evidence(&self) -> crate::services::metadata_matcher::EmbeddedEvidence {
+        crate::services::metadata_matcher::EmbeddedEvidence {
+            embedded_year: self.embedded.year,
+            filename_year: self.filename_year.or(self.title_guess_year),
+            audio_languages: self.embedded.audio_languages.clone(),
+            cut_editions: self.embedded.cut_editions.clone(),
+            episode_id_marks_movie: self.embedded.episode_id_marks_movie,
         }
     }
 
@@ -182,8 +305,9 @@ impl PreMatchSnapshot {
              ORDER BY wp.part_no, f.id"
         );
         let mut stmt = conn.prepare(&files_sql).map_err(|e| e.to_string())?;
-        let rows: Vec<(SnapshotFile, String)> = stmt
+        let rows: Vec<(SnapshotFile, String, Option<TagRow>)> = stmt
             .query_map(rusqlite::params![id], |row| {
+                let tags_json: Option<String> = row.get(7)?;
                 Ok((
                     SnapshotFile {
                         original_file_name: row.get(0)?,
@@ -192,19 +316,42 @@ impl PreMatchSnapshot {
                         renamed_by_app: row.get(3)?,
                         extension: row.get(4)?,
                         duration_sec: row.get(5)?,
-                        source_media_kind: row.get::<_, Option<String>>(7)?
+                        source_media_kind: row.get::<_, Option<String>>(11)?
                             .unwrap_or_else(|| "unknown".to_string()),
+                        tags_captured: row.get::<_, Option<i64>>(10)?.unwrap_or(0) == 1,
                     },
                     // 洋邦の推定にだけ使う。改名前の相対パスを優先する
                     row.get::<_, Option<String>>(1)?
                         .unwrap_or_else(|| row.get::<_, String>(6).unwrap_or_default()),
+                    tags_json.map(|json| TagRow {
+                        json,
+                        provenance: row.get::<_, Option<String>>(8).unwrap_or(None),
+                        provider_hint: row.get::<_, Option<String>>(9).unwrap_or(None),
+                        file_path: row.get::<_, Option<String>>(6).unwrap_or(None),
+                    }),
                 ))
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
 
-        let (files, paths): (Vec<SnapshotFile>, Vec<String>) = rows.into_iter().unzip();
+        let mut files = Vec::with_capacity(rows.len());
+        let mut paths = Vec::with_capacity(rows.len());
+        let mut tag_rows = Vec::new();
+        for (file, path, tags) in rows {
+            files.push(file);
+            paths.push(path);
+            if let Some(tags) = tags {
+                tag_rows.push(tags);
+            }
+        }
+        // 複数ファイルの作品では、中身のあるタグを持つ最初のファイルを使う
+        let embedded = tag_rows
+            .iter()
+            .filter_map(|row| row.to_inputs())
+            .find(|inputs| inputs.title.is_some() || inputs.year.is_some())
+            .or_else(|| tag_rows.first().and_then(|row| row.to_inputs()))
+            .unwrap_or_default();
 
         let title_guess = title_guess.filter(|t| !t.trim().is_empty());
         let first_original = files
@@ -247,6 +394,13 @@ impl PreMatchSnapshot {
         }
 
         let evidence_class = evidence_class_for(&files);
+        let filename_year = files
+            .iter()
+            .filter_map(|f| f.original_file_name.as_deref())
+            .find_map(crate::services::container_tags::extract_year);
+        let title_guess_year = title_guess
+            .as_deref()
+            .and_then(crate::services::container_tags::extract_year);
 
         Ok(PreMatchSnapshot {
             state_schema_version: STATE_SCHEMA_VERSION,
@@ -257,11 +411,61 @@ impl PreMatchSnapshot {
             title_provenance,
             media_kind,
             country_type,
+            filename_year,
+            title_guess_year,
+            embedded,
             files,
             embedded_ids,
             evidence_class,
         })
     }
+}
+
+/// files から読んだタグ1行分
+struct TagRow {
+    json: String,
+    provenance: Option<String>,
+    provider_hint: Option<String>,
+    file_path: Option<String>,
+}
+
+impl TagRow {
+    fn to_inputs(&self) -> Option<EmbeddedInputs> {
+        use crate::services::container_tags::ContainerTags;
+        let tags = ContainerTags::from_json(&self.json)?;
+        let path_hint = self.file_path.as_deref();
+        Some(EmbeddedInputs {
+            title: tags.cleaned_title(),
+            title_raw: tags.title.clone(),
+            show: tags.cleaned_show(),
+            year: tags.year(),
+            cut_editions: tags.cut_editions(),
+            audio_languages: tags.audio_languages.clone(),
+            subtitle_languages: tags.subtitle_languages.clone(),
+            cast: tags.cast(),
+            description: tags.description.clone(),
+            episode_id: tags.episode_id.clone(),
+            episode_id_marks_movie: tags.episode_id_marks_movie(path_hint),
+            provenance: self
+                .provenance
+                .clone()
+                .or_else(|| Some(tags.provenance(path_hint).as_str().to_string())),
+            provider_hint: self
+                .provider_hint
+                .clone()
+                .or_else(|| tags.provider_hint().map(str::to_string)),
+            truncated: !tags.truncated.is_empty(),
+        })
+    }
+}
+
+/// 検索語が実質同じかを見るための正規化（記号と空白を落とす）
+fn normalize_for_compare(value: &str) -> String {
+    crate::services::container_tags::normalize_widths(value)
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
 }
 
 fn evidence_class_for(files: &[SnapshotFile]) -> EvidenceClass {
@@ -501,6 +705,113 @@ mod tests {
         }));
         // 検索語には混ぜない
         assert!(!snapshot.local_evidence().title().contains("tmdbid"));
+    }
+
+    // ─── PR2.5: 埋め込みメタデータ ───────────────────────────────────────────
+
+    fn tag_file(conn: &Connection, work_id: i64, pairs: &[(&str, &str)], streams: &[(&str, &str)]) {
+        use crate::services::container_tags::ContainerTags;
+        let map: std::collections::BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let streams: Vec<(String, Option<String>)> = streams
+            .iter()
+            .map(|(kind, lang)| (kind.to_string(), Some(lang.to_string())))
+            .collect();
+        let tags = ContainerTags::from_ffprobe(&map, &streams);
+        let file_id: i64 = conn
+            .query_row(
+                "SELECT file_id FROM work_parts WHERE work_id = ?1",
+                rusqlite::params![work_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        crate::commands::scan::store_container_tags(conn, file_id, &tags, None, true).unwrap();
+    }
+
+    #[test]
+    fn embedded_inputs_keep_each_year_source_separate() {
+        let conn = open_migrated();
+        let work_id = scanned(&conn, "The Guilty", r"D:\Import\THE GUILTY.mkv", "THE GUILTY.mkv");
+        tag_file(
+            &conn,
+            work_id,
+            &[
+                ("title", "THE GUILTY／ギルティ(字幕版)"),
+                ("date", "2019"),
+                ("artist", "ヤコブ・セーダーグレン, イェシカ・ディナウエ"),
+                ("encoder", "Lavf58.76.100"),
+            ],
+            &[("audio", "dan"), ("subtitle", "jpn")],
+        );
+
+        let snapshot = PreMatchSnapshot::capture(&conn, work_id).unwrap();
+        assert_eq!(snapshot.embedded.title.as_deref(), Some("THE GUILTY/ギルティ"));
+        assert_eq!(snapshot.embedded.title_raw.as_deref(), Some("THE GUILTY／ギルティ(字幕版)"));
+        assert_eq!(snapshot.embedded.year, Some(2019));
+        assert_eq!(snapshot.embedded.audio_languages, vec!["dan".to_string()]);
+        assert_eq!(snapshot.embedded.cast.len(), 2);
+        assert_eq!(snapshot.embedded.provenance.as_deref(), Some("pipeline_known"));
+        // 年の出どころは潰さない
+        assert_eq!(snapshot.filename_year, None);
+        assert_eq!(snapshot.title_guess_year, None);
+
+        // rules-safe / shadow に渡す材料
+        let evidence = snapshot.embedded_evidence();
+        assert_eq!(evidence.embedded_year, Some(2019));
+        assert_eq!(evidence.filename_year, None);
+        assert!(!evidence.is_empty());
+    }
+
+    #[test]
+    fn filename_year_is_read_from_the_original_name() {
+        let conn = open_migrated();
+        let work_id = scanned(&conn, "Alien 1979", r"D:\Import\Alien.1979.mkv", "Alien.1979.mkv");
+        let snapshot = PreMatchSnapshot::capture(&conn, work_id).unwrap();
+        assert_eq!(snapshot.filename_year, Some(1979));
+        assert_eq!(snapshot.title_guess_year, Some(1979));
+        assert_eq!(snapshot.embedded.year, None);
+    }
+
+    #[test]
+    fn search_inputs_add_the_embedded_query_only_when_it_differs() {
+        let conn = open_migrated();
+        let work_id = scanned(&conn, "THE GUILTY", r"D:\Import\THE GUILTY.mkv", "THE GUILTY.mkv");
+
+        // 同じタイトル・年も無し → 検索は旧経路の1回だけ
+        tag_file(&conn, work_id, &[("title", "THE GUILTY")], &[]);
+        let inputs = PreMatchSnapshot::capture(&conn, work_id)
+            .unwrap()
+            .local_evidence()
+            .search_inputs();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].source, QuerySource::Legacy);
+
+        // 年が足される → タグ側でもう1回引く
+        let with_year = scanned(&conn, "THE GUILTY", r"D:\Import2\THE GUILTY.mkv", "THE GUILTY.mkv");
+        tag_file(&conn, with_year, &[("title", "THE GUILTY"), ("date", "2019")], &[]);
+        let inputs = PreMatchSnapshot::capture(&conn, with_year)
+            .unwrap()
+            .local_evidence()
+            .search_inputs();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[1].source, QuerySource::Embedded);
+        assert_eq!(inputs[1].year, Some(2019));
+
+        // タイトルが違えば当然2回
+        let other = scanned(&conn, "告発のとき", r"D:\Import3\告発のとき.mkv", "告発のとき.mkv");
+        tag_file(&conn, other, &[("title", "In The Valley Of Elah (字幕版)")], &[]);
+        let evidence = PreMatchSnapshot::capture(&conn, other).unwrap().local_evidence();
+        let inputs = evidence.search_inputs();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].title, "告発のとき");
+        assert_eq!(inputs[1].title, "In The Valley Of Elah");
+
+        // ユーザーが検索語を打ったらタグ由来は足さない
+        let overridden = evidence.with_user_override(Some("Elah"), None);
+        assert_eq!(overridden.search_inputs().len(), 1);
+        assert_eq!(overridden.search_inputs()[0].title, "Elah");
     }
 
     #[test]

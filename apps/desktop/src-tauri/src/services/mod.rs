@@ -1,3 +1,4 @@
+pub mod container_tags;
 pub mod kana_bucket;
 pub mod title_parser;
 pub mod tmdb_client;

@@ -5,14 +5,15 @@ use crate::models::match_status::MatchStatus;
 use crate::models::tmdb::*;
 use crate::services::{
     match_history::{
-        self, LabelMethod, LabelWrite, RejectionSource, RunInput, SearchQuery, TriggerKind,
+        self, CandidateSource, LabelMethod, LabelWrite, RejectionSource, RunInput, SearchQuery,
+        TriggerKind,
     },
     metadata_matcher::{
-        best_candidate, merge_and_rank, rules_safe_best_candidate, score_movie, score_tv,
-        SafeDecision,
+        best_candidate, merge_and_rank, rules_safe_best_candidate, rules_safe_with_embedded,
+        rules_tags_shadow_best_candidate, score_movie, score_tv, SafeDecision,
     },
     poster_store::store_poster_for_work,
-    prematch_snapshot::{LocalEvidence, PreMatchSnapshot},
+    prematch_snapshot::{LocalEvidence, PreMatchSnapshot, QuerySource},
     title_parser::{parse_title, ParsedTitle},
     tmdb_client::TmdbClient,
 };
@@ -259,13 +260,63 @@ fn load_match_target_locked(db: &DbState, work_id: i64) -> Result<MatchTarget, S
 
 /// 1回の検索で分かったこと（履歴にそのまま残す）
 struct CandidateSearch {
-    /// merge_and_rank を通した候補（閾値以上・最大10件）
-    ranked: Vec<TmdbCandidate>,
-    /// 落ちた候補も含む全候補（検索結果の順）
-    all: Vec<TmdbCandidate>,
+    /// 旧経路（ファイル名・title_guess 由来の検索語）だけの候補。
+    /// rules-1 と本番の rules-safe はこちらだけを見る（PR2.5 で経路を変えない）
+    legacy_ranked: Vec<TmdbCandidate>,
+    legacy_all: Vec<TmdbCandidate>,
+    /// 埋め込みメタデータ由来の検索も混ぜた候補（rules-tags-shadow と候補ダイアログ用）
+    combined_ranked: Vec<TmdbCandidate>,
+    combined_all: Vec<TmdbCandidate>,
+    /// 候補がどの検索語から出てきたか
+    sources: Vec<CandidateSource>,
+    /// 旧経路の検索語を解析したもの（rules-1 / rules-safe の入力）
     parsed: ParsedTitle,
     queries: Vec<SearchQuery>,
     tmdb_calls: usize,
+}
+
+/// 同じ作品の候補を1つにまとめる（スコアは高い方を採る）。
+/// これは旧経路とは別の matcher（rules-tags-shadow）の入力になる。
+fn merge_candidate_sets(
+    legacy: &[TmdbCandidate],
+    embedded: &[TmdbCandidate],
+) -> (Vec<TmdbCandidate>, Vec<CandidateSource>) {
+    let mut merged: Vec<TmdbCandidate> = legacy.to_vec();
+    let mut sources: Vec<CandidateSource> = legacy
+        .iter()
+        .map(|c| CandidateSource {
+            tmdb_id: c.tmdb_id,
+            media_type: c.media_type.clone(),
+            query_source: "legacy".to_string(),
+        })
+        .collect();
+
+    for candidate in embedded {
+        match merged
+            .iter_mut()
+            .find(|c| c.tmdb_id == candidate.tmdb_id && c.media_type == candidate.media_type)
+        {
+            Some(existing) => {
+                if candidate.confidence > existing.confidence {
+                    *existing = candidate.clone();
+                }
+                if let Some(source) = sources.iter_mut().find(|s| {
+                    s.tmdb_id == candidate.tmdb_id && s.media_type == candidate.media_type
+                }) {
+                    source.query_source = "both".to_string();
+                }
+            }
+            None => {
+                merged.push(candidate.clone());
+                sources.push(CandidateSource {
+                    tmdb_id: candidate.tmdb_id,
+                    media_type: candidate.media_type.clone(),
+                    query_source: "embedded".to_string(),
+                });
+            }
+        }
+    }
+    (merged, sources)
 }
 
 /// 候補を検索してスコアを付ける。入力は照合前スナップショット由来の [`LocalEvidence`] だけ。
@@ -274,10 +325,10 @@ async fn fetch_candidates(
     client: &TmdbClient,
     evidence: &LocalEvidence,
 ) -> Result<CandidateSearch, String> {
-    let parsed = parse_title(evidence.title());
-    let year = parsed.year_hint;
-
-    let mut all: Vec<TmdbCandidate> = Vec::new();
+    let inputs = evidence.search_inputs();
+    let mut legacy_all: Vec<TmdbCandidate> = Vec::new();
+    let mut embedded_all: Vec<TmdbCandidate> = Vec::new();
+    let mut legacy_parsed: Option<ParsedTitle> = None;
     let mut queries: Vec<SearchQuery> = Vec::new();
     let mut tmdb_calls = 0usize;
     let mut attempted = 0usize;
@@ -288,81 +339,98 @@ async fn fetch_candidates(
     let search_movie = evidence.media_kind() != "tv";
     let search_tv = evidence.media_kind() != "movie";
 
-    // 映画検索
-    if search_movie {
-        attempted += 1;
-        tmdb_calls += 1;
-        queries.push(SearchQuery {
-            kind: "movie",
-            query: parsed.normalized_title.clone(),
-            year,
-        });
-        eprintln!(
-            "[TMDb] search_movie: '{}' year={:?}",
-            &parsed.normalized_title, year
-        );
-        match client.search_movie(&parsed.normalized_title, year).await {
-            Ok(results) => {
-                succeeded += 1;
-                eprintln!("[TMDb] got {} movie results", results.len());
-                for r in &results {
-                    let c = score_movie(r, &parsed);
-                    eprintln!("[TMDb]   -> '{}' confidence={}", r.title, c.confidence);
-                    all.push(c);
-                }
-                // 年ヒントがある場合は年なし検索も追加
-                if year.is_some() {
-                    tmdb_calls += 1;
-                    queries.push(SearchQuery {
-                        kind: "movie",
-                        query: parsed.normalized_title.clone(),
-                        year: None,
-                    });
-                    if let Ok(results2) = client.search_movie(&parsed.normalized_title, None).await
-                    {
-                        for r in &results2 {
-                            let scored = score_movie(r, &parsed);
-                            if !all.iter().any(|c| c.tmdb_id == scored.tmdb_id) {
-                                all.push(scored);
+    for input in &inputs {
+        let parsed = parse_title(&input.title);
+        // 旧経路は「検索語から解析した年」だけを使う（PR2.5 で経路を変えない）
+        let year = input.year.or(parsed.year_hint);
+        let source = input.source.as_str();
+        let bucket: &mut Vec<TmdbCandidate> = match input.source {
+            QuerySource::Legacy => &mut legacy_all,
+            QuerySource::Embedded => &mut embedded_all,
+        };
+
+        // 映画検索
+        if search_movie {
+            attempted += 1;
+            tmdb_calls += 1;
+            queries.push(SearchQuery {
+                kind: "movie",
+                query: parsed.normalized_title.clone(),
+                year,
+                source,
+            });
+            eprintln!(
+                "[TMDb] search_movie({source}): '{}' year={:?}",
+                &parsed.normalized_title, year
+            );
+            match client.search_movie(&parsed.normalized_title, year).await {
+                Ok(results) => {
+                    succeeded += 1;
+                    eprintln!("[TMDb] got {} movie results", results.len());
+                    for r in &results {
+                        let c = score_movie(r, &parsed);
+                        bucket.push(c);
+                    }
+                    // 年ヒントがある場合は年なし検索も追加
+                    if year.is_some() {
+                        tmdb_calls += 1;
+                        queries.push(SearchQuery {
+                            kind: "movie",
+                            query: parsed.normalized_title.clone(),
+                            year: None,
+                            source,
+                        });
+                        if let Ok(results2) =
+                            client.search_movie(&parsed.normalized_title, None).await
+                        {
+                            for r in &results2 {
+                                let scored = score_movie(r, &parsed);
+                                if !bucket.iter().any(|c| c.tmdb_id == scored.tmdb_id) {
+                                    bucket.push(scored);
+                                }
                             }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                eprintln!("[TMDb] movie search error: {}", e);
-                errors.push(format!("movie search: {e}"));
-            }
-        }
-    }
-
-    // TV 検索
-    if search_tv {
-        attempted += 1;
-        tmdb_calls += 1;
-        queries.push(SearchQuery {
-            kind: "tv",
-            query: parsed.normalized_title.clone(),
-            year,
-        });
-        eprintln!(
-            "[TMDb] search_tv: '{}' year={:?}",
-            &parsed.normalized_title, year
-        );
-        match client.search_tv(&parsed.normalized_title, year).await {
-            Ok(results) => {
-                succeeded += 1;
-                eprintln!("[TMDb] got {} tv results", results.len());
-                for r in &results {
-                    let c = score_tv(r, &parsed);
-                    eprintln!("[TMDb]   -> '{}' confidence={}", r.name, c.confidence);
-                    all.push(c);
+                Err(e) => {
+                    eprintln!("[TMDb] movie search error: {}", e);
+                    errors.push(format!("movie search: {e}"));
                 }
             }
-            Err(e) => {
-                eprintln!("[TMDb] tv search error: {}", e);
-                errors.push(format!("tv search: {e}"));
+        }
+
+        // TV 検索
+        if search_tv {
+            attempted += 1;
+            tmdb_calls += 1;
+            queries.push(SearchQuery {
+                kind: "tv",
+                query: parsed.normalized_title.clone(),
+                year,
+                source,
+            });
+            eprintln!(
+                "[TMDb] search_tv({source}): '{}' year={:?}",
+                &parsed.normalized_title, year
+            );
+            match client.search_tv(&parsed.normalized_title, year).await {
+                Ok(results) => {
+                    succeeded += 1;
+                    eprintln!("[TMDb] got {} tv results", results.len());
+                    for r in &results {
+                        let c = score_tv(r, &parsed);
+                        bucket.push(c);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[TMDb] tv search error: {}", e);
+                    errors.push(format!("tv search: {e}"));
+                }
             }
+        }
+
+        if input.source == QuerySource::Legacy {
+            legacy_parsed = Some(parsed);
         }
     }
 
@@ -370,9 +438,14 @@ async fn fetch_candidates(
         return Err(format!("TMDb search failed: {}", errors.join(" / ")));
     }
 
+    let parsed = legacy_parsed.unwrap_or_else(|| parse_title(evidence.title()));
+    let (combined_all, sources) = merge_candidate_sets(&legacy_all, &embedded_all);
     Ok(CandidateSearch {
-        ranked: merge_and_rank(all.clone()),
-        all,
+        legacy_ranked: merge_and_rank(legacy_all.clone()),
+        legacy_all,
+        combined_ranked: merge_and_rank(combined_all.clone()),
+        combined_all,
+        sources,
         parsed,
         queries,
         tmdb_calls,
@@ -394,10 +467,13 @@ async fn match_once(
     let started = std::time::Instant::now();
 
     // 照合に使えるタイトルが無い作品は TMDB を呼ばずに UNRESOLVED
-    let search = if evidence.title().trim().is_empty() {
+    let search = if evidence.title().trim().is_empty() && evidence.embedded_title().is_none() {
         Ok(CandidateSearch {
-            ranked: Vec::new(),
-            all: Vec::new(),
+            legacy_ranked: Vec::new(),
+            legacy_all: Vec::new(),
+            combined_ranked: Vec::new(),
+            combined_all: Vec::new(),
+            sources: Vec::new(),
             parsed: parse_title(""),
             queries: Vec::new(),
             tmdb_calls: 0,
@@ -426,6 +502,8 @@ async fn match_once(
                     all: &[],
                     rules_safe: &outcome,
                     rules_one: None,
+                    shadow: None,
+                    candidate_sources: &[],
                     tmdb_calls: 0,
                     latency_ms: started.elapsed().as_millis() as u64,
                     error_text: Some(error.clone()),
@@ -435,7 +513,12 @@ async fn match_once(
         }
     };
 
-    let outcome = rules_safe_best_candidate(&search.ranked, &search.parsed);
+    // 本番の判定は旧経路の候補だけを見る。タグは矛盾を示したときに AUTO を止めるだけで、
+    // タグのおかげで AUTO が増えることはない（rules-tags-shadow で比較してから昇格する）
+    let embedded = snapshot.embedded_evidence();
+    let outcome =
+        rules_safe_with_embedded(&search.legacy_ranked, &search.parsed, &embedded);
+    let shadow = rules_tags_shadow_best_candidate(&search.combined_ranked, &search.parsed, &embedded);
     let reasons: Vec<String> = outcome.reasons.iter().map(|r| r.to_string()).collect();
     let top_confidence = outcome.top.map(|c| c.confidence).unwrap_or(0);
     let applied_candidate = outcome
@@ -453,10 +536,14 @@ async fn match_once(
                 snapshot,
                 parsed: &search.parsed,
                 queries: &search.queries,
-                ranked: &search.ranked,
-                all: &search.all,
+                // 候補は影判定が見たものも含めて残す
+                ranked: &search.combined_ranked,
+                all: &search.combined_all,
                 rules_safe: &outcome,
-                rules_one: best_candidate(&search.ranked),
+                // rules-1 は旧経路の候補だけから選ぶ（凍結）
+                rules_one: best_candidate(&search.legacy_ranked),
+                shadow: Some(&shadow),
+                candidate_sources: &search.sources,
                 tmdb_calls: search.tmdb_calls,
                 latency_ms: started.elapsed().as_millis() as u64,
                 error_text: None,
@@ -742,9 +829,10 @@ pub async fn search_tmdb_candidates(
         .local_evidence()
         .with_user_override(query_override.as_deref(), media_type_hint.as_deref());
 
+    // 候補ダイアログにはタグ由来の検索で見つかった候補も見せる
     fetch_candidates(&client, &evidence)
         .await
-        .map(|search| search.ranked)
+        .map(|search| search.combined_ranked)
 }
 
 /// locked を解除する（固定解除）

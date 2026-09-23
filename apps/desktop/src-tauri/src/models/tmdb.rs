@@ -131,6 +131,8 @@ pub struct TmdbCandidate {
     pub year: Option<i32>,
     pub poster_path: Option<String>, // TMDb 相対パス (/abc.jpg)
     pub overview: Option<String>,
+    /// TMDB の原語（2文字）。埋め込みタグの音声言語との突き合わせに使う
+    pub original_language: Option<String>,
     pub confidence: i32, // 0–100
     pub reasons: Vec<String>,
 }

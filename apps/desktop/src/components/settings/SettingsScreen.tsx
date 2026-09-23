@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { setSetting, getTmdbApiKeyMasked } from "@/api/settings";
 import { autoMatchSource, testTmdbApi } from "@/api/tmdb";
 import { NasRootSetting } from "@/components/settings/NasRootSetting";
+import { ContainerTagsSetting } from "@/components/settings/ContainerTagsSetting";
 
 export function SettingsScreen() {
   const qc = useQueryClient();
@@ -185,6 +186,8 @@ export function SettingsScreen() {
         </section>
 
         <NasRootSetting />
+
+        <ContainerTagsSetting />
 
         {/* ── アプリ情報 ── */}
         <section className="flex flex-col gap-2 border-t border-subtle pt-6">

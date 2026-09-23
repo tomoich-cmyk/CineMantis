@@ -58,6 +58,10 @@ pub fn run() {
             commands::tag::list_work_tags,
             // Scan
             commands::scan::scan_source,
+            // 埋め込みメタデータ（PR2.5）
+            commands::tags::backfill_container_tags,
+            commands::tags::container_tag_coverage,
+            commands::tags::scan_metadata_conflicts_command,
             // Thumbnails
             commands::thumbnail::generate_thumbnail,
             commands::thumbnail::generate_thumbnails_batch,

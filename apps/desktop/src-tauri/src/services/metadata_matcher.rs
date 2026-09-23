@@ -80,6 +80,7 @@ pub fn score_movie(result: &TmdbSearchMovie, parsed: &ParsedTitle) -> TmdbCandid
         year,
         poster_path: result.poster_path.clone(),
         overview: result.overview.clone(),
+        original_language: result.original_language.clone(),
         confidence: score.clamp(0, 100),
         reasons,
     }
@@ -150,6 +151,7 @@ pub fn score_tv(result: &TmdbSearchTv, parsed: &ParsedTitle) -> TmdbCandidate {
         year,
         poster_path: result.poster_path.clone(),
         overview: result.overview.clone(),
+        original_language: result.original_language.clone(),
         confidence: score.clamp(0, 100),
         reasons,
     }
@@ -227,7 +229,112 @@ pub mod reason {
     pub const YEAR_OUT_OF_RANGE: &str = "YEAR_OUT_OF_RANGE";
     pub const EPISODE_MARKER_VS_MOVIE: &str = "EPISODE_MARKER_VS_MOVIE";
     pub const PART_MISMATCH: &str = "PART_MISMATCH";
+
+    // ─── PR2.5: 埋め込みメタデータ由来（AUTO を止める方向にだけ使う） ──────────
+    /// タグの年と候補の年が2年以上違う
+    pub const EMBEDDED_YEAR_CONFLICT: &str = "EMBEDDED_YEAR_CONFLICT";
+    /// タグの年とファイル名の年が2年以上違う（どちらが正しいか分からない）
+    pub const YEAR_SOURCES_DISAGREE: &str = "YEAR_SOURCES_DISAGREE";
+    /// 音声の原語と候補の原語が違う（und / jpn のときは判定しない）
+    pub const ORIGINAL_LANGUAGE_MISMATCH: &str = "ORIGINAL_LANGUAGE_MISMATCH";
+    /// 版の表記（最終章・ディレクターズカットなど）が候補側に無い
+    pub const EDITION_MARKER: &str = "EDITION_MARKER";
+    /// 配信元の慣習で映画と分かるのに TV 候補
+    pub const EPISODE_ID_VS_TV: &str = "EPISODE_ID_VS_TV";
 }
+
+/// 埋め込みメタデータ由来の材料。rules-safe では AUTO を止めるためだけに使い、
+/// rules-tags-shadow では年ヒントとしても使う。
+#[derive(Debug, Clone, Default)]
+pub struct EmbeddedEvidence {
+    /// タグの年（配信年のことがあるので単独では信用しない）
+    pub embedded_year: Option<i32>,
+    /// ファイル名・title_guess 由来の年
+    pub filename_year: Option<i32>,
+    /// 音声ストリームの言語（3文字）
+    pub audio_languages: Vec<String>,
+    /// 作品そのものが変わりうる版の表記
+    pub cut_editions: Vec<String>,
+    /// 配信元の慣習で「映画」と分かるか
+    pub episode_id_marks_movie: bool,
+}
+
+impl EmbeddedEvidence {
+    pub fn is_empty(&self) -> bool {
+        self.embedded_year.is_none()
+            && self.audio_languages.is_empty()
+            && self.cut_editions.is_empty()
+            && !self.episode_id_marks_movie
+    }
+}
+
+/// 埋め込みメタデータと候補の矛盾。候補は除外せず、AUTO だけを止める。
+pub fn embedded_conflicts(
+    candidate: &TmdbCandidate,
+    evidence: &EmbeddedEvidence,
+) -> Vec<&'static str> {
+    let mut conflicts = Vec::new();
+
+    if let (Some(embedded), Some(candidate_year)) = (evidence.embedded_year, candidate.year) {
+        if (embedded - candidate_year).abs() > EMBEDDED_YEAR_TOLERANCE {
+            conflicts.push(reason::EMBEDDED_YEAR_CONFLICT);
+        }
+    }
+    if let (Some(embedded), Some(filename)) = (evidence.embedded_year, evidence.filename_year) {
+        if (embedded - filename).abs() > EMBEDDED_YEAR_TOLERANCE {
+            conflicts.push(reason::YEAR_SOURCES_DISAGREE);
+        }
+    }
+
+    // 音声が日本語・不明のときは吹替の可能性があるので何も判定しない
+    let informative: Vec<&str> = evidence
+        .audio_languages
+        .iter()
+        .map(String::as_str)
+        .filter(|code| crate::services::container_tags::is_informative_audio_language(code))
+        .collect();
+    if !informative.is_empty() {
+        if let Some(candidate_language) = candidate.original_language.as_deref() {
+            let matches = informative.iter().any(|code| {
+                crate::services::container_tags::to_iso639_1(code)
+                    .map(|iso1| iso1.eq_ignore_ascii_case(candidate_language))
+                    .unwrap_or(false)
+            });
+            if !matches {
+                conflicts.push(reason::ORIGINAL_LANGUAGE_MISMATCH);
+            }
+        }
+    }
+
+    // 版の表記が候補のタイトルに見当たらない
+    if !evidence.cut_editions.is_empty() {
+        let haystack = format!(
+            "{} {}",
+            candidate.title.to_lowercase(),
+            candidate
+                .original_title
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+        );
+        if !evidence
+            .cut_editions
+            .iter()
+            .any(|label| haystack.contains(&label.to_lowercase()))
+        {
+            conflicts.push(reason::EDITION_MARKER);
+        }
+    }
+
+    if evidence.episode_id_marks_movie && candidate.media_type == "tv" {
+        conflicts.push(reason::EPISODE_ID_VS_TV);
+    }
+
+    conflicts
+}
+
+/// タグの年の許容差。±1 は配信年と公開年のずれとして起こりうる
+pub const EMBEDDED_YEAR_TOLERANCE: i32 = 1;
 
 #[derive(Debug, Clone)]
 pub struct SafeMatchOutcome<'a> {
@@ -242,6 +349,38 @@ pub struct SafeMatchOutcome<'a> {
 pub fn rules_safe_best_candidate<'a>(
     candidates: &'a [TmdbCandidate],
     parsed: &ParsedTitle,
+) -> SafeMatchOutcome<'a> {
+    rules_core(candidates, parsed, parsed.year_hint, None)
+}
+
+/// 本番の rules-safe に、埋め込みメタデータの矛盾を足したもの。
+/// 年ヒントは従来どおりファイル名側だけを使うので、**AUTO が増えることはない**。
+/// タグが矛盾を示したときに AUTO を止める（安全側）ためだけに使う。
+pub fn rules_safe_with_embedded<'a>(
+    candidates: &'a [TmdbCandidate],
+    parsed: &ParsedTitle,
+    evidence: &EmbeddedEvidence,
+) -> SafeMatchOutcome<'a> {
+    rules_core(candidates, parsed, parsed.year_hint, Some(evidence))
+}
+
+/// rules-tags-shadow（PR2.5 では記録・比較専用）。
+/// タグの年を年ヒントとして認めるので、rules-safe より AUTO が増えうる。
+/// 本番には適用しない。既存ラベルと監査で精度を確かめてから昇格する。
+pub fn rules_tags_shadow_best_candidate<'a>(
+    candidates: &'a [TmdbCandidate],
+    parsed: &ParsedTitle,
+    evidence: &EmbeddedEvidence,
+) -> SafeMatchOutcome<'a> {
+    let year_hint = parsed.year_hint.or(evidence.embedded_year);
+    rules_core(candidates, parsed, year_hint, Some(evidence))
+}
+
+fn rules_core<'a>(
+    candidates: &'a [TmdbCandidate],
+    parsed: &ParsedTitle,
+    year_hint: Option<i32>,
+    evidence: Option<&EmbeddedEvidence>,
 ) -> SafeMatchOutcome<'a> {
     let mut top: Option<&TmdbCandidate> = None;
     for candidate in candidates {
@@ -277,7 +416,7 @@ pub fn rules_safe_best_candidate<'a>(
         reasons.push(reason::TIED_TOP);
     }
 
-    match (parsed.year_hint, top.year) {
+    match (year_hint, top.year) {
         (None, _) => reasons.push(reason::NO_YEAR_HINT),
         (Some(_), None) => reasons.push(reason::CANDIDATE_YEAR_UNKNOWN),
         (Some(hint), Some(year)) if (year - hint).abs() > YEAR_TOLERANCE => {
@@ -287,6 +426,13 @@ pub fn rules_safe_best_candidate<'a>(
     }
 
     reasons.extend(explicit_conflicts(top, parsed));
+    if let Some(evidence) = evidence {
+        for conflict in embedded_conflicts(top, evidence) {
+            if !reasons.contains(&conflict) {
+                reasons.push(conflict);
+            }
+        }
+    }
 
     SafeMatchOutcome {
         decision: if reasons.is_empty() {
@@ -515,6 +661,7 @@ mod tests {
             year,
             poster_path: None,
             overview: None,
+            original_language: None,
             confidence,
             reasons: Vec::new(),
         }
@@ -639,6 +786,144 @@ mod tests {
         assert_eq!(part_number("死の秘宝 PART1"), Some(1));
         assert_eq!(part_number("るろうに剣心 京都大火編 前編"), Some(1));
         assert_eq!(part_number("cd1"), None);
+    }
+
+    // ─── PR2.5: 埋め込みメタデータ ───────────────────────────────────────────
+
+    fn evidence_with_year(embedded: Option<i32>, filename: Option<i32>) -> EmbeddedEvidence {
+        EmbeddedEvidence {
+            embedded_year: embedded,
+            filename_year: filename,
+            ..Default::default()
+        }
+    }
+
+    /// PR2.5 の最重要事項: タグがあっても本番の AUTO 範囲は広がらない
+    #[test]
+    fn embedded_year_never_widens_production_auto() {
+        // 年ヒントがファイル名に無い作品（今までは REVIEW）
+        let parsed = parse_title("Alien.mkv");
+        let candidates = vec![cand(348, 95, Some(1979))];
+        let evidence = evidence_with_year(Some(1979), None);
+
+        let production = rules_safe_with_embedded(&candidates, &parsed, &evidence);
+        assert_eq!(production.decision, SafeDecision::Review);
+        assert!(production.reasons.contains(&reason::NO_YEAR_HINT));
+
+        // 影判定はタグの年を年ヒントとして認めるので AUTO になる（記録だけ）
+        let shadow = rules_tags_shadow_best_candidate(&candidates, &parsed, &evidence);
+        assert_eq!(shadow.decision, SafeDecision::Auto);
+        assert!(shadow.reasons.is_empty());
+    }
+
+    /// 安全側（AUTO を止める）には使ってよい
+    #[test]
+    fn embedded_year_conflict_stops_auto() {
+        let parsed = parse_title("Niagara.2013.mkv");
+        let candidates = vec![cand(1, 95, Some(2013))];
+        let evidence = evidence_with_year(Some(1953), Some(2013));
+
+        // タグが無ければ AUTO
+        assert_eq!(
+            rules_safe_best_candidate(&candidates, &parsed).decision,
+            SafeDecision::Auto
+        );
+        // タグの年が候補ともファイル名とも食い違う → REVIEW
+        let outcome = rules_safe_with_embedded(&candidates, &parsed, &evidence);
+        assert_eq!(outcome.decision, SafeDecision::Review);
+        assert!(outcome.reasons.contains(&reason::EMBEDDED_YEAR_CONFLICT));
+        assert!(outcome.reasons.contains(&reason::YEAR_SOURCES_DISAGREE));
+
+        // ±1 は配信年のずれとして許す
+        let close = evidence_with_year(Some(2012), Some(2013));
+        assert_eq!(
+            rules_safe_with_embedded(&candidates, &parsed, &close).decision,
+            SafeDecision::Auto
+        );
+    }
+
+    #[test]
+    fn original_language_mismatch_only_counts_for_informative_audio() {
+        let parsed = parse_title("The.Guilty.2019.mkv");
+        let mut candidate = cand(1, 95, Some(2019));
+        candidate.original_language = Some("en".to_string());
+
+        let danish = EmbeddedEvidence {
+            audio_languages: vec!["dan".to_string()],
+            ..Default::default()
+        };
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&candidate), &parsed, &danish);
+        assert!(outcome.reasons.contains(&reason::ORIGINAL_LANGUAGE_MISMATCH));
+
+        // 吹替で jpn になるので、日本語音声は判断材料にしない
+        let dubbed = EmbeddedEvidence {
+            audio_languages: vec!["jpn".to_string(), "und".to_string()],
+            ..Default::default()
+        };
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&candidate), &parsed, &dubbed);
+        assert!(!outcome.reasons.contains(&reason::ORIGINAL_LANGUAGE_MISMATCH));
+        assert_eq!(outcome.decision, SafeDecision::Auto);
+
+        // 一致していれば止めない
+        let english = EmbeddedEvidence {
+            audio_languages: vec!["eng".to_string()],
+            ..Default::default()
+        };
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&candidate), &parsed, &english);
+        assert!(!outcome.reasons.contains(&reason::ORIGINAL_LANGUAGE_MISMATCH));
+    }
+
+    #[test]
+    fn cut_edition_without_a_matching_candidate_stops_auto() {
+        let parsed = parse_title("Godfather.1990.mkv");
+        let mut candidate = cand(1, 95, Some(1990));
+        candidate.title = "ゴッドファーザー PART III".to_string();
+        let evidence = EmbeddedEvidence {
+            cut_editions: vec!["最終章".to_string()],
+            ..Default::default()
+        };
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&candidate), &parsed, &evidence);
+        assert!(outcome.reasons.contains(&reason::EDITION_MARKER));
+
+        // 候補側にも同じ表記があれば止めない
+        candidate.title = "ゴッドファーザー 最終章".to_string();
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&candidate), &parsed, &evidence);
+        assert!(!outcome.reasons.contains(&reason::EDITION_MARKER));
+    }
+
+    #[test]
+    fn provider_specific_episode_id_conflicts_with_tv_candidates() {
+        let parsed = parse_title("Something.2019.mkv");
+        let mut tv = cand(1, 95, Some(2019));
+        tv.media_type = "tv".to_string();
+        let movie = cand(2, 95, Some(2019));
+        let evidence = EmbeddedEvidence {
+            episode_id_marks_movie: true,
+            ..Default::default()
+        };
+
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&tv), &parsed, &evidence);
+        assert!(outcome.reasons.contains(&reason::EPISODE_ID_VS_TV));
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&movie), &parsed, &evidence);
+        assert!(!outcome.reasons.contains(&reason::EPISODE_ID_VS_TV));
+
+        // 出どころが分からない（フラグが立たない）なら何もしない
+        let unknown = EmbeddedEvidence::default();
+        let outcome = rules_safe_with_embedded(std::slice::from_ref(&tv), &parsed, &unknown);
+        assert!(!outcome.reasons.contains(&reason::EPISODE_ID_VS_TV));
+    }
+
+    /// タグが無い作品では PR2 と同じ判定になる
+    #[test]
+    fn works_without_tags_decide_exactly_as_before() {
+        let parsed = parse_title("Blade.Runner.2049.2017.mkv");
+        for candidates in [vec![], vec![cand(1, 95, Some(2017))], vec![cand(1, 80, Some(2017)), cand(2, 80, Some(2017))]] {
+            let before = rules_safe_best_candidate(&candidates, &parsed);
+            let after = rules_safe_with_embedded(&candidates, &parsed, &EmbeddedEvidence::default());
+            assert_eq!(before.decision, after.decision);
+            assert_eq!(before.reasons, after.reasons);
+            assert_eq!(before.top.map(|c| c.tmdb_id), after.top.map(|c| c.tmdb_id));
+        }
     }
 
     #[test]

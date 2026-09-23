@@ -66,18 +66,93 @@ struct FfprobeStream {
     codec_name: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
+    /// ストリームのタグ（language を使う）
+    tags: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FfprobeFormat {
     duration: Option<String>,
     size: Option<String>,
+    /// コンテナに埋め込まれたメタデータ（title / date / artist など）
+    tags: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FfprobeOutput {
     streams: Option<Vec<FfprobeStream>>,
     format: Option<FfprobeFormat>,
+}
+
+/// ffprobe の出力から埋め込みメタデータを取り出す。
+/// タグが1つも無い場合も「調べた結果、無かった」として空のタグを返す。
+pub(crate) fn extract_container_tags(
+    probe: &FfprobeOutput,
+) -> crate::services::container_tags::ContainerTags {
+    use crate::services::container_tags::ContainerTags;
+    let empty = std::collections::BTreeMap::new();
+    let format_tags = probe
+        .format
+        .as_ref()
+        .and_then(|f| f.tags.as_ref())
+        .unwrap_or(&empty);
+    let streams: Vec<(String, Option<String>)> = probe
+        .streams
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|s| {
+            let language = s
+                .tags
+                .as_ref()
+                .and_then(|t| {
+                    t.iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case("language"))
+                        .map(|(_, value)| value.clone())
+                });
+            (s.codec_type.clone().unwrap_or_default(), language)
+        })
+        .collect();
+    ContainerTags::from_ffprobe(format_tags, &streams)
+}
+
+/// 1ファイルだけ ffprobe して埋め込みメタデータを読む（後埋め用）。
+/// プローブに失敗したときだけ None を返す（タグが無いファイルは空のタグ）。
+pub(crate) fn probe_container_tags(
+    path: &str,
+) -> Option<crate::services::container_tags::ContainerTags> {
+    probe_file(path).as_ref().map(extract_container_tags)
+}
+
+/// 埋め込みメタデータを files に書く（scan 由来なら captured = 1）。
+/// `path_hint` は取り込み元のパス（出どころの判定に使う）。
+pub(crate) fn store_container_tags(
+    conn: &rusqlite::Connection,
+    file_id: i64,
+    tags: &crate::services::container_tags::ContainerTags,
+    path_hint: Option<&str>,
+    captured_at_scan: bool,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE files SET
+           container_tags_json = ?2,
+           tags_captured = ?3,
+           tags_captured_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+           tags_encoder = ?4,
+           tags_provenance = ?5,
+           tags_provider_hint = ?6,
+           tags_truncated = ?7
+         WHERE id = ?1",
+        rusqlite::params![
+            file_id,
+            tags.to_json(),
+            if captured_at_scan { 1 } else { 0 },
+            tags.encoder,
+            tags.provenance(path_hint).as_str(),
+            tags.provider_hint(),
+            if tags.truncated.is_empty() { 0 } else { 1 },
+        ],
+    )
 }
 
 /// FfprobeOutput から (duration, width, height, video_codec, audio_codec) を抽出
@@ -313,9 +388,14 @@ pub async fn scan_source(
                 } else {
                     // サイズか更新日時が変わった → 再プローブ
                     let probe = probe_file(&path_str);
+                    // 中身が変わったファイルはタグも取り直す
+                    let tags = probe.as_ref().map(extract_container_tags);
                     let (duration_sec, width, height, video_codec, audio_codec) =
                         extract_probe_info(probe);
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    if let Some(tags) = &tags {
+                        let _ = store_container_tags(&conn, file_id, tags, Some(&path_str), true);
+                    }
                     conn.execute(
                         "UPDATE files SET
                            file_size = ?1, mtime = ?2, duration_sec = ?3,
@@ -335,6 +415,7 @@ pub async fn scan_source(
             None => {
                 // 新規ファイル → プローブしてINSERT
                 let probe = probe_file(&path_str);
+                let tags = probe.as_ref().map(extract_container_tags);
                 let (duration_sec, width, height, video_codec, audio_codec) =
                     extract_probe_info(probe);
 
@@ -358,6 +439,9 @@ pub async fn scan_source(
                     },
                 )
                 .map_err(|e| e.to_string())?;
+                if let Some(tags) = &tags {
+                    let _ = store_container_tags(&conn, file_id, tags, Some(&path_str), true);
+                }
 
                 // Auto-create a Work from filename (title estimation)
                 let title = estimate_title(&file_name);
