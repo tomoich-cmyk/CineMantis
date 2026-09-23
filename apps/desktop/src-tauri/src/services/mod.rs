@@ -1,4 +1,5 @@
 pub mod container_tags;
+pub mod jev_state;
 pub mod kana_bucket;
 pub mod title_parser;
 pub mod tmdb_client;
