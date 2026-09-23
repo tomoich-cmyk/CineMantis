@@ -32,6 +32,8 @@ anyhow = "1"
 thiserror = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 regex = "1"
+# contract の指紋（監査識別子）に使う
+sha2 = "0.10"
 
 [profile.dev]
 incremental = true
