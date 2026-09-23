@@ -623,13 +623,18 @@ mod tests {
         let (run_b, candidates_b) = jev_fixture(&conn);
         assert_ne!(run_a, run_b);
 
+        // ID と cand_key は常に揃えて渡す（揃っていないと CHECK で弾かれ、
+        // run をまたいだ参照かどうかを確かめられないため）
         let insert_call = |run_id: i64, seq: i64, kind: &str, subject: Option<i64>, selected: Option<i64>| {
             conn.execute(
                 "INSERT INTO metadata_match_jev_calls
-                   (run_id, call_seq, call_kind, subject_candidate_id, selected_candidate_id,
+                   (run_id, call_seq, call_kind, subject_candidate_id, subject_cand_key,
+                    selected_candidate_id, selected_cand_key,
                     contract_version, state_schema_version, requested_model,
                     state_json, questions_json, candidate_order_json, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                 VALUES (?1, ?2, ?3, ?4, CASE WHEN ?4 IS NULL THEN NULL ELSE 'c1' END,
+                         ?5, CASE WHEN ?5 IS NULL THEN NULL ELSE 'c2' END,
+                         'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
                          '{}', '[]', '[]', 'skipped')",
                 rusqlite::params![run_id, seq, kind, subject, selected],
             )
@@ -650,9 +655,9 @@ mod tests {
             insert_call(run_a, 1, "isolated", Some(candidates_b[0]), None),
             "他 run の候補を subject にできてしまう",
         );
-        // 2. run A の call が run B の候補を selected にする
+        // 2. run A の call が run B の候補を selected にする（key は 'c2' 側を使う）
         rejected_by_fk(
-            insert_call(run_a, 2, "packed", None, Some(candidates_b[0])),
+            insert_call(run_a, 2, "packed", None, Some(candidates_b[1])),
             "他 run の候補を selected にできてしまう",
         );
         // 同じ run の候補なら入る
@@ -682,7 +687,124 @@ mod tests {
         );
         // 同じ run 同士なら入る
         insert_score(run_a, Some(candidates_a[0]), Some(call_a), "jev-call").unwrap();
-        insert_score(run_a, Some(candidates_a[1]), None, "legacy").unwrap();
+    }
+
+    /// candidate_id と cand_key が同じ候補を指していること（食い違いを DB が拒否する）
+    #[test]
+    fn candidate_id_and_key_must_agree() {
+        let conn = open_migrated();
+        let (run_id, candidates) = jev_fixture(&conn); // candidates[0]='c1', candidates[1]='c2'
+
+        let insert_score = |candidate: Option<i64>, key: &str| {
+            conn.execute(
+                "INSERT INTO metadata_match_candidate_scores
+                   (run_id, candidate_id, cand_key, matcher, matcher_version, score)
+                 VALUES (?1, ?2, ?3, 'legacy', 'rules-1', 50)",
+                rusqlite::params![run_id, candidate, key],
+            )
+        };
+        // c1 の ID に c2 の key
+        assert!(insert_score(Some(candidates[0]), "c2").is_err());
+        // ID を省いて key だけ（NOT NULL 違反）
+        assert!(insert_score(None, "fake").is_err());
+        // 正しい組み合わせは通る
+        insert_score(Some(candidates[0]), "c1").unwrap();
+        insert_score(Some(candidates[1]), "c2").unwrap();
+
+        // Jev call 側も同じ
+        let insert_call = |seq: i64, subject: Option<(i64, &str)>, selected: Option<(i64, &str)>| {
+            conn.execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, subject_candidate_id, subject_cand_key,
+                    selected_candidate_id, selected_cand_key,
+                    contract_version, state_schema_version, requested_model,
+                    state_json, questions_json, candidate_order_json, status)
+                 VALUES (?1, ?2, 'packed', ?3, ?4, ?5, ?6, 'jev-contract-1', 'jev-state-1',
+                         'jev-1.13.0', '{}', '[]', '[]', 'skipped')",
+                rusqlite::params![
+                    run_id,
+                    seq,
+                    subject.map(|(id, _)| id),
+                    subject.map(|(_, key)| key),
+                    selected.map(|(id, _)| id),
+                    selected.map(|(_, key)| key),
+                ],
+            )
+        };
+        // subject の ID と key が食い違う
+        assert!(insert_call(20, Some((candidates[0], "c2")), None).is_err());
+        // selected の ID と key が食い違う
+        assert!(insert_call(21, None, Some((candidates[0], "c2"))).is_err());
+        // 片方だけ NULL にして複合外部キーの検査を素通りさせない
+        assert!(conn
+            .execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, selected_candidate_id,
+                    contract_version, state_schema_version, requested_model,
+                    state_json, questions_json, candidate_order_json, status)
+                 VALUES (?1, 22, 'packed', ?2, 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                         '{}', '[]', '[]', 'skipped')",
+                rusqlite::params![run_id, candidates[0]],
+            )
+            .is_err());
+        // 正しい組み合わせ・両方 NULL は通る
+        insert_call(23, Some((candidates[0], "c1")), Some((candidates[1], "c2"))).unwrap();
+        insert_call(24, None, None).unwrap();
+    }
+
+    /// jev_call_id は jev-call のときだけ付き、決定的な matcher には付かない
+    #[test]
+    fn jev_call_id_is_only_for_jev_call_rows() {
+        let conn = open_migrated();
+        let (run_id, candidates) = jev_fixture(&conn);
+        conn.execute(
+            "INSERT INTO metadata_match_jev_calls
+               (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                requested_model, state_json, questions_json, candidate_order_json, status)
+             VALUES (?1, 1, 'packed', 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                     '{}', '[]', '[]', 'skipped')",
+            rusqlite::params![run_id],
+        )
+        .unwrap();
+        let call_id = conn.last_insert_rowid();
+
+        let insert = |matcher: &str, call: Option<i64>| {
+            conn.execute(
+                "INSERT INTO metadata_match_candidate_scores
+                   (run_id, candidate_id, cand_key, matcher, matcher_version, score, jev_call_id)
+                 VALUES (?1, ?2, 'c1', ?3, 'v1', 50, ?4)",
+                rusqlite::params![run_id, candidates[0], matcher, call],
+            )
+        };
+        // 決定的な matcher に call を付けられない（部分 UNIQUE の迂回を防ぐ）
+        assert!(insert("legacy", Some(call_id)).is_err());
+        assert!(insert("rules-tags-shadow", Some(call_id)).is_err());
+        // jev-call には call が必須
+        assert!(insert("jev-call", None).is_err());
+        // 正しい組み合わせは通る
+        insert("jev-call", Some(call_id)).unwrap();
+        insert("legacy", None).unwrap();
+    }
+
+    /// 応答を切り詰めたときは hash と先頭 prefix を必ず残す
+    #[test]
+    fn truncated_responses_keep_hash_and_prefix() {
+        let conn = open_migrated();
+        let (run_id, _) = jev_fixture(&conn);
+        let insert = |seq: i64, sha: Option<&str>, prefix: Option<&str>| {
+            conn.execute(
+                "INSERT INTO metadata_match_jev_calls
+                   (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                    requested_model, state_json, questions_json, candidate_order_json,
+                    status, error_kind, response_truncated, response_sha256, response_prefix)
+                 VALUES (?1, ?2, 'packed', 'jev-contract-1', 'jev-state-1', 'jev-1.13.0',
+                         '{}', '[]', '[]', 'invalid', 'response_too_large', 1, ?3, ?4)",
+                rusqlite::params![run_id, seq, sha, prefix],
+            )
+        };
+        assert!(insert(30, None, Some("{\"model\"")).is_err(), "hash が無い");
+        assert!(insert(31, Some("abc123"), None).is_err(), "prefix が無い");
+        insert(32, Some("abc123"), Some("{\"model\"")).unwrap();
     }
 
     /// legacy 候補の score だけを移送し、rank は NULL のままにする

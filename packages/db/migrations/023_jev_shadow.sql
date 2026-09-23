@@ -11,6 +11,10 @@
 -- 実行時に "foreign key mismatch" になるので、子テーブルより先に作る。
 CREATE UNIQUE INDEX IF NOT EXISTS ux_mmc_run_candidate
   ON metadata_match_candidates(run_id, id);
+-- ID と cand_key が同じ候補を指すことまで保証するための親キー。
+-- (run_id, id) が一意なので cand_key を足しても一意のまま。
+CREATE UNIQUE INDEX IF NOT EXISTS ux_mmc_run_candidate_key
+  ON metadata_match_candidates(run_id, id, cand_key);
 
 -- 質問テンプレートと検証規則の凍結。追記のみで、文面を変えたら contract_version を上げる。
 -- canonical_sha256 は state_schema_version + instructions + questions_template + criteria +
@@ -74,15 +78,23 @@ CREATE TABLE IF NOT EXISTS metadata_match_jev_calls (
   UNIQUE (run_id, call_seq),
   -- 複合 UNIQUE。metadata_match_candidate_scores から (run_id, id) で参照する
   UNIQUE (run_id, id),
-  -- 参照する候補は必ず同じ run のもの（NULL のときは検査されない）
-  FOREIGN KEY (run_id, subject_candidate_id)
-    REFERENCES metadata_match_candidates(run_id, id) ON DELETE CASCADE,
-  FOREIGN KEY (run_id, selected_candidate_id)
-    REFERENCES metadata_match_candidates(run_id, id) ON DELETE CASCADE,
+  -- 参照する候補は必ず同じ run のもので、ID と cand_key も一致していること。
+  -- ID と key を両方保存する以上、食い違いを DB 側で拒否する。
+  FOREIGN KEY (run_id, subject_candidate_id, subject_cand_key)
+    REFERENCES metadata_match_candidates(run_id, id, cand_key) ON DELETE CASCADE,
+  FOREIGN KEY (run_id, selected_candidate_id, selected_cand_key)
+    REFERENCES metadata_match_candidates(run_id, id, cand_key) ON DELETE CASCADE,
+  -- 片方だけ NULL にすると複合外部キーの検査が素通りするので、両方 NULL か両方あるか
+  CHECK ((subject_candidate_id IS NULL AND subject_cand_key IS NULL)
+      OR (subject_candidate_id IS NOT NULL AND subject_cand_key IS NOT NULL)),
+  CHECK ((selected_candidate_id IS NULL AND selected_cand_key IS NULL)
+      OR (selected_candidate_id IS NOT NULL AND selected_cand_key IS NOT NULL)),
   CHECK (call_kind <> 'isolated' OR subject_candidate_id IS NOT NULL),
   CHECK (status <> 'ok' OR parsed_answer_json IS NOT NULL),
   CHECK (answered_none = 0 OR selected_candidate_id IS NULL),
-  CHECK (response_truncated = 0 OR response_sha256 IS NOT NULL)
+  -- 設計どおり hash と先頭 prefix を必ず残す
+  CHECK (response_truncated = 0
+      OR (response_sha256 IS NOT NULL AND response_prefix IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_jev_calls_run ON metadata_match_jev_calls(run_id, call_kind);
 CREATE INDEX IF NOT EXISTS idx_jev_calls_status ON metadata_match_jev_calls(status, created_at);
@@ -94,7 +106,8 @@ CREATE INDEX IF NOT EXISTS idx_jev_calls_status ON metadata_match_jev_calls(stat
 CREATE TABLE IF NOT EXISTS metadata_match_candidate_scores (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL REFERENCES metadata_match_runs(id) ON DELETE CASCADE,
-  candidate_id INTEGER,
+  -- candidate score は必ず既存候補に属する
+  candidate_id INTEGER NOT NULL,
   cand_key TEXT NOT NULL,
   -- score の出どころ（経路）。判定器そのものではない。
   --   legacy            … 旧経路の検索・採点（matcher_version = 'rules-1' など）
@@ -110,12 +123,16 @@ CREATE TABLE IF NOT EXISTS metadata_match_candidate_scores (
   reasons_json TEXT,
   jev_call_id INTEGER,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  -- 候補も call も、必ず同じ run のもの
-  FOREIGN KEY (run_id, candidate_id)
-    REFERENCES metadata_match_candidates(run_id, id) ON DELETE CASCADE,
+  -- 候補も call も、必ず同じ run のもの。候補は ID と cand_key の一致まで保証する
+  FOREIGN KEY (run_id, candidate_id, cand_key)
+    REFERENCES metadata_match_candidates(run_id, id, cand_key) ON DELETE CASCADE,
   FOREIGN KEY (run_id, jev_call_id)
     REFERENCES metadata_match_jev_calls(run_id, id) ON DELETE CASCADE,
-  CHECK (matcher <> 'jev-call' OR jev_call_id IS NOT NULL)
+  -- jev_call_id の意味を双方向で固定する。
+  -- 決定的な matcher に call を付けられると、部分 UNIQUE インデックス
+  -- （jev_call_id IS NULL 側）を迂回して同じ matcher の行を複数作れてしまう。
+  CHECK ((matcher =  'jev-call' AND jev_call_id IS NOT NULL)
+      OR (matcher <> 'jev-call' AND jev_call_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_cand_scores_run ON metadata_match_candidate_scores(run_id, matcher);
 -- 決定的な matcher は run × 候補 × matcher で1行。
