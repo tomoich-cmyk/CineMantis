@@ -4,6 +4,7 @@ pub mod jev_state;
 pub mod kana_bucket;
 pub mod title_parser;
 pub mod tmdb_client;
+pub mod typesafe_client;
 pub mod match_history;
 pub mod metadata_matcher;
 pub mod poster_store;
