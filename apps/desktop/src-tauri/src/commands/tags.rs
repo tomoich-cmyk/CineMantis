@@ -21,6 +21,7 @@ pub struct TagBackfillProgress {
     pub processed: usize,
     pub total: usize,
     pub with_tags: usize,
+    /// ffprobe 失敗 + DB 保存失敗
     pub failed: usize,
     pub current_file: Option<String>,
 }
@@ -29,8 +30,14 @@ pub struct TagBackfillProgress {
 pub struct TagBackfillResult {
     pub processed: usize,
     pub total: usize,
+    /// DB へ保存できて、中身のあるタグだったファイル
     pub with_tags: usize,
+    /// 失敗の合計（probe_failed + db_failed）
     pub failed: usize,
+    /// ffprobe が失敗したファイル
+    pub probe_failed: usize,
+    /// DB へ保存できなかったファイル（NULL のまま残り、次回再試行できる）
+    pub db_failed: usize,
     /// まだタグを読んでいないファイル数（再開の目安）
     pub remaining: usize,
     /// 作ったレビュー課題（タグと既存照合の食い違い）
@@ -95,11 +102,18 @@ pub async fn backfill_container_tags(
     let total = targets.len();
     let mut processed = 0usize;
     let mut with_tags = 0usize;
-    let mut failed = 0usize;
+    let mut probe_failed = 0usize;
+    let mut db_failed = 0usize;
 
     let _ = app.emit(
         "tags:backfill_progress",
-        TagBackfillProgress { processed, total, with_tags, failed, current_file: None },
+        TagBackfillProgress {
+            processed,
+            total,
+            with_tags,
+            failed: probe_failed + db_failed,
+            current_file: None,
+        },
     );
 
     // bounded concurrency: 同時に走らせる数を concurrency 件に抑えながら順に進める
@@ -115,7 +129,8 @@ pub async fn backfill_container_tags(
             let counts = store_chunk(&conn, &results);
             processed += counts.processed;
             with_tags += counts.with_tags;
-            failed += counts.failed;
+            probe_failed += counts.probe_failed;
+            db_failed += counts.db_failed;
         }
 
         let _ = app.emit(
@@ -124,7 +139,7 @@ pub async fn backfill_container_tags(
                 processed,
                 total,
                 with_tags,
-                failed,
+                failed: probe_failed + db_failed,
                 current_file: last_file,
             },
         );
@@ -148,7 +163,9 @@ pub async fn backfill_container_tags(
         processed,
         total,
         with_tags,
-        failed,
+        failed: probe_failed + db_failed,
+        probe_failed,
+        db_failed,
         remaining,
         conflicts_created,
     })
@@ -160,8 +177,14 @@ type ProbeResult = (i64, String, Option<ContainerTags>);
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct ChunkCounts {
     pub processed: usize,
+    /// DB へ保存できて、中身のあるタグだったファイル
     pub with_tags: usize,
-    pub failed: usize,
+    /// DB へ保存できたファイル（タグが空のものも含む）
+    pub stored: usize,
+    /// ffprobe が失敗したファイル
+    pub probe_failed: usize,
+    /// ffprobe はできたが DB へ保存できなかったファイル（NULL のまま残す）
+    pub db_failed: usize,
 }
 
 /// chunk 内のファイルを並列に ffprobe する。
@@ -183,25 +206,32 @@ pub(crate) fn probe_chunk(targets: &[(i64, String)]) -> Vec<ProbeResult> {
     })
 }
 
-/// プローブ結果を files に書く
+/// プローブ結果を files に書く。
+/// ffprobe の失敗と DB 保存の失敗を区別し、保存できなかった行は
+/// container_tags_json を NULL のまま残す（次回の後埋めで再試行できる）。
 pub(crate) fn store_chunk(conn: &rusqlite::Connection, results: &[ProbeResult]) -> ChunkCounts {
     let mut counts = ChunkCounts::default();
     for (file_id, path, tags) in results {
         counts.processed += 1;
-        match tags {
-            Some(tags) => {
+        let Some(tags) = tags else {
+            counts.probe_failed += 1;
+            continue;
+        };
+        match crate::commands::scan::store_container_tags(conn, *file_id, tags, Some(path), false) {
+            Ok(0) => {
+                counts.db_failed += 1;
+                eprintln!("[tags] files 行が見つかりません: file_id={file_id}");
+            }
+            Ok(_) => {
+                counts.stored += 1;
                 if !tags.is_empty() {
                     counts.with_tags += 1;
                 }
-                let _ = crate::commands::scan::store_container_tags(
-                    conn,
-                    *file_id,
-                    tags,
-                    Some(path),
-                    false,
-                );
             }
-            None => counts.failed += 1,
+            Err(error) => {
+                counts.db_failed += 1;
+                eprintln!("[tags] 保存に失敗しました（NULL のまま残します）: file_id={file_id} {error}");
+            }
         }
     }
     counts
@@ -251,7 +281,9 @@ pub(crate) fn scan_metadata_conflicts(conn: &rusqlite::Connection) -> Result<usi
                  JOIN files f ON f.id = wp.file_id
                  WHERE w.tmdb_id IS NOT NULL
                    AND w.year IS NOT NULL
-                   AND f.container_tags_json IS NOT NULL",
+                   AND f.container_tags_json IS NOT NULL
+                   -- TV はシリーズ初回年と各話の年が違って当然なので、当面は映画だけを見る
+                   AND w.tmdb_media_type = 'movie'",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -392,6 +424,78 @@ mod tests {
         assert_eq!(scan_metadata_conflicts(&conn).unwrap(), 0);
     }
 
+    /// DB 保存に失敗した行は成功として数えず、NULL のまま残して次回に回す
+    #[test]
+    fn database_write_failures_are_not_counted_as_success() {
+        let conn = open_migrated();
+        let source_id = insert_source(&conn, r"D:\Movies");
+        conn.execute(
+            "INSERT INTO files (source_id, file_path, file_name) VALUES (?1, 'D:\\Movies\\a.mkv', 'a.mkv')",
+            rusqlite::params![source_id],
+        )
+        .unwrap();
+        let existing = conn.last_insert_rowid();
+
+        let results = vec![
+            // 保存できる行（中身のあるタグ）
+            (existing, r"D:\Movies\a.mkv".to_string(), Some(tags_with_year("1953"))),
+            // files に無い行 → DB 保存失敗
+            (999_999, r"D:\Movies\gone.mkv".to_string(), Some(tags_with_year("2000"))),
+            // ffprobe 失敗
+            (existing, r"D:\Movies\broken.mkv".to_string(), None),
+        ];
+        let counts = store_chunk(&conn, &results);
+
+        assert_eq!(counts.processed, 3);
+        assert_eq!(counts.stored, 1);
+        assert_eq!(counts.with_tags, 1, "保存できた行だけを成功として数える");
+        assert_eq!(counts.db_failed, 1);
+        assert_eq!(counts.probe_failed, 1);
+
+        // 保存できなかった行は container_tags_json が無いまま
+        let missing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE id = 999999",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, 0);
+
+        // 保存できた行は次回の対象から外れる
+        let pending = pending_tag_targets(&conn, 100).unwrap();
+        assert!(pending.iter().all(|(id, _)| *id != existing));
+    }
+
+    /// TV はシリーズ初回年と各話の年が違って当然なので、年の食い違いを課題にしない
+    #[test]
+    fn tv_year_mismatch_does_not_create_a_conflict() {
+        let conn = open_migrated();
+        let tv = work_with_tagged_file(&conn, "ドラマ", &tags_with_year("2015"));
+        conn.execute(
+            "UPDATE works SET tmdb_id = 100, tmdb_media_type = 'tv', year = 2008,
+                    match_status = 'matched', match_source = 'legacy' WHERE id = ?1",
+            rusqlite::params![tv],
+        )
+        .unwrap();
+        let movie = work_with_tagged_file(&conn, "映画", &tags_with_year("1953"));
+        conn.execute(
+            "UPDATE works SET tmdb_id = 200, tmdb_media_type = 'movie', year = 2013,
+                    match_status = 'matched', match_source = 'legacy' WHERE id = ?1",
+            rusqlite::params![movie],
+        )
+        .unwrap();
+
+        assert_eq!(scan_metadata_conflicts(&conn).unwrap(), 1, "映画だけが対象");
+        let work_ids: Vec<i64> = {
+            let mut stmt = conn
+                .prepare("SELECT work_id FROM metadata_review_tasks WHERE reason = 'metadata_conflict'")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+        };
+        assert_eq!(work_ids, vec![movie]);
+    }
+
     /// 後埋めは中断しても残りから再開する（読んだ行は対象から外れる）
     #[test]
     fn backfill_targets_skip_files_that_already_have_tags() {
@@ -463,14 +567,18 @@ mod tests {
             let chunk_counts = store_chunk(&conn, &results);
             counts.processed += chunk_counts.processed;
             counts.with_tags += chunk_counts.with_tags;
-            counts.failed += chunk_counts.failed;
+            counts.stored += chunk_counts.stored;
+            counts.probe_failed += chunk_counts.probe_failed;
+            counts.db_failed += chunk_counts.db_failed;
         }
         let elapsed = started.elapsed();
         println!(
-            "processed={} with_tags={} failed={} elapsed={:.1}s ({:.2}s/file)",
+            "processed={} stored={} with_tags={} probe_failed={} db_failed={} elapsed={:.1}s ({:.2}s/file)",
             counts.processed,
+            counts.stored,
             counts.with_tags,
-            counts.failed,
+            counts.probe_failed,
+            counts.db_failed,
             elapsed.as_secs_f64(),
             elapsed.as_secs_f64() / counts.processed.max(1) as f64
         );

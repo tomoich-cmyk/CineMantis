@@ -22,8 +22,14 @@ export interface TagBackfillProgress {
 export interface TagBackfillResult {
   processed: number;
   total: number;
+  /** DB へ保存できて、中身のあるメタデータだったファイル */
   with_tags: number;
+  /** 失敗の合計（probe_failed + db_failed） */
   failed: number;
+  /** ffprobe が失敗したファイル */
+  probe_failed: number;
+  /** DB へ保存できなかったファイル（次回の実行で再試行される） */
+  db_failed: number;
   /** まだ読んでいないファイル数。0 でなければ続きを実行できる */
   remaining: number;
   /** タグと既存照合の食い違いで作ったレビュー課題の数 */

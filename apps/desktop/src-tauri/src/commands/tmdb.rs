@@ -13,7 +13,7 @@ use crate::services::{
         rules_tags_shadow_best_candidate, score_movie, score_tv, SafeDecision,
     },
     poster_store::store_poster_for_work,
-    prematch_snapshot::{LocalEvidence, PreMatchSnapshot, QuerySource},
+    prematch_snapshot::{LocalEvidence, PreMatchSnapshot, QuerySource, SearchInput},
     title_parser::{parse_title, ParsedTitle},
     tmdb_client::TmdbClient,
 };
@@ -275,6 +275,23 @@ struct CandidateSearch {
     tmdb_calls: usize,
 }
 
+/// 検索語ごとの ParsedTitle を作る。
+///
+/// 埋め込みメタデータ由来の検索では、検索に使ったタグの年を採点の年ヒントにも渡す。
+/// こうしないと rules-tags-shadow が `year exact` / `year ±1` の加点を受けられず、
+/// タグの効果を過小評価する。採点式（score_movie / score_tv）自体は変更しない。
+/// 旧経路（legacy）の ParsedTitle には一切手を入れないので、
+/// rules-1 と本番 rules-safe の点数は PR2 と同じままになる。
+pub(crate) fn parsed_for_query(input: &SearchInput) -> ParsedTitle {
+    let mut parsed = parse_title(&input.title);
+    if input.source == QuerySource::Embedded {
+        if let Some(year) = input.year {
+            parsed.year_hint = Some(year);
+        }
+    }
+    parsed
+}
+
 /// 同じ作品の候補を1つにまとめる（スコアは高い方を採る）。
 /// これは旧経路とは別の matcher（rules-tags-shadow）の入力になる。
 fn merge_candidate_sets(
@@ -340,7 +357,7 @@ async fn fetch_candidates(
     let search_tv = evidence.media_kind() != "movie";
 
     for input in &inputs {
-        let parsed = parse_title(&input.title);
+        let parsed = parsed_for_query(input);
         // 旧経路は「検索語から解析した年」だけを使う（PR2.5 で経路を変えない）
         let year = input.year.or(parsed.year_hint);
         let source = input.source.as_str();
@@ -1544,6 +1561,117 @@ pub struct TmdbCandidatesResponse {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
+
+    // ─── 検索語ごとの年ヒント（監査対応6） ───────────────────────────────────
+
+    fn search_result(id: i64, title: &str, release_date: &str) -> TmdbSearchMovie {
+        TmdbSearchMovie {
+            id,
+            title: title.to_string(),
+            original_title: None,
+            overview: None,
+            release_date: Some(release_date.to_string()),
+            poster_path: None,
+            original_language: Some("en".to_string()),
+            vote_average: None,
+            genre_ids: None,
+        }
+    }
+
+    /// 旧経路の検索語と点数は PR2 から変わらない
+    #[test]
+    fn legacy_query_scoring_is_unchanged() {
+        let input = SearchInput {
+            source: QuerySource::Legacy,
+            title: "THE GUILTY".to_string(),
+            year: None,
+        };
+        let parsed = parsed_for_query(&input);
+        let before = parse_title("THE GUILTY");
+        assert_eq!(parsed.year_hint, before.year_hint);
+        assert_eq!(parsed.normalized_title, before.normalized_title);
+
+        let result = search_result(1, "The Guilty", "2019-05-24");
+        assert_eq!(
+            score_movie(&result, &parsed).confidence,
+            score_movie(&result, &before).confidence
+        );
+
+        // 旧経路に年が混入することはない（year が指定されていても無視する）
+        let with_year = SearchInput { year: Some(2019), ..input };
+        assert_eq!(parsed_for_query(&with_year).year_hint, before.year_hint);
+    }
+
+    /// 埋め込み検索では、タグの年が year exact / ±1 の加点に効く
+    #[test]
+    fn embedded_query_year_feeds_the_existing_year_bonus() {
+        let title = "THE GUILTY/ギルティ";
+        let legacy = parsed_for_query(&SearchInput {
+            source: QuerySource::Legacy,
+            title: title.to_string(),
+            year: None,
+        });
+        let embedded = parsed_for_query(&SearchInput {
+            source: QuerySource::Embedded,
+            title: title.to_string(),
+            year: Some(2019),
+        });
+        assert_eq!(legacy.year_hint, None);
+        assert_eq!(embedded.year_hint, Some(2019));
+
+        let exact = search_result(1, "THE GUILTY/ギルティ", "2019-05-24");
+        let near = search_result(2, "THE GUILTY/ギルティ", "2020-05-24");
+        let far = search_result(3, "THE GUILTY/ギルティ", "1999-05-24");
+
+        // 年ヒントが無いときは加点されない
+        let base = score_movie(&exact, &legacy).confidence;
+        // 年一致 +20、±1 は +10、離れていれば加点なし
+        assert_eq!(score_movie(&exact, &embedded).confidence, base + 20);
+        assert_eq!(score_movie(&near, &embedded).confidence, base + 10);
+        assert_eq!(score_movie(&far, &embedded).confidence, base);
+    }
+
+    /// 年の加点は影判定にだけ効き、本番 rules-safe の AUTO は増えない
+    #[test]
+    fn embedded_year_scoring_only_changes_the_shadow_matcher() {
+        let title = "THE GUILTY/ギルティ";
+        let legacy_parsed = parsed_for_query(&SearchInput {
+            source: QuerySource::Legacy,
+            title: title.to_string(),
+            year: None,
+        });
+        let embedded_parsed = parsed_for_query(&SearchInput {
+            source: QuerySource::Embedded,
+            title: title.to_string(),
+            year: Some(2019),
+        });
+        let result = search_result(1, "THE GUILTY/ギルティ", "2019-05-24");
+
+        let legacy_ranked = merge_and_rank(vec![score_movie(&result, &legacy_parsed)]);
+        let embedded_ranked = merge_and_rank(vec![score_movie(&result, &embedded_parsed)]);
+        let (combined, _) = merge_candidate_sets(&legacy_ranked, &embedded_ranked);
+        let combined_ranked = merge_and_rank(combined);
+
+        let evidence = crate::services::metadata_matcher::EmbeddedEvidence {
+            embedded_year: Some(2019),
+            ..Default::default()
+        };
+        // 本番は旧経路の候補・年ヒントだけを見るので REVIEW のまま
+        let production = rules_safe_with_embedded(&legacy_ranked, &legacy_parsed, &evidence);
+        assert_eq!(production.decision, SafeDecision::Review);
+        assert!(production
+            .reasons
+            .contains(&crate::services::metadata_matcher::reason::NO_YEAR_HINT));
+
+        // 影判定はタグの年で加点された候補を見て AUTO になりうる
+        let shadow =
+            rules_tags_shadow_best_candidate(&combined_ranked, &legacy_parsed, &evidence);
+        assert_eq!(shadow.decision, SafeDecision::Auto);
+        assert!(
+            shadow.top.unwrap().confidence > production.top.unwrap().confidence,
+            "影判定側だけ点数が上がる"
+        );
+    }
 
     fn write<'a>(work_id: i64, tmdb_id: i64, poster: Option<&'a str>) -> TmdbMatchWrite<'a> {
         TmdbMatchWrite {

@@ -9,6 +9,12 @@ export interface TmdbCandidate {
   year: number | null;
   poster_path: string | null;    // TMDb 相対パス (/xxx.jpg)
   overview: string | null;
+  /**
+   * 候補一覧での並べ替え用スコア。
+   * PR2.5 以降はファイル名由来と埋め込みメタデータ由来の検索を統合した値で、
+   * 自動確定（production AUTO）の確信度ではない。
+   * 自動照合の判定は AutoMatchResult.decision / reasons を見ること。
+   */
   confidence: number;
   reasons: string[];
 }

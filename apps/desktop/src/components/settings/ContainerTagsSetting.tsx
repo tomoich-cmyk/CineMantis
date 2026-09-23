@@ -94,7 +94,14 @@ export function ContainerTagsSetting() {
         <div className="flex flex-wrap gap-4 text-xs text-gray-500">
           <span>処理 {result.processed}</span>
           <span className="text-mantis-400">メタデータあり {result.with_tags}</span>
-          {result.failed > 0 && <span className="text-red-400">失敗 {result.failed}</span>}
+          {result.probe_failed > 0 && (
+            <span className="text-red-400">読み取り失敗 {result.probe_failed}</span>
+          )}
+          {result.db_failed > 0 && (
+            <span className="text-red-400">
+              保存失敗 {result.db_failed}（次回の実行で再試行します）
+            </span>
+          )}
           {result.remaining > 0 && <span>残り {result.remaining}</span>}
           {result.conflicts_created > 0 && (
             <span className="text-amber-400">

@@ -11,8 +11,9 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-/// スナップショットの形式。run に記録し、後からの再現に使う
-pub const STATE_SCHEMA_VERSION: &str = "cm-prematch-1";
+/// スナップショットの形式。run に記録し、後からの再現に使う。
+/// PR2.5 で埋め込みメタデータ（embedded / filename_year / title_guess_year）を足したので -2。
+pub const STATE_SCHEMA_VERSION: &str = "cm-prematch-2";
 
 // ─── 読んでよい列（allowlist） ────────────────────────────────────────────────
 //

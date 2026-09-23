@@ -19,12 +19,14 @@ use crate::services::title_parser::ParsedTitle;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-/// rules-safe のバージョン（閾値や矛盾ルールを変えたら上げる）
-pub const POLICY_VERSION: &str = "rules-safe-1";
+/// rules-safe のバージョン（閾値や矛盾ルールを変えたら上げる）。
+/// PR2.5 で埋め込みメタデータ由来の AUTO 拒否（veto）を足したので -2。
+pub const POLICY_VERSION: &str = "rules-safe-2";
 /// 比較基準（現行の score_movie / score_tv / best_candidate）。旧経路のまま凍結する
 pub const RULES_V1_VERSION: &str = "rules-1";
-/// 埋め込みメタデータを使う影判定（PR2.5 では記録・比較専用）
-pub const SHADOW_VERSION: &str = "rules-tags-shadow-1";
+/// 埋め込みメタデータを使う影判定（PR2.5 では記録・比較専用）。
+/// -2 で、埋め込み検索の採点にもタグの年を年ヒントとして渡すようにした。
+pub const SHADOW_VERSION: &str = "rules-tags-shadow-2";
 /// 1 run に残す候補の最大件数
 const MAX_STORED_CANDIDATES: usize = 20;
 
@@ -143,7 +145,21 @@ pub struct CandidateSource {
     pub query_source: String,
 }
 
-/// run に残す1回分の照合
+/// run に残す1回分の照合。
+///
+/// **`metadata_match_candidates` に保存する候補の意味（PR2.5 以降）**
+///
+/// - `ranked` / `all` には、旧経路（legacy）と埋め込みメタデータ由来（embedded）の
+///   **両方の検索結果を統合した候補集合**が入る。
+/// - したがって `metadata_match_candidates.rules_score` / `rules_rank` は
+///   「rules-1 固有の点数」でも「rules-safe 固有の点数」でもない。
+///   **その run が保存した combined deterministic candidate set 上の最良スコアと順位**である。
+///   同じ作品が両方の検索で見つかった場合は高い方の点数を採るため、
+///   埋め込み検索の年ヒントで加点された値になることがある。
+/// - 各判定器の正式な結論・top candidate・score は `metadata_match_verdicts` を正とする。
+///   本番に反映されるのは `matcher = 'rules-safe'` の行。
+/// - 候補ごとの matcher 別 score / rank の分離は PR3 の migration 023 で行う
+///   （docs/FOLLOWUPS.md 参照）。
 pub struct RunInput<'a> {
     pub work_id: i64,
     pub batch_id: Option<&'a str>,
@@ -151,9 +167,10 @@ pub struct RunInput<'a> {
     pub snapshot: &'a PreMatchSnapshot,
     pub parsed: &'a ParsedTitle,
     pub queries: &'a [SearchQuery],
-    /// merge_and_rank を通した候補（閾値以上・最大10件）
+    /// merge_and_rank を通した候補（閾値以上・最大10件）。
+    /// PR2.5 以降は combined candidate set（legacy + embedded）
     pub ranked: &'a [TmdbCandidate],
-    /// 落ちた候補も含む全候補（検索結果の順）
+    /// 落ちた候補も含む全候補（検索結果の順）。こちらも combined
     pub all: &'a [TmdbCandidate],
     pub rules_safe: &'a SafeMatchOutcome<'a>,
     /// rules-1（比較基準）の結論。旧経路の候補だけから選ぶ
@@ -170,10 +187,22 @@ pub struct RunInput<'a> {
 
 #[derive(Serialize)]
 struct PolicySnapshot {
+    /// 実際に works へ反映した判定器のバージョン
+    policy_version: &'static str,
     threshold_auto: i32,
     threshold_candidate: i32,
     year_tolerance: i32,
     explicit_conflicts: [&'static str; 2],
+    /// 本番で埋め込みメタデータが果たす役割。AUTO を止めるだけで、AUTO を増やさない
+    embedded_metadata_role: &'static str,
+    /// 埋め込みメタデータの年を年ヒントとして認めるか（本番では認めない）
+    embedded_year_is_trusted_hint: bool,
+    embedded_year_tolerance: i32,
+    /// 埋め込みメタデータ由来の拒否理由
+    embedded_conflict_reasons: [&'static str; 5],
+    /// 比較用に併記する判定器
+    shadow_matcher_version: &'static str,
+    rules_v1_version: &'static str,
 }
 
 #[derive(Serialize)]
@@ -182,10 +211,13 @@ struct CandidateSnapshot<'a> {
     original_title: Option<&'a str>,
     year: Option<i32>,
     poster_path: Option<&'a str>,
+    /// ORIGINAL_LANGUAGE_MISMATCH を保存済み run だけで再現するために必要
+    original_language: Option<&'a str>,
 }
 
 fn policy_snapshot_json() -> String {
     serde_json::to_string(&PolicySnapshot {
+        policy_version: POLICY_VERSION,
         threshold_auto: THRESHOLD_AUTO,
         threshold_candidate: THRESHOLD_CANDIDATE,
         year_tolerance: YEAR_TOLERANCE,
@@ -193,6 +225,18 @@ fn policy_snapshot_json() -> String {
             metadata_matcher::reason::EPISODE_MARKER_VS_MOVIE,
             metadata_matcher::reason::PART_MISMATCH,
         ],
+        embedded_metadata_role: "veto_only",
+        embedded_year_is_trusted_hint: false,
+        embedded_year_tolerance: metadata_matcher::EMBEDDED_YEAR_TOLERANCE,
+        embedded_conflict_reasons: [
+            metadata_matcher::reason::EMBEDDED_YEAR_CONFLICT,
+            metadata_matcher::reason::YEAR_SOURCES_DISAGREE,
+            metadata_matcher::reason::ORIGINAL_LANGUAGE_MISMATCH,
+            metadata_matcher::reason::EDITION_MARKER,
+            metadata_matcher::reason::EPISODE_ID_VS_TV,
+        ],
+        shadow_matcher_version: SHADOW_VERSION,
+        rules_v1_version: RULES_V1_VERSION,
     })
     .unwrap_or_else(|_| "{}".to_string())
 }
@@ -272,6 +316,8 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
     for (index, (candidate, search_rank, rules_rank)) in
         candidates_to_store(input.ranked, input.all).into_iter().enumerate()
     {
+        // rules_score / rules_rank は combined candidate set 上の値。
+        // matcher ごとの結論は metadata_match_verdicts を見ること
         let conflicts = metadata_matcher::explicit_conflicts(candidate, input.parsed);
         let query_source = input
             .candidate_sources
@@ -298,6 +344,7 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
                     original_title: candidate.original_title.as_deref(),
                     year: candidate.year,
                     poster_path: candidate.poster_path.as_deref(),
+                    original_language: candidate.original_language.as_deref(),
                 })
                 .unwrap_or_else(|_| "{}".to_string()),
                 json_array(&conflicts),
@@ -863,6 +910,89 @@ mod tests {
             .unwrap();
         assert_eq!(reason, "review_decision");
         assert_eq!(resolved, None);
+    }
+
+    /// 監査対応: run から governing 判定を再現できるだけの情報が残ること
+    #[test]
+    fn run_records_policy_and_candidate_inputs_needed_for_replay() {
+        let f = fixture("The.Guilty.2019.mkv");
+        let snapshot = PreMatchSnapshot::capture(&f.conn, f.work_id).unwrap();
+        let mut candidate = candidate(1, "THE GUILTY/ギルティ", Some(2019), 95);
+        candidate.original_language = Some("en".to_string());
+        let ranked = vec![candidate];
+        let evidence = metadata_matcher::EmbeddedEvidence {
+            audio_languages: vec!["dan".to_string()],
+            ..Default::default()
+        };
+        let outcome =
+            metadata_matcher::rules_safe_with_embedded(&ranked, &f.parsed, &evidence);
+        assert!(outcome
+            .reasons
+            .contains(&metadata_matcher::reason::ORIGINAL_LANGUAGE_MISMATCH));
+
+        let run_id = record_run(
+            &f.conn,
+            &run_for(&f, &snapshot, &ranked, &ranked, &outcome, TriggerKind::Single),
+        )
+        .unwrap();
+
+        let (policy_version, state_schema, policy_json): (String, String, String) = f
+            .conn
+            .query_row(
+                "SELECT policy_version, state_schema_version, policy_snapshot_json
+                 FROM metadata_match_runs WHERE id = ?1",
+                rusqlite::params![run_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(policy_version, "rules-safe-2");
+        assert_eq!(state_schema, "cm-prematch-2");
+        for expected in [
+            "\"threshold_auto\":75",
+            "\"threshold_candidate\":40",
+            "\"year_tolerance\":1",
+            "\"embedded_metadata_role\":\"veto_only\"",
+            "\"embedded_year_is_trusted_hint\":false",
+            "\"embedded_year_tolerance\":1",
+            "EMBEDDED_YEAR_CONFLICT",
+            "YEAR_SOURCES_DISAGREE",
+            "ORIGINAL_LANGUAGE_MISMATCH",
+            "EDITION_MARKER",
+            "EPISODE_ID_VS_TV",
+            "EPISODE_MARKER_VS_MOVIE",
+            "PART_MISMATCH",
+            "rules-tags-shadow-2",
+        ] {
+            assert!(policy_json.contains(expected), "policy に {expected} が無い: {policy_json}");
+        }
+
+        // 候補側: 言語判定を保存済み run だけで再現できる
+        let snapshot_json: String = f
+            .conn
+            .query_row(
+                "SELECT tmdb_snapshot_json FROM metadata_match_candidates WHERE run_id = ?1",
+                rusqlite::params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&snapshot_json).unwrap();
+        assert_eq!(stored["original_language"], "en");
+        assert_eq!(stored["year"], 2019);
+
+        let replayed = TmdbCandidate {
+            tmdb_id: 1,
+            media_type: "movie".to_string(),
+            title: stored["title"].as_str().unwrap().to_string(),
+            original_title: None,
+            year: stored["year"].as_i64().map(|y| y as i32),
+            poster_path: None,
+            overview: None,
+            original_language: stored["original_language"].as_str().map(str::to_string),
+            confidence: 95,
+            reasons: Vec::new(),
+        };
+        assert!(metadata_matcher::embedded_conflicts(&replayed, &evidence)
+            .contains(&metadata_matcher::reason::ORIGINAL_LANGUAGE_MISMATCH));
     }
 
     /// PR2.5: 影判定と候補の出どころが残ること

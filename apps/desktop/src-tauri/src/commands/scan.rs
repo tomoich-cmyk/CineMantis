@@ -116,6 +116,26 @@ pub(crate) fn extract_container_tags(
     ContainerTags::from_ffprobe(format_tags, &streams)
 }
 
+/// タグ保存の失敗を観測できるようにしつつ、スキャン全体は止めない。
+/// 保存できなかった行は container_tags_json が NULL のまま残り、後埋めで再試行できる。
+pub(crate) fn store_container_tags_logged(
+    conn: &rusqlite::Connection,
+    file_id: i64,
+    tags: &crate::services::container_tags::ContainerTags,
+    path_hint: Option<&str>,
+    captured_at_scan: bool,
+) {
+    match store_container_tags(conn, file_id, tags, path_hint, captured_at_scan) {
+        Ok(0) => eprintln!(
+            "[tags] 保存対象の files 行が見つかりません（NULL のまま残します）: file_id={file_id}"
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!(
+            "[tags] 保存に失敗しました（NULL のまま残し、次回の取り込みで再試行します）: file_id={file_id} {error}"
+        ),
+    }
+}
+
 /// 1ファイルだけ ffprobe して埋め込みメタデータを読む（後埋め用）。
 /// プローブに失敗したときだけ None を返す（タグが無いファイルは空のタグ）。
 pub(crate) fn probe_container_tags(
@@ -394,7 +414,7 @@ pub async fn scan_source(
                         extract_probe_info(probe);
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     if let Some(tags) = &tags {
-                        let _ = store_container_tags(&conn, file_id, tags, Some(&path_str), true);
+                        store_container_tags_logged(&conn, file_id, tags, Some(&path_str), true);
                     }
                     conn.execute(
                         "UPDATE files SET
@@ -440,7 +460,7 @@ pub async fn scan_source(
                 )
                 .map_err(|e| e.to_string())?;
                 if let Some(tags) = &tags {
-                    let _ = store_container_tags(&conn, file_id, tags, Some(&path_str), true);
+                    store_container_tags_logged(&conn, file_id, tags, Some(&path_str), true);
                 }
 
                 // Auto-create a Work from filename (title estimation)

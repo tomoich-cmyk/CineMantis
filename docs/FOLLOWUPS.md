@@ -22,6 +22,23 @@ awards の取り込み処理が親行を消しているか、取り込み途中�
 - rules-safe と rules-tags-shadow の一致・不一致
 を集計する画面（またはレポート）を作る。rules-tags-shadow の本番昇格判断はこの数字で行う。
 
+### 4. PR3 の migration 023 で候補ごとの matcher 別 score / rank を分離する
+PR2.5 以降、`metadata_match_candidates.rules_score` / `rules_rank` は
+**その run が保存した combined deterministic candidate set 上の最良スコアと順位**であり、
+rules-1 固有でも rules-safe 固有でもない（同じ作品が旧経路と埋め込み検索の両方で
+見つかった場合は高い方の点数を採るため）。各判定器の正式な結論・top candidate・score は
+`metadata_match_verdicts` を正とする。
+
+023 で、候補ごとに判定器別の値を明示的に持たせる。形式は 023 の設計時に決める。
+- legacy_score / legacy_rank（旧経路 = rules-1 / rules-safe の入力）
+- rules-tags-shadow の score / rank
+- 将来の Jev candidate score
+既存行の移行方法（NULL のままにするか、query_source から推定するか）も 023 で決める。
+今回は migration を追加しない。
+
+注記: 候補ダイアログは統合後のスコアを表示し続けてよい。ただしこの数値を
+production AUTO の確信度として扱わないこと。
+
 ## 実装中に見つかったもの（PR1 / PR2 / PR2.5）
 
 - migration 015 が `db.rs` に繋がっていない（存在するが適用されない）
