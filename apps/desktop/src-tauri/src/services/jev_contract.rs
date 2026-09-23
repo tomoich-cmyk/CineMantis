@@ -14,9 +14,14 @@
 //! - Noul の値も Choice の confidence も、CineMantis では「正解確率」として扱わない。
 //!   当面は shadow 評価用のモデル出力として記録するだけ（TypeSafe の confidence は
 //!   回答分布の集中度であって、CineMantis の正解率ではない）。
-//! - **Score は初版では出さない。** 使うときは 0〜100 の連続値ではなく、
-//!   順序付き rubric（例: 0=contradictory 〜 4=very strong）にする。検証側は
-//!   rubric を受け取れるようにしてあるので、contract の版を上げれば足りる。
+//! - **Score は `jev-contract-1` では扱わない。** 生成も検証もしない。
+//!   導入するときは contract の版を上げ、その時点の TypeSafe 仕様に合わせて実装する。
+//!
+//! # C3A と C3B の境界
+//!
+//! このモジュールの入口は [`parse_answers`] と [`validate_response`]。
+//! HTTP・status・応答サイズ・top-level（`model` / `usage` / request id）・model mismatch は
+//! C3B の担当で、C3B は `answers` の値だけをここへ渡す。
 //!
 //! # contract hash と実際の質問
 //!
@@ -59,12 +64,10 @@ Never refer to a catalogue id that is not listed in the state, and never invent 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QuestionKind {
-    /// yes である確率を 0〜1 で返す
+    /// yes である確率を 0〜1 で返す（wire では `"noul"`）
     Noul,
-    /// 選択肢・各選択肢の確率・confidence を返す
+    /// 選択肢・各選択肢の確率・confidence を返す（wire では `"choice"`）
     Choice,
-    /// 順序付き rubric 上の期待値・分布・confidence を返す
-    Score,
 }
 
 impl QuestionKind {
@@ -72,12 +75,11 @@ impl QuestionKind {
         match self {
             QuestionKind::Noul => "noul",
             QuestionKind::Choice => "choice",
-            QuestionKind::Score => "score",
         }
     }
 }
 
-/// Choice / Score の選択肢1つ（キーと、その意味の説明）
+/// Choice の選択肢1つ（キーと、その意味の説明）
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Criterion {
     pub key: String,
@@ -94,24 +96,15 @@ pub struct QuestionSpec {
     /// Choice のときの選択肢と説明
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<Criterion>,
-    /// Score のときの rubric（順序付き。低い方から並べる）
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub rubric: Vec<String>,
 }
 
 impl QuestionSpec {
     fn noul(id: String, instructions: String) -> Self {
-        QuestionSpec {
-            id,
-            kind: QuestionKind::Noul,
-            instructions,
-            criteria: Vec::new(),
-            rubric: Vec::new(),
-        }
+        QuestionSpec { id, kind: QuestionKind::Noul, instructions, criteria: Vec::new() }
     }
 
     fn choice(id: String, instructions: String, criteria: Vec<Criterion>) -> Self {
-        QuestionSpec { id, kind: QuestionKind::Choice, instructions, criteria, rubric: Vec::new() }
+        QuestionSpec { id, kind: QuestionKind::Choice, instructions, criteria }
     }
 
     /// 選択肢のキー（検証に使う）
@@ -217,13 +210,6 @@ pub fn questions_to_json(questions: &[QuestionSpec]) -> Value {
             }
             object.insert("criteria".into(), Value::Object(criteria));
         }
-        if !question.rubric.is_empty() {
-            let mut rubric = Map::new();
-            for (level, label) in question.rubric.iter().enumerate() {
-                rubric.insert(level.to_string(), Value::String(label.clone()));
-            }
-            object.insert("rubric".into(), Value::Object(rubric));
-        }
         wire.insert(question.id.clone(), Value::Object(object));
     }
     Value::Object(wire)
@@ -308,7 +294,7 @@ fn validation_policy() -> Value {
         "probability_range": [0.0, 1.0],
         "probability_sum_tolerance": PROBABILITY_SUM_TOLERANCE,
         "confidence_range": [0.0, 1.0],
-        "score_rubric": "ordered rubric labels must match the question exactly",
+        "supported_question_types": ["noul", "choice"],
         "best_match_options": "candidate keys sent, plus NONE",
         "catalogue_id_from_model": "never accepted; resolved from the candidate identity table"
     })
@@ -395,23 +381,21 @@ fn write_canonical(value: &Value, out: &mut String) {
 
 // ─── 応答 ────────────────────────────────────────────────────────────────────
 
-/// 応答1件（正規化前）。
-/// 実際の wire 形式は C3B で公式 Swagger / SDK に合わせる。ここはその中間表現。
+/// 応答1件。公式 wire をそのまま写したもの。
+///
+/// ```json
+/// {"type":"noul","noul":0.73}
+/// {"type":"choice","choice":"c1","confidence":0.8,"probabilities":{"c1":0.8,"NONE":0.2}}
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum RawAnswer {
-    Noul {
-        value: f64,
-    },
+    /// wire の `noul`（yes である確率）
+    Noul { value: f64 },
+    /// wire の `choice`（選んだ選択肢）。`confidence` は必須
     Choice {
         label: String,
         probabilities: BTreeMap<String, f64>,
-        confidence: Option<f64>,
-    },
-    Score {
-        score: f64,
-        rubric: Vec<String>,
-        probabilities: BTreeMap<String, f64>,
-        confidence: Option<f64>,
+        confidence: f64,
     },
 }
 
@@ -420,44 +404,15 @@ impl RawAnswer {
         match self {
             RawAnswer::Noul { .. } => QuestionKind::Noul,
             RawAnswer::Choice { .. } => QuestionKind::Choice,
-            RawAnswer::Score { .. } => QuestionKind::Score,
         }
     }
 }
 
-/// 応答全体（正規化前）
-#[derive(Debug, Clone, PartialEq)]
-pub struct RawResponse {
-    pub model: Option<String>,
-    pub answers: BTreeMap<String, RawAnswer>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-}
-
-impl RawResponse {
-    /// SystemOne の応答 JSON を読む。
-    /// `answers` は**公式の map 形式のみ**受け付ける（配列などは fail closed）。
-    pub fn from_json(raw: &str) -> Result<RawResponse, JevContractError> {
-        let value: Value = serde_json::from_str(raw)
-            .map_err(|e| JevContractError::Parse(e.to_string()))?;
-        let model = value
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let usage = value.get("usage");
-        let input_tokens = usage.and_then(|u| u.get("input_tokens")).and_then(Value::as_i64);
-        let output_tokens = usage.and_then(|u| u.get("output_tokens")).and_then(Value::as_i64);
-
-        let answers_value = value
-            .get("answers")
-            .ok_or_else(|| JevContractError::Parse("answers がありません".to_string()))?;
-        let answers = parse_answers(answers_value)?;
-        Ok(RawResponse { model, answers, input_tokens, output_tokens })
-    }
-}
-
-/// `answers` オブジェクトを読む。C3B は HTTP と top-level の取り出しだけを行い、
-/// ここへ `answers` の値をそのまま渡す（別形式へ読み替えない）。
+/// `answers` オブジェクトを読む。**C3A の入口はここ。**
+///
+/// C3B は HTTP・status・応答サイズ・top-level（`model` / `usage`）・model mismatch を扱い、
+/// `answers` の値だけをここへ渡す（別形式へ読み替えない）。
+/// 公式の map 形式以外（配列など）は fail closed で拒否する。
 pub fn parse_answers(answers: &Value) -> Result<BTreeMap<String, RawAnswer>, JevContractError> {
     let Value::Object(map) = answers else {
         return Err(JevContractError::Parse(
@@ -472,67 +427,38 @@ pub fn parse_answers(answers: &Value) -> Result<BTreeMap<String, RawAnswer>, Jev
 }
 
 fn parse_answer(id: &str, value: &Value) -> Result<RawAnswer, JevContractError> {
-    let kind = value
-        .get("kind")
-        .or_else(|| value.get("type"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let confidence = value.get("confidence").and_then(Value::as_f64);
-    let probabilities = |key: &str| -> BTreeMap<String, f64> {
-        value
-            .get(key)
-            .and_then(Value::as_object)
-            .map(|map| {
-                map.iter()
-                    .filter_map(|(k, v)| v.as_f64().map(|v| (k.clone(), v)))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
     match kind {
         "noul" => {
-            let value = value
-                .get("value")
+            // 公式は `noul`。旧 `value` は受け付けない（fail closed）
+            let noul = value
+                .get("noul")
                 .and_then(Value::as_f64)
-                .ok_or_else(|| JevContractError::Parse(format!("{id}: noul の value がありません")))?;
-            Ok(RawAnswer::Noul { value })
+                .ok_or_else(|| JevContractError::Parse(format!("{id}: noul がありません")))?;
+            Ok(RawAnswer::Noul { value: noul })
         }
         "choice" => {
+            // 公式は `choice`。旧 `label` は受け付けない
             let label = value
-                .get("label")
+                .get("choice")
                 .and_then(Value::as_str)
-                .ok_or_else(|| JevContractError::Parse(format!("{id}: choice の label がありません")))?
+                .ok_or_else(|| JevContractError::Parse(format!("{id}: choice がありません")))?
                 .to_string();
-            Ok(RawAnswer::Choice {
-                label,
-                probabilities: probabilities("probabilities"),
-                confidence,
-            })
-        }
-        "score" => {
-            let score = value
-                .get("score")
+            // 公式の ChoiceResponse では confidence は必須
+            let confidence = value
+                .get("confidence")
                 .and_then(Value::as_f64)
-                .ok_or_else(|| JevContractError::Parse(format!("{id}: score がありません")))?;
-            let rubric = value
-                .get("rubric")
-                .or_else(|| value.get("legend"))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
+                .ok_or_else(|| JevContractError::Parse(format!("{id}: confidence がありません")))?;
+            let probabilities = value
+                .get("probabilities")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(key, value)| value.as_f64().map(|v| (key.clone(), v)))
                         .collect()
                 })
                 .unwrap_or_default();
-            Ok(RawAnswer::Score {
-                score,
-                rubric,
-                probabilities: probabilities("probabilities"),
-                confidence,
-            })
+            Ok(RawAnswer::Choice { label, probabilities, confidence })
         }
         other => Err(JevContractError::Parse(format!("{id}: 未知の回答種別 {other}"))),
     }
@@ -547,11 +473,8 @@ pub struct JevAnswers {
     pub best_match: Option<CandidateIdentity>,
     /// `best_match` の選択肢ごとの確率
     pub best_match_probabilities: BTreeMap<String, f64>,
-    /// Choice が返した confidence（回答分布の集中度。正解率ではない）
-    pub best_match_confidence: Option<f64>,
-    pub model: Option<String>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
+    /// Choice が返した confidence（回答分布の集中度。CineMantis の正解率ではない）
+    pub best_match_confidence: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -571,15 +494,15 @@ pub struct CandidateProbability {
 pub fn validate_response(
     questions: &[QuestionSpec],
     identity: &[CandidateIdentity],
-    response: &RawResponse,
+    answers: &BTreeMap<String, RawAnswer>,
 ) -> Result<JevAnswers, JevContractError> {
     // 質問集合との完全一致
     for question in questions {
-        if !response.answers.contains_key(&question.id) {
+        if !answers.contains_key(&question.id) {
             return Err(JevContractError::MissingAnswer { question_id: question.id.clone() });
         }
     }
-    for id in response.answers.keys() {
+    for id in answers.keys() {
         if !questions.iter().any(|q| q.id == *id) {
             return Err(JevContractError::UnknownAnswer { question_id: id.clone() });
         }
@@ -588,10 +511,10 @@ pub fn validate_response(
     let mut same_work = Vec::new();
     let mut best_match_key: Option<String> = None;
     let mut best_match_probabilities = BTreeMap::new();
-    let mut best_match_confidence = None;
+    let mut best_match_confidence = 0.0;
 
     for question in questions {
-        let answer = &response.answers[&question.id];
+        let answer = &answers[&question.id];
         if answer.kind() != question.kind {
             return Err(JevContractError::KindMismatch {
                 question_id: question.id.clone(),
@@ -630,28 +553,12 @@ pub fn validate_response(
                     });
                 }
                 check_probability_map(&question.id, probabilities, &keys)?;
-                check_optional_unit_range(&question.id, *confidence)?;
+                check_unit_range(&question.id, *confidence)?;
                 if question.id == BEST_MATCH_ID {
                     best_match_key = Some(label.clone());
                     best_match_probabilities = probabilities.clone();
                     best_match_confidence = *confidence;
                 }
-            }
-            RawAnswer::Score { score, rubric, probabilities, confidence } => {
-                if *rubric != question.rubric {
-                    return Err(JevContractError::RubricMismatch {
-                        question_id: question.id.clone(),
-                    });
-                }
-                let max = (question.rubric.len().saturating_sub(1)) as f64;
-                if !score.is_finite() || *score < 0.0 || *score > max {
-                    return Err(JevContractError::ValueOutOfRange {
-                        question_id: question.id.clone(),
-                        value: *score,
-                    });
-                }
-                check_probability_map(&question.id, probabilities, &question.rubric)?;
-                check_optional_unit_range(&question.id, *confidence)?;
             }
         }
     }
@@ -672,15 +579,7 @@ pub fn validate_response(
         )
     };
 
-    Ok(JevAnswers {
-        same_work,
-        best_match,
-        best_match_probabilities,
-        best_match_confidence,
-        model: response.model.clone(),
-        input_tokens: response.input_tokens,
-        output_tokens: response.output_tokens,
-    })
+    Ok(JevAnswers { same_work, best_match, best_match_probabilities, best_match_confidence })
 }
 
 fn check_unit_range(question_id: &str, value: f64) -> Result<(), JevContractError> {
@@ -691,16 +590,6 @@ fn check_unit_range(question_id: &str, value: f64) -> Result<(), JevContractErro
         });
     }
     Ok(())
-}
-
-fn check_optional_unit_range(
-    question_id: &str,
-    value: Option<f64>,
-) -> Result<(), JevContractError> {
-    match value {
-        Some(value) => check_unit_range(question_id, value),
-        None => Ok(()),
-    }
 }
 
 fn check_probability_map(
@@ -749,7 +638,6 @@ pub enum JevContractError {
     UnknownChoiceLabel { question_id: String, label: String },
     ProbabilityKeysMismatch { question_id: String },
     ProbabilitySum { question_id: String, sum: f64 },
-    RubricMismatch { question_id: String },
     Parse(String),
 }
 
@@ -783,9 +671,6 @@ impl std::fmt::Display for JevContractError {
             }
             JevContractError::ProbabilitySum { question_id, sum } => {
                 write!(f, "{question_id} の確率の合計がずれています: {sum}")
-            }
-            JevContractError::RubricMismatch { question_id } => {
-                write!(f, "{question_id} の rubric が一致しません")
             }
             JevContractError::Parse(message) => write!(f, "応答を読めません: {message}"),
         }
@@ -828,35 +713,36 @@ mod tests {
             .collect()
     }
 
-    fn ok_response(count: usize, label: &str) -> RawResponse {
-        let mut answers = BTreeMap::new();
+    /// 公式 wire の answers オブジェクトを組み立てる
+    fn official_answers(count: usize, choice: &str) -> Value {
+        let mut answers = Map::new();
         for key in keys(count) {
             answers.insert(
                 format!("{key}{SAME_WORK_SUFFIX}"),
-                RawAnswer::Noul { value: 0.8 },
+                json!({"type": "noul", "noul": 0.8}),
             );
         }
-        let mut probabilities = BTreeMap::new();
         let mut options = keys(count);
         options.push(NONE_OPTION.to_string());
         let share = 1.0 / options.len() as f64;
-        for option in &options {
-            probabilities.insert(option.clone(), share);
-        }
+        let probabilities: Map<String, Value> = options
+            .iter()
+            .map(|option| (option.clone(), json!(share)))
+            .collect();
         answers.insert(
             BEST_MATCH_ID.to_string(),
-            RawAnswer::Choice {
-                label: label.to_string(),
-                probabilities,
-                confidence: Some(0.7),
-            },
+            json!({
+                "type": "choice",
+                "choice": choice,
+                "confidence": 0.7,
+                "probabilities": Value::Object(probabilities)
+            }),
         );
-        RawResponse {
-            model: Some("jev-x".to_string()),
-            answers,
-            input_tokens: Some(512),
-            output_tokens: Some(8),
-        }
+        Value::Object(answers)
+    }
+
+    fn parsed(count: usize, choice: &str) -> BTreeMap<String, RawAnswer> {
+        parse_answers(&official_answers(count, choice)).unwrap()
     }
 
     // ─── canonical JSON と hash ──────────────────────────────────────────────
@@ -867,19 +753,18 @@ mod tests {
         let b = json!({"a": {"c": true, "d": [3, 1, 2]}, "b": 1});
         assert_eq!(canonical_json(&a), canonical_json(&b));
         assert_eq!(canonical_json(&a), r#"{"a":{"c":true,"d":[3,1,2]},"b":1}"#);
-        // 配列の順序が変われば別物
-        assert_ne!(
-            canonical_json(&json!([1, 2])),
-            canonical_json(&json!([2, 1]))
-        );
+        assert_ne!(canonical_json(&json!([1, 2])), canonical_json(&json!([2, 1])));
     }
 
     /// contract hash の golden。文面・生成規則・基準・検証規則を変えたらここが落ちる。
     ///
     /// 経緯: SHA-256 を自前実装から `sha2` crate へ移した時点では、同じ内容に対して
-    /// hash は `49f81b23…` のまま変わらなかった（実装と canonical 化がどちらも正しかった）。
+    /// hash は変わらなかった（実装と canonical 化がどちらも正しかった）。
     /// その後 wire 形式（questions object 化・criteria の説明・best_match の文面）を
     /// 変えたため、**内容の変更として** golden を更新している。
+    /// C3A.1 の応答 wire 修正では contract 文書を変えていない。ただし初版を確定する際に
+    /// `score_rubric` を落として `supported_question_types` を入れたので、その分だけ
+    /// golden を更新している（jev-contract-1 は未登録・未使用のため版は据え置き）。
     #[test]
     fn contract_hash_is_stable() {
         let contract = contract_v1();
@@ -887,25 +772,26 @@ mod tests {
         assert_eq!(contract.state_schema_version, JEV_STATE_SCHEMA_VERSION);
         assert_eq!(
             contract.canonical_sha256,
-            "a5cea3733afa3c4375f627a6e1d59b94a4fa94d7bd28a90366d9ff607fa11d57",
+            "d585fb9a49d39f77b45730a3763a35cb2a0cf85d36a4753a2e860f7be5765df3",
             "contract の内容が変わった。意図した変更なら contract_version を上げて golden を更新する"
         );
     }
 
-    /// 整形やキー順が違っても hash は同じ。モデル名は hash に入らない
     #[test]
     fn contract_hash_ignores_formatting_and_model() {
         let contract = contract_v1();
         let reordered = contract_hash(
             &contract.state_schema_version,
             &contract.instructions,
-            &serde_json::from_str::<Value>(&serde_json::to_string_pretty(&contract.questions_template).unwrap()).unwrap(),
+            &serde_json::from_str::<Value>(
+                &serde_json::to_string_pretty(&contract.questions_template).unwrap(),
+            )
+            .unwrap(),
             &contract.criteria,
             &contract.validation_policy,
         );
         assert_eq!(contract.canonical_sha256, reordered);
 
-        // モデル名はどこにも入っていない
         let document = canonical_json(&json!({
             "instructions": contract.instructions,
             "questions_template": contract.questions_template,
@@ -916,11 +802,9 @@ mod tests {
         assert!(!document.to_lowercase().contains("model_name"));
     }
 
-    /// 実際の候補キーやタイトルは hash の対象に入らない
     #[test]
     fn contract_hash_does_not_depend_on_run_values() {
         let before = contract_v1().canonical_sha256;
-        // 質問を作っても contract は変わらない
         let _ = build_questions(&keys(1)).unwrap();
         let _ = build_questions(&keys(3)).unwrap();
         assert_eq!(contract_v1().canonical_sha256, before);
@@ -943,7 +827,6 @@ mod tests {
                 assert_eq!(question.id, format!("{cand_key}_same_work"));
                 assert_eq!(question.kind, QuestionKind::Noul);
                 assert!(question.criteria.is_empty());
-                // 質問 ID だけに意味を持たせず、本文でも対象を書く
                 assert!(question.instructions.contains(&format!("candidate {cand_key}")));
             }
 
@@ -961,10 +844,11 @@ mod tests {
                 none.description
             );
 
-            // certainty 質問は作らない
+            // certainty 質問は作らない / Score は v1 で扱わない
             assert!(!questions.iter().any(|q| q.id.contains("certainty")));
-            // Score は初版では出さない
-            assert!(!questions.iter().any(|q| q.kind == QuestionKind::Score));
+            let wire = canonical_json(&questions_to_json(&questions));
+            assert!(!wire.contains("score"), "Score は v1 で生成しない");
+            assert!(!wire.contains("rubric"));
         }
     }
 
@@ -981,7 +865,6 @@ mod tests {
         );
     }
 
-    /// TypeSafe へ実際に送る wire 形式（question id をキーにした map）
     #[test]
     fn questions_are_serialized_as_the_typesafe_wire_object() {
         for count in 1..=MAX_CANDIDATES {
@@ -993,7 +876,10 @@ mod tests {
             for key in keys(count) {
                 let question = &object[&format!("{key}_same_work")];
                 assert_eq!(question["type"], "noul");
-                assert!(question["instructions"].as_str().unwrap().contains(&format!("candidate {key}")));
+                assert!(question["instructions"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("candidate {key}")));
                 assert!(question.get("criteria").is_none(), "noul に criteria は付けない");
                 assert!(question.get("kind").is_none(), "wire のキーは type");
                 assert!(question.get("prompt").is_none(), "wire のキーは instructions");
@@ -1011,16 +897,6 @@ mod tests {
                 .unwrap()
                 .contains("None of the supplied candidates"));
         }
-
-        // K=2 の実形
-        let wire = questions_to_json(&build_questions(&keys(2)).unwrap());
-        let text = canonical_json(&wire);
-        assert!(text.starts_with("{\"best_match\":{\"criteria\":{\"NONE\":"));
-        assert!(text.contains("\"c1\":\"Candidate c1 in the supplied state is the same work"));
-        assert!(text.contains("\"c1_same_work\":{\"instructions\":"));
-        assert!(text.contains("\"type\":\"noul\""));
-        // instructions は contract 側にあり、質問には混ぜない
-        assert!(!text.contains("Do not use any outside knowledge"));
     }
 
     /// K=2 の wire JSON を丸ごと固定する（C4 が保存するのはこの形）
@@ -1040,53 +916,170 @@ mod tests {
         assert!(instructions.contains("never invent one"));
     }
 
+    // ─── 公式 wire の応答 ────────────────────────────────────────────────────
+
+    /// Noul は公式の `noul` から読む
+    #[test]
+    fn noul_official_wire_is_accepted() {
+        let answers = parse_answers(&json!({
+            "c1_same_work": {"type": "noul", "noul": 0.91},
+            "best_match": {"type": "choice", "choice": "c1", "confidence": 0.87,
+                           "probabilities": {"c1": 0.87, "NONE": 0.13}}
+        }))
+        .unwrap();
+        assert_eq!(answers["c1_same_work"], RawAnswer::Noul { value: 0.91 });
+
+        let validated =
+            validate_response(&build_questions(&keys(1)).unwrap(), &identity(1), &answers).unwrap();
+        assert_eq!(validated.same_work[0].same_work, 0.91);
+        assert_eq!(validated.same_work[0].tmdb_id, 101);
+    }
+
+    /// Choice は公式の `choice` と必須の `confidence` から読む
+    #[test]
+    fn choice_official_wire_is_accepted() {
+        let answers = parse_answers(&json!({
+            "c1_same_work": {"type": "noul", "noul": 0.91},
+            "best_match": {"type": "choice", "choice": "c1", "confidence": 0.87,
+                           "probabilities": {"c1": 0.87, "NONE": 0.13}}
+        }))
+        .unwrap();
+        assert_eq!(
+            answers[BEST_MATCH_ID],
+            RawAnswer::Choice {
+                label: "c1".to_string(),
+                probabilities: BTreeMap::from([
+                    ("c1".to_string(), 0.87),
+                    ("NONE".to_string(), 0.13)
+                ]),
+                confidence: 0.87,
+            }
+        );
+
+        let validated =
+            validate_response(&build_questions(&keys(1)).unwrap(), &identity(1), &answers).unwrap();
+        assert_eq!(validated.best_match.unwrap().tmdb_id, 101);
+        assert_eq!(validated.best_match_confidence, 0.87);
+    }
+
+    /// 旧フィールド名（`value` / `label`）は受け付けない
+    #[test]
+    fn legacy_field_names_are_rejected() {
+        // Noul の value
+        assert!(matches!(
+            parse_answers(&json!({"c1_same_work": {"type": "noul", "value": 0.91}})),
+            Err(JevContractError::Parse(_))
+        ));
+        // Noul の欠落
+        assert!(matches!(
+            parse_answers(&json!({"c1_same_work": {"type": "noul"}})),
+            Err(JevContractError::Parse(_))
+        ));
+        // Choice の label
+        assert!(matches!(
+            parse_answers(&json!({"best_match": {"type": "choice", "label": "c1",
+                                                 "confidence": 0.8,
+                                                 "probabilities": {"c1": 1.0}}})),
+            Err(JevContractError::Parse(_))
+        ));
+    }
+
+    /// Choice の confidence は必須
+    #[test]
+    fn choice_without_confidence_is_rejected() {
+        assert!(matches!(
+            parse_answers(&json!({"best_match": {"type": "choice", "choice": "c1",
+                                                 "probabilities": {"c1": 1.0}}})),
+            Err(JevContractError::Parse(_))
+        ));
+        // 数値でない confidence
+        assert!(matches!(
+            parse_answers(&json!({"best_match": {"type": "choice", "choice": "c1",
+                                                 "confidence": "high",
+                                                 "probabilities": {"c1": 1.0}}})),
+            Err(JevContractError::Parse(_))
+        ));
+        // 範囲外は検証で落ちる
+        let answers = parse_answers(&json!({
+            "c1_same_work": {"type": "noul", "noul": 0.5},
+            "best_match": {"type": "choice", "choice": "c1", "confidence": 1.4,
+                           "probabilities": {"c1": 0.9, "NONE": 0.1}}
+        }))
+        .unwrap();
+        assert!(matches!(
+            validate_response(&build_questions(&keys(1)).unwrap(), &identity(1), &answers),
+            Err(JevContractError::ValueOutOfRange { .. })
+        ));
+    }
+
+    /// 公式の answers map 以外は受け付けない
+    #[test]
+    fn only_the_official_answers_map_is_accepted() {
+        // 配列形式（未確認の wire）
+        assert!(matches!(
+            parse_answers(&json!([
+                {"id": "c1_same_work", "type": "noul", "noul": 0.9}
+            ])),
+            Err(JevContractError::Parse(_))
+        ));
+        assert!(matches!(parse_answers(&json!(5)), Err(JevContractError::Parse(_))));
+        assert!(matches!(parse_answers(&json!("x")), Err(JevContractError::Parse(_))));
+
+        // 未知の種別
+        assert!(matches!(
+            parse_answers(&json!({"x": {"type": "magic"}})),
+            Err(JevContractError::Parse(_))
+        ));
+        // Score は v1 では受け付けない
+        assert!(matches!(
+            parse_answers(&json!({"x": {"type": "score", "score": 3, "confidence": 0.5}})),
+            Err(JevContractError::Parse(_))
+        ));
+    }
+
     // ─── 応答の検証 ──────────────────────────────────────────────────────────
 
     #[test]
     fn valid_response_is_accepted_and_ids_come_from_identity() {
+        let answers = parsed(2, "c2");
         let questions = build_questions(&keys(2)).unwrap();
-        let identity = identity(2);
-        let answers = validate_response(&questions, &identity, &ok_response(2, "c2")).unwrap();
+        let validated = validate_response(&questions, &identity(2), &answers).unwrap();
 
-        assert_eq!(answers.same_work.len(), 2);
-        assert_eq!(answers.same_work[0].cand_key, "c1");
-        assert_eq!(answers.same_work[0].tmdb_id, 101);
-        assert_eq!(answers.same_work[0].same_work, 0.8);
+        assert_eq!(validated.same_work.len(), 2);
+        assert_eq!(validated.same_work[0].cand_key, "c1");
+        assert_eq!(validated.same_work[0].tmdb_id, 101);
+        assert_eq!(validated.same_work[0].same_work, 0.8);
 
-        let best = answers.best_match.expect("c2 が選ばれる");
+        let best = validated.best_match.expect("c2 が選ばれる");
         assert_eq!(best.cand_key, "c2");
         assert_eq!(best.tmdb_id, 102, "TMDB ID は identity から引く");
-        assert_eq!(answers.best_match_confidence, Some(0.7));
-        assert_eq!(answers.model.as_deref(), Some("jev-x"));
-        assert_eq!(answers.input_tokens, Some(512));
+        assert_eq!(validated.best_match_confidence, 0.7);
     }
 
     #[test]
     fn none_is_accepted_as_an_answer() {
         let questions = build_questions(&keys(3)).unwrap();
-        let answers = validate_response(&questions, &identity(3), &ok_response(3, NONE_OPTION)).unwrap();
-        assert!(answers.best_match.is_none());
-        assert_eq!(answers.same_work.len(), 3);
+        let validated =
+            validate_response(&questions, &identity(3), &parsed(3, NONE_OPTION)).unwrap();
+        assert!(validated.best_match.is_none());
+        assert_eq!(validated.same_work.len(), 3);
     }
 
     #[test]
     fn missing_or_extra_answers_are_invalid() {
         let questions = build_questions(&keys(2)).unwrap();
-        let identity = identity(2);
 
-        let mut missing = ok_response(2, "c1");
-        missing.answers.remove("c2_same_work");
+        let mut missing = parsed(2, "c1");
+        missing.remove("c2_same_work");
         assert_eq!(
-            validate_response(&questions, &identity, &missing),
+            validate_response(&questions, &identity(2), &missing),
             Err(JevContractError::MissingAnswer { question_id: "c2_same_work".to_string() })
         );
 
-        let mut extra = ok_response(2, "c1");
-        extra
-            .answers
-            .insert("c3_same_work".to_string(), RawAnswer::Noul { value: 0.5 });
+        let mut extra = parsed(2, "c1");
+        extra.insert("c3_same_work".to_string(), RawAnswer::Noul { value: 0.5 });
         assert_eq!(
-            validate_response(&questions, &identity, &extra),
+            validate_response(&questions, &identity(2), &extra),
             Err(JevContractError::UnknownAnswer { question_id: "c3_same_work".to_string() })
         );
     }
@@ -1094,16 +1087,17 @@ mod tests {
     #[test]
     fn kind_mismatch_is_invalid() {
         let questions = build_questions(&keys(1)).unwrap();
-        let mut response = ok_response(1, "c1");
-        response
-            .answers
-            .insert("c1_same_work".to_string(), RawAnswer::Choice {
+        let mut answers = parsed(1, "c1");
+        answers.insert(
+            "c1_same_work".to_string(),
+            RawAnswer::Choice {
                 label: "c1".to_string(),
                 probabilities: BTreeMap::new(),
-                confidence: None,
-            });
+                confidence: 0.5,
+            },
+        );
         assert_eq!(
-            validate_response(&questions, &identity(1), &response),
+            validate_response(&questions, &identity(1), &answers),
             Err(JevContractError::KindMismatch {
                 question_id: "c1_same_work".to_string(),
                 expected: "noul".to_string(),
@@ -1116,13 +1110,11 @@ mod tests {
     fn noul_values_outside_zero_to_one_are_invalid() {
         let questions = build_questions(&keys(1)).unwrap();
         for value in [-0.1, 1.5, f64::NAN, f64::INFINITY] {
-            let mut response = ok_response(1, "c1");
-            response
-                .answers
-                .insert("c1_same_work".to_string(), RawAnswer::Noul { value });
+            let mut answers = parsed(1, "c1");
+            answers.insert("c1_same_work".to_string(), RawAnswer::Noul { value });
             assert!(
                 matches!(
-                    validate_response(&questions, &identity(1), &response),
+                    validate_response(&questions, &identity(1), &answers),
                     Err(JevContractError::ValueOutOfRange { .. })
                 ),
                 "{value} が通ってしまう"
@@ -1133,184 +1125,66 @@ mod tests {
     #[test]
     fn choice_label_and_probabilities_are_checked() {
         let questions = build_questions(&keys(2)).unwrap();
-        let identity = identity(2);
 
         // 送っていない選択肢
-        let mut unknown_label = ok_response(2, "c1");
-        if let Some(RawAnswer::Choice { label, .. }) = unknown_label.answers.get_mut(BEST_MATCH_ID) {
+        let mut unknown_label = parsed(2, "c1");
+        if let Some(RawAnswer::Choice { label, .. }) = unknown_label.get_mut(BEST_MATCH_ID) {
             *label = "c3".to_string();
         }
         assert!(matches!(
-            validate_response(&questions, &identity, &unknown_label),
+            validate_response(&questions, &identity(2), &unknown_label),
             Err(JevContractError::UnknownChoiceLabel { .. })
         ));
 
         // 確率のキーが選択肢と違う
-        let mut bad_keys = ok_response(2, "c1");
-        if let Some(RawAnswer::Choice { probabilities, .. }) = bad_keys.answers.get_mut(BEST_MATCH_ID)
-        {
+        let mut bad_keys = parsed(2, "c1");
+        if let Some(RawAnswer::Choice { probabilities, .. }) = bad_keys.get_mut(BEST_MATCH_ID) {
             probabilities.remove(NONE_OPTION);
         }
         assert!(matches!(
-            validate_response(&questions, &identity, &bad_keys),
+            validate_response(&questions, &identity(2), &bad_keys),
             Err(JevContractError::ProbabilityKeysMismatch { .. })
         ));
 
         // 確率の合計が大きくずれる
-        let mut bad_sum = ok_response(2, "c1");
-        if let Some(RawAnswer::Choice { probabilities, .. }) = bad_sum.answers.get_mut(BEST_MATCH_ID)
-        {
+        let mut bad_sum = parsed(2, "c1");
+        if let Some(RawAnswer::Choice { probabilities, .. }) = bad_sum.get_mut(BEST_MATCH_ID) {
             for value in probabilities.values_mut() {
                 *value = 0.1;
             }
         }
         assert!(matches!(
-            validate_response(&questions, &identity, &bad_sum),
+            validate_response(&questions, &identity(2), &bad_sum),
             Err(JevContractError::ProbabilitySum { .. })
         ));
 
-        // confidence の範囲
-        let mut bad_confidence = ok_response(2, "c1");
-        if let Some(RawAnswer::Choice { confidence, .. }) =
-            bad_confidence.answers.get_mut(BEST_MATCH_ID)
+        // 確率が範囲外
+        let mut bad_probability = parsed(2, "c1");
+        if let Some(RawAnswer::Choice { probabilities, .. }) =
+            bad_probability.get_mut(BEST_MATCH_ID)
         {
-            *confidence = Some(1.4);
-        }
-        assert!(matches!(
-            validate_response(&questions, &identity, &bad_confidence),
-            Err(JevContractError::ValueOutOfRange { .. })
-        ));
-    }
-
-    /// Score を使う contract を将来作ったときのために、検証側は rubric を見る
-    #[test]
-    fn score_answers_are_validated_against_the_rubric() {
-        let rubric: Vec<String> = ["contradictory", "weak", "mixed", "strong", "very strong"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let question = QuestionSpec {
-            id: "c1_support".to_string(),
-            kind: QuestionKind::Score,
-            instructions: "How strongly does the supplied state support candidate c1?".to_string(),
-            criteria: Vec::new(),
-            rubric: rubric.clone(),
-        };
-        let probabilities: BTreeMap<String, f64> =
-            rubric.iter().map(|level| (level.clone(), 0.2)).collect();
-
-        let good = RawResponse {
-            model: None,
-            answers: BTreeMap::from([(
-                "c1_support".to_string(),
-                RawAnswer::Score {
-                    score: 3.1,
-                    rubric: rubric.clone(),
-                    probabilities: probabilities.clone(),
-                    confidence: Some(0.5),
-                },
-            )]),
-            input_tokens: None,
-            output_tokens: None,
-        };
-        // best_match が無いので MissingAnswer になるところまでは進む＝ Score 自体は通る
-        assert_eq!(
-            validate_response(&[question.clone()], &identity(1), &good),
-            Err(JevContractError::MissingAnswer { question_id: BEST_MATCH_ID.to_string() })
-        );
-
-        // rubric が違う
-        let mut wrong_rubric = good.clone();
-        if let Some(RawAnswer::Score { rubric, .. }) = wrong_rubric.answers.get_mut("c1_support") {
-            rubric.pop();
-        }
-        assert!(matches!(
-            validate_response(&[question.clone()], &identity(1), &wrong_rubric),
-            Err(JevContractError::RubricMismatch { .. })
-        ));
-
-        // rubric の段数を超える score
-        let mut too_high = good;
-        if let Some(RawAnswer::Score { score, .. }) = too_high.answers.get_mut("c1_support") {
-            *score = 9.0;
-        }
-        assert!(matches!(
-            validate_response(&[question], &identity(1), &too_high),
-            Err(JevContractError::ValueOutOfRange { .. })
-        ));
-    }
-
-    /// 公式の answers map だけを受け付け、配列形式は拒否する
-    #[test]
-    fn only_the_official_answers_map_is_accepted() {
-        let official = r#"{
-            "model": "jev-x",
-            "usage": {"input_tokens": 400, "output_tokens": 6},
-            "answers": {
-                "c1_same_work": {"type": "noul", "value": 0.91},
-                "best_match": {"type": "choice", "label": "c1",
-                               "probabilities": {"c1": 0.9, "NONE": 0.1}, "confidence": 0.8}
+            if let Some(value) = probabilities.get_mut("c1") {
+                *value = f64::NAN;
             }
-        }"#;
-        let parsed = RawResponse::from_json(official).unwrap();
-        let questions = build_questions(&keys(1)).unwrap();
-        let answers = validate_response(&questions, &identity(1), &parsed).unwrap();
-        assert_eq!(answers.best_match.unwrap().tmdb_id, 101);
-        assert_eq!(answers.same_work[0].same_work, 0.91);
-        assert_eq!(answers.input_tokens, Some(400));
-
-        // 未確認の wire 形式（配列）は fail closed
-        let array_shape = r#"{
-            "model": "jev-x",
-            "answers": [
-                {"id": "c1_same_work", "type": "noul", "value": 0.91},
-                {"id": "best_match", "type": "choice", "label": "c1",
-                 "probabilities": {"c1": 0.9, "NONE": 0.1}}
-            ]
-        }"#;
-        assert!(
-            matches!(RawResponse::from_json(array_shape), Err(JevContractError::Parse(_))),
-            "配列形式は受け付けない"
-        );
-
-        // C3B は answers オブジェクトだけを渡してくる想定
-        let value: serde_json::Value = serde_json::from_str(official).unwrap();
-        let only_answers = parse_answers(&value["answers"]).unwrap();
-        assert_eq!(only_answers.len(), 2);
-        assert!(parse_answers(&serde_json::json!([1, 2])).is_err());
-    }
-
-    #[test]
-    fn malformed_responses_are_rejected() {
-        for raw in [
-            "{}",                                            // answers が無い
-            r#"{"answers": 5}"#,                             // answers の形が違う
-            r#"{"answers": {"x": {"type": "magic"}}}"#,      // 未知の種別
-            r#"{"answers": {"x": {"type": "noul"}}}"#,       // value が無い
-            r#"{"answers": [{"type": "noul", "value": 1}]}"#, // 配列は受け付けない
-            "not json",
-        ] {
-            assert!(
-                matches!(RawResponse::from_json(raw), Err(JevContractError::Parse(_))),
-                "{raw} が通ってしまう"
-            );
         }
+        assert!(matches!(
+            validate_response(&questions, &identity(2), &bad_probability),
+            Err(JevContractError::ValueOutOfRange { .. })
+        ));
     }
 
     /// Jev が返した catalogue id は採用しない
     #[test]
     fn catalogue_ids_in_the_response_are_ignored() {
-        let raw = r#"{
-            "answers": {
-                "c1_same_work": {"type": "noul", "value": 0.9},
-                "best_match": {"type": "choice", "label": "c1", "tmdb_id": 999999,
-                               "probabilities": {"c1": 0.9, "NONE": 0.1}}
-            }
-        }"#;
-        let response = RawResponse::from_json(raw).unwrap();
+        let answers = parse_answers(&json!({
+            "c1_same_work": {"type": "noul", "noul": 0.9},
+            "best_match": {"type": "choice", "choice": "c1", "tmdb_id": 999999,
+                           "confidence": 0.9,
+                           "probabilities": {"c1": 0.9, "NONE": 0.1}}
+        }))
+        .unwrap();
         let questions = build_questions(&keys(1)).unwrap();
-        let answers = validate_response(&questions, &identity(1), &response).unwrap();
-        // 応答の 999999 ではなく identity の 101 を使う
-        assert_eq!(answers.best_match.unwrap().tmdb_id, 101);
+        let validated = validate_response(&questions, &identity(1), &answers).unwrap();
+        assert_eq!(validated.best_match.unwrap().tmdb_id, 101);
     }
 }
