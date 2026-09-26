@@ -54,6 +54,7 @@ const MIGRATION_PREMATCH_INPUTS: &str = include_str!("../../../../packages/db/mi
 const MIGRATION_MATCH_HISTORY: &str = include_str!("../../../../packages/db/migrations/021_match_history.sql");
 const MIGRATION_CONTAINER_TAGS: &str = include_str!("../../../../packages/db/migrations/022_container_tags.sql");
 const MIGRATION_JEV_SHADOW: &str = include_str!("../../../../packages/db/migrations/023_jev_shadow.sql");
+const MIGRATION_JEV_EVAL_SESSIONS: &str = include_str!("../../../../packages/db/migrations/024_jev_eval_sessions.sql");
 
 /// 022 で CHECK 制約を広げるテーブル。SQLite は CHECK を後から変えられないので作り直す。
 /// 毎起動で作り直さないよう、CHECK に目印の値が無いときだけ実行する。
@@ -152,6 +153,7 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
     rebuild_review_tasks_if_needed(&conn)?;
     rebuild_verdicts_if_needed(&conn)?;
     apply_lenient_migration(&conn, MIGRATION_JEV_SHADOW)?;
+    apply_lenient_migration(&conn, MIGRATION_JEV_EVAL_SESSIONS)?;
     backfill_legacy_candidate_scores(&conn)?;
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
