@@ -23,13 +23,21 @@
 //! # 使い方（所有権で 1 予約 = 1 送信を縛る）
 //!
 //! ```text
-//! let prepared = prepare_call(&mut conn, session_id, &input).await?;  // 予約まで
-//! let executed = execute_call(&client, prepared).await;               // prepared を消費
-//! let record   = persist_call(&mut conn, executed)?;                  // executed を消費
+//! match prepare_call(&mut conn, session_id, &input).await? {
+//!     PrepareCallResult::Ready(prepared) => {
+//!         let executed = execute_call(&client, prepared).await;   // prepared を消費
+//!         persist_call(&mut conn, executed)                       // executed を消費
+//!     }
+//!     PrepareCallResult::Skipped(skipped) => {
+//!         persist_skipped_call(&mut conn, skipped)                // skipped を消費
+//!     }
+//! }
 //! ```
 //!
-//! `execute_call` は [`PreparedCall`] を、`persist_call` は [`ExecutedCall`] を
-//! **値で受け取る**ので、同じ予約から 2 回送ることはコンパイル時にできない。
+//! `execute_call` は [`PreparedCall`] を、`persist_call` は [`ExecutedCall`] を、
+//! `persist_skipped_call` は [`PreparedSkippedCall`] を **値で受け取る**ので、同じ
+//! 予約から 2 回送ることも、任意の run に skip 行を足すこともコンパイル時にできない。
+//! 予算切れも同じ state machine の一部で、`prepare_call` だけが入口。
 //!
 //! # 同一 session では必ず逐次実行する
 //!
@@ -185,6 +193,52 @@ impl PreparedCall {
     }
 }
 
+/// 予算切れで送らないと決まった呼び出し。
+///
+/// このモジュールの外からは作れない（フィールドが private で、構築するのは
+/// [`prepare_call`] だけ）。したがって「任意の run に skip 行を足す」ことはできない。
+/// ローカルの検証はすべて通った後の状態なので、候補の並びは凍結済みのものを残す。
+pub struct PreparedSkippedCall {
+    session_id: i64,
+    run_id: i64,
+    requested_model: String,
+    contract_version: String,
+    state_schema_version: String,
+    candidate_order_json: String,
+    guard: OwnedMutexGuard<()>,
+}
+
+impl std::fmt::Debug for PreparedSkippedCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedSkippedCall")
+            .field("session_id", &self.session_id)
+            .field("run_id", &self.run_id)
+            .field("candidate_order_json", &self.candidate_order_json)
+            .finish()
+    }
+}
+
+impl PreparedSkippedCall {
+    pub fn run_id(&self) -> i64 {
+        self.run_id
+    }
+
+    pub fn session_id(&self) -> i64 {
+        self.session_id
+    }
+
+    pub fn candidate_order_json(&self) -> &str {
+        &self.candidate_order_json
+    }
+}
+
+/// [`prepare_call`] の結果。予算が残っていれば送り、切れていれば skip として記録する。
+#[derive(Debug)]
+pub enum PrepareCallResult {
+    Ready(PreparedCall),
+    Skipped(PreparedSkippedCall),
+}
+
 /// 送信が終わった呼び出し。保存に必要なものだけを持つ。
 pub struct ExecutedCall {
     session_id: i64,
@@ -333,7 +387,7 @@ pub async fn prepare_call(
     conn: &mut Connection,
     session_id: i64,
     input: &ShadowCallInput,
-) -> Result<PreparedCall, JevShadowError> {
+) -> Result<PrepareCallResult, JevShadowError> {
     // HTTP の待ち時間に握るのはこの非同期ロックだけ。DB の同期ロックは持たない
     let guard = call_lock().lock_owned().await;
 
@@ -341,15 +395,16 @@ pub async fn prepare_call(
         return Err(JevShadowError::Precondition("候補がありません".into()));
     }
 
-    // ① session の前提（モデルは session のものだけを使う）
+    // ① session の前提（モデルは session のものだけを使う）。
+    // 予算切れだけはここで落とさず、ローカル検証を通してから skip として扱う
     let session = load_session(conn, session_id)?;
-    check_session(&session)?;
+    let already_exhausted = check_session(&session)?;
 
     // ② run の前提
     let run_evidence_class = check_run(conn, input.run_id)?;
 
     // ③ この run で packed を既に実行していないか
-    check_no_packed_call(conn, input.run_id)?;
+    check_no_packed_audit(conn, input.run_id)?;
 
     // ④ evidence_class は run が正
     let local = resolve_evidence_class(input.local.clone(), &run_evidence_class)?;
@@ -380,10 +435,30 @@ pub async fn prepare_call(
         candidate_order: cand_keys,
     };
 
-    // ⑧ ここまで通ってから予算を使う
-    reserve_call_budget(conn, session_id)?;
+    // ⑧ ここまで通ってから予算を見る。ローカルの不整合を skip として記録しない
+    let skipped = |guard| {
+        PrepareCallResult::Skipped(PreparedSkippedCall {
+            session_id,
+            run_id: input.run_id,
+            requested_model: session.requested_model.clone(),
+            contract_version: session.contract_version.clone(),
+            state_schema_version: session.state_schema_version.clone(),
+            candidate_order_json: request.candidate_order_json.clone(),
+            guard,
+        })
+    };
 
-    Ok(PreparedCall {
+    if already_exhausted {
+        return Ok(skipped(guard));
+    }
+
+    match reserve_call_budget(conn, session_id) {
+        Ok(_) => {}
+        Err(JevSessionError::BudgetExhausted) => return Ok(skipped(guard)),
+        Err(error) => return Err(JevShadowError::Session(error)),
+    }
+
+    Ok(PrepareCallResult::Ready(PreparedCall {
         session_id,
         run_id: input.run_id,
         requested_model: session.requested_model,
@@ -394,13 +469,18 @@ pub async fn prepare_call(
         identity: state.identity,
         candidate_ids,
         guard,
-    })
+    }))
 }
 
-fn check_session(session: &JevSession) -> Result<(), JevShadowError> {
-    if session.status != "open" {
+/// session が使える状態かを見る。戻り値は「もう予算を使い切っているか」。
+///
+/// `exhausted` はエラーにしない。ローカルの検証を全部通してから skip として
+/// 記録したいので、ここでは印だけ返す。`closed` / `blocked` は送る余地がないので
+/// その場で落とす。
+fn check_session(session: &JevSession) -> Result<bool, JevShadowError> {
+    let already_exhausted = session.status == "exhausted";
+    if session.status != "open" && !already_exhausted {
         return Err(JevShadowError::Session(match session.status.as_str() {
-            "exhausted" => JevSessionError::BudgetExhausted,
             "closed" => JevSessionError::SessionClosed,
             _ => JevSessionError::Blocked {
                 reason: session
@@ -420,7 +500,7 @@ fn check_session(session: &JevSession) -> Result<(), JevShadowError> {
             "session の state schema が {JEV_STATE_SCHEMA_VERSION} ではありません"
         )));
     }
-    Ok(())
+    Ok(already_exhausted)
 }
 
 /// run が shadow 用で、まだ適用されていないこと。`evidence_class` を返す。
@@ -449,7 +529,11 @@ fn check_run(conn: &Connection, run_id: i64) -> Result<String, JevShadowError> {
     Ok(evidence_class)
 }
 
-fn check_no_packed_call(conn: &Connection, run_id: i64) -> Result<(), JevShadowError> {
+/// この run に packed の記録（call か jev-policy verdict）が既に無いこと。
+///
+/// `Transaction` は `Connection` へ deref するので、事前チェックにも
+/// 保存 transaction 内の再チェックにも同じものを使う。
+fn check_no_packed_audit(conn: &Connection, run_id: i64) -> Result<(), JevShadowError> {
     let calls: i64 = conn.query_row(
         "SELECT COUNT(*) FROM metadata_match_jev_calls
           WHERE run_id = ?1 AND call_kind = ?2",
@@ -635,14 +719,10 @@ pub fn persist_call(
     let tx = conn.transaction()?;
 
     // 同じ run に packed が 2 件入らないよう、書く直前にもう一度見る
-    let existing: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM metadata_match_jev_calls WHERE run_id = ?1 AND call_kind = ?2",
-        rusqlite::params![run_id, CALL_KIND],
-        |row| row.get(0),
-    )?;
-    if existing > 0 {
+    // （call だけでなく jev-policy verdict も。UNIQUE 違反任せにしない）
+    if let Err(error) = check_no_packed_audit(&tx, run_id) {
         tx.rollback()?;
-        return Err(JevShadowError::DuplicatePackedCall { run_id });
+        return Err(error);
     }
 
     let call_seq: i64 = tx.query_row(
@@ -884,6 +964,15 @@ fn safe_parsed_answer_json(answers: &JevAnswers) -> String {
     }))
 }
 
+/// 候補スコアの意味づけ。**Noul は正解確率ではない**ことを機械可読に残す。
+fn score_reasons_json() -> String {
+    canonical_json(&json!({
+        "source": "noul_same_work",
+        "diagnostic_only": true,
+        "calibrated": false,
+    }))
+}
+
 /// 候補ごとの Noul 値を残す。Choice の確率とは混ぜない。
 fn insert_candidate_scores(
     tx: &rusqlite::Transaction<'_>,
@@ -913,8 +1002,8 @@ fn insert_candidate_scores(
         tx.execute(
             "INSERT INTO metadata_match_candidate_scores
                (run_id, candidate_id, cand_key, matcher, matcher_version,
-                score, rank, in_candidate_set, jev_call_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+                score, rank, in_candidate_set, reasons_json, jev_call_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
             rusqlite::params![
                 run_id,
                 candidate_id,
@@ -923,6 +1012,7 @@ fn insert_candidate_scores(
                 contract_version,
                 candidate.same_work,
                 (index + 1) as i64,
+                score_reasons_json(),
                 call_id,
             ],
         )?;
@@ -941,20 +1031,23 @@ fn insert_verdict(
     run_id: i64,
     answers: &JevAnswers,
 ) -> Result<String, JevShadowError> {
-    let (decision, tmdb_id, media_type) = match &answers.best_match {
+    let (decision, tmdb_id, media_type, reason_codes) = match &answers.best_match {
         Some(candidate) => (
             "REVIEW",
             Some(candidate.tmdb_id),
             Some(candidate.media_type.clone()),
+            ["jev_selected_candidate", "shadow_only", "uncalibrated"],
         ),
-        None => ("UNRESOLVED", None, None),
+        None => (
+            "UNRESOLVED",
+            None,
+            None,
+            ["jev_answered_none", "shadow_only", "uncalibrated"],
+        ),
     };
 
-    let reasons = canonical_json(&json!({
-        "source": "jev-shadow-packed",
-        "answered_none": answers.best_match.is_none(),
-        "note": "shadow only; never applied to works or match_status",
-    }));
+    // 自由文ではなく固定のコードだけを残す
+    let reasons = canonical_json(&json!(reason_codes));
 
     tx.execute(
         "INSERT INTO metadata_match_verdicts
@@ -975,39 +1068,65 @@ fn insert_verdict(
 
 /// 予算切れで送らなかったことを記録する。
 ///
+/// [`PreparedSkippedCall`] を値で受け取るので、任意の run に skip 行を足すことは
+/// できない。ローカルの検証を通った呼び出しだけがここへ来る。
+///
 /// `error_kind` は付けない（migration 023 の 10 値は transport の分類で、予算は
 /// そこに含まれない）。代わりに `error_text` に [`BUDGET_EXHAUSTED_TEXT`] を入れる。
 pub fn persist_skipped_call(
-    conn: &Connection,
-    session: &JevSession,
-    run_id: i64,
+    conn: &mut Connection,
+    skipped: PreparedSkippedCall,
 ) -> Result<CallRecord, JevShadowError> {
-    let call_seq: i64 = conn.query_row(
+    let PreparedSkippedCall {
+        session_id,
+        run_id,
+        requested_model,
+        contract_version,
+        state_schema_version,
+        candidate_order_json,
+        guard,
+    } = skipped;
+
+    let tx = conn.transaction()?;
+
+    // 成功済みの run に後から skip を足さない
+    if let Err(error) = check_no_packed_audit(&tx, run_id) {
+        tx.rollback()?;
+        return Err(error);
+    }
+
+    let call_seq: i64 = tx.query_row(
         "SELECT COALESCE(MAX(call_seq), 0) + 1 FROM metadata_match_jev_calls WHERE run_id = ?1",
         rusqlite::params![run_id],
         |row| row.get(0),
     )?;
-    conn.execute(
+
+    tx.execute(
         "INSERT INTO metadata_match_jev_calls
            (run_id, call_seq, call_kind, contract_version, state_schema_version,
             requested_model, enrichment_profile, state_json, questions_json,
             candidate_order_json, state_bytes, status, error_text, eval_session_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'none', ?7, ?8, '[]', 0, 'skipped', ?9, ?10)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'none', ?7, ?8, ?9, 0, 'skipped', ?10, ?11)",
         rusqlite::params![
             run_id,
             call_seq,
             CALL_KIND,
-            session.contract_version,
-            session.state_schema_version,
-            session.requested_model,
+            contract_version,
+            state_schema_version,
+            requested_model,
             EMPTY_JSON,
             EMPTY_JSON,
+            candidate_order_json,
             BUDGET_EXHAUSTED_TEXT,
-            session.id,
+            session_id,
         ],
     )?;
+    let call_id = tx.last_insert_rowid();
+    tx.commit()?;
+    drop(guard);
+
     Ok(CallRecord {
-        call_id: conn.last_insert_rowid(),
+        call_id,
         run_id,
         call_seq,
         status: "skipped".to_string(),
@@ -1354,9 +1473,27 @@ mod tests {
         session_id: i64,
         input: &ShadowCallInput,
     ) -> Result<CallRecord, JevShadowError> {
-        let prepared = prepare_call(conn, session_id, input).await?;
-        let executed = execute_call(client, prepared).await;
-        persist_call(conn, executed)
+        match prepare_call(conn, session_id, input).await? {
+            PrepareCallResult::Ready(prepared) => {
+                let executed = execute_call(client, prepared).await;
+                persist_call(conn, executed)
+            }
+            PrepareCallResult::Skipped(skipped) => persist_skipped_call(conn, skipped),
+        }
+    }
+
+    /// Ready であることを前提に取り出す
+    async fn prepare_ready(
+        conn: &mut Connection,
+        session_id: i64,
+        input: &ShadowCallInput,
+    ) -> PreparedCall {
+        match prepare_call(conn, session_id, input).await.unwrap() {
+            PrepareCallResult::Ready(prepared) => prepared,
+            PrepareCallResult::Skipped(skipped) => {
+                panic!("Ready のはずが skip された: {skipped:?}")
+            }
+        }
     }
 
     // ─── 送る内容 ────────────────────────────────────────────────────────
@@ -1369,7 +1506,7 @@ mod tests {
         let run_id = insert_run(&conn);
         let input = call_input(&conn, run_id, 3);
 
-        let prepared = prepare_call(&mut conn, session.id, &input).await.unwrap();
+        let prepared = prepare_ready(&mut conn, session.id, &input).await;
         assert_eq!(prepared.candidate_order(), ["c1", "c2", "c3"]);
         assert_eq!(prepared.requested_model(), MODEL);
 
@@ -1657,8 +1794,8 @@ mod tests {
 
         assert_eq!(result_a.as_ref().map(|r| r.status.as_str()), Ok("ok"), "{result_a:?}");
         assert_eq!(
-            result_b.as_ref().err(),
-            Some(&JevShadowError::Session(JevSessionError::BudgetExhausted)),
+            result_b.as_ref().map(|r| r.status.as_str()),
+            Ok("skipped"),
             "B が送れてしまった: {result_b:?}"
         );
         assert_eq!(stub.systemone_hits(), 1, "同時に 2 本 in-flight になっている");
@@ -1669,11 +1806,26 @@ mod tests {
         assert_eq!(session.calls_reserved, 1, "B で予約が増えている");
         assert_eq!(session.status, "exhausted");
 
-        // B は送っていないので skipped として残せる
-        let record = persist_skipped_call(&conn, &session, run_b).unwrap();
-        let call = load_call(&conn, record.call_id).unwrap().unwrap();
+        // B は送らずに skip として既に記録されている
+        let call = load_call(&conn, result_b.unwrap().call_id).unwrap().unwrap();
         assert_eq!(call["status"], "skipped");
         assert_eq!(call["state_json"], "{}");
+        assert_eq!(call["questions_json"], "{}");
+        assert_eq!(call["state_bytes"], 0);
+        assert_eq!(call["error_text"], BUDGET_EXHAUSTED_TEXT);
+        assert_eq!(call["candidate_order_json"], "[\"c1\"]", "凍結した並びを残す");
+
+        // run ごとに packed は 1 件
+        for run_id in [run_a, run_b] {
+            let calls: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM metadata_match_jev_calls WHERE run_id = ?1",
+                    rusqlite::params![run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(calls, 1, "run {run_id}");
+        }
 
         drop(conn);
         let _ = std::fs::remove_file(&path);
@@ -1906,10 +2058,11 @@ mod tests {
         .unwrap();
         let run_b = insert_run(&conn);
         let input_b = call_input(&conn, run_b, 1);
-        assert_eq!(
-            prepare_call(&mut conn, exhausted.id, &input_b).await.unwrap_err(),
-            JevShadowError::Session(JevSessionError::BudgetExhausted)
-        );
+        // 予算切れはエラーではなく skip 候補になる（送らないことは同じ）
+        assert!(matches!(
+            prepare_call(&mut conn, exhausted.id, &input_b).await.unwrap(),
+            PrepareCallResult::Skipped(_)
+        ));
 
         // blocked
         let blocked = open_session(&conn, &client, "shadow-blocked").await;
@@ -2002,7 +2155,7 @@ mod tests {
             local: same,
             candidates: input.candidates.clone(),
         };
-        let prepared = prepare_call(&mut conn, session.id, &ok_input).await.unwrap();
+        let prepared = prepare_ready(&mut conn, session.id, &ok_input).await;
         assert!(prepared.state_json().contains("live"));
     }
 
@@ -2059,7 +2212,7 @@ mod tests {
 
         // 正しい組み合わせなら通る
         let ok = ShadowCallInput { run_id, local: local_evidence(), candidates: base };
-        assert!(prepare_call(&mut conn, session.id, &ok).await.is_ok());
+        let _ = prepare_ready(&mut conn, session.id, &ok).await;
     }
 
     #[tokio::test]
@@ -2116,22 +2269,28 @@ mod tests {
             local: local_evidence(),
             candidates: insert_candidates(&conn, second_run, 1),
         };
-        assert_eq!(
-            prepare_call(&mut conn, session.id, &second).await.unwrap_err(),
-            JevShadowError::Session(JevSessionError::BudgetExhausted)
-        );
+        // 予算切れは prepare の結果として skip になる（raw API は無い）
+        let record = match prepare_call(&mut conn, session.id, &second).await.unwrap() {
+            PrepareCallResult::Skipped(skipped) => {
+                assert_eq!(skipped.candidate_order_json(), "[\"c1\"]");
+                assert_eq!(skipped.run_id(), second_run);
+                persist_skipped_call(&mut conn, skipped).unwrap()
+            }
+            PrepareCallResult::Ready(_) => panic!("予算が残っていないのに Ready"),
+        };
         assert_eq!(stub.systemone_hits(), 1);
 
         let session = load_session(&conn, session.id).unwrap();
-        let record = persist_skipped_call(&conn, &session, second_run).unwrap();
         let call = load_call(&conn, record.call_id).unwrap().unwrap();
         assert_eq!(call["status"], "skipped");
+        assert_eq!(call["call_kind"], "packed");
         assert_eq!(call["error_kind"], Value::Null);
         assert_eq!(call["error_text"], BUDGET_EXHAUSTED_TEXT);
         assert_eq!(call["eval_session_id"], session.id);
         assert_eq!(call["state_json"], "{}");
         assert_eq!(call["questions_json"], "{}");
         assert_eq!(call["state_bytes"], 0);
+        assert_eq!(call["candidate_order_json"], "[\"c1\"]", "候補の並びは残す");
 
         let (scores, verdicts): (i64, i64) = conn
             .query_row(
@@ -2143,6 +2302,242 @@ mod tests {
             .unwrap();
         assert_eq!(scores, 0);
         assert_eq!(verdicts, 0);
+    }
+
+    // ─── 予算切れの skip が state machine の一部であること ───────────────
+
+    /// 予算を使い切った session を作る
+    async fn exhausted_session(
+        conn: &mut Connection,
+        client: &TypeSafeClient,
+        key: &str,
+    ) -> (JevSession, i64) {
+        let plan = plan_session(conn, &{
+            let mut config = JevSessionConfig::new(key, MODEL);
+            config.max_calls = 1;
+            config
+        })
+        .unwrap();
+        let outcome = preflight_model(client, &plan).await;
+        let session = apply_preflight(conn, &plan, outcome).unwrap();
+
+        let run_id = insert_run(conn);
+        let input = call_input(conn, run_id, 1);
+        let record = run_one(conn, client, session.id, &input).await.unwrap();
+        assert_eq!(record.status, "ok");
+        (load_session(conn, session.id).unwrap(), run_id)
+    }
+
+    /// 成功した run に、あとから skip 行を足せない
+    #[tokio::test]
+    async fn a_successful_run_cannot_gain_a_skip_row() {
+        let mut conn = open_db();
+        let (client, _stub) = client_with(vec![Reply::Json(200, answers_body(1, "c1"))]).await;
+        let (session, run_id) = exhausted_session(&mut conn, &client, "shadow-skip-dup").await;
+        // 上限まで予約済み。次の予約で exhausted になる
+        assert_eq!(session.calls_reserved, session.max_calls);
+
+        let before: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM metadata_match_jev_calls WHERE run_id = ?1),
+                        (SELECT COUNT(*) FROM metadata_match_verdicts WHERE run_id = ?1),
+                        (SELECT COUNT(*) FROM metadata_match_candidate_scores WHERE run_id = ?1)",
+                rusqlite::params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        // 同じ run で skip を作ろうとしても、prepare の段階で弾かれる
+        let same_run = ShadowCallInput {
+            run_id,
+            local: local_evidence(),
+            candidates: load_candidates(&conn, run_id),
+        };
+        assert_eq!(
+            prepare_call(&mut conn, session.id, &same_run).await.unwrap_err(),
+            JevShadowError::DuplicatePackedCall { run_id }
+        );
+
+        let after: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM metadata_match_jev_calls WHERE run_id = ?1),
+                        (SELECT COUNT(*) FROM metadata_match_verdicts WHERE run_id = ?1),
+                        (SELECT COUNT(*) FROM metadata_match_candidate_scores WHERE run_id = ?1)",
+                rusqlite::params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before, "成功済みの run が変わっている");
+        assert_eq!(after.0, 1, "packed call は 1 件のまま");
+        assert_eq!(after.1, 1, "verdict も 1 件のまま");
+    }
+
+    /// 既存の run の候補行から入力を組み直す
+    fn load_candidates(conn: &Connection, run_id: i64) -> Vec<ShadowCandidate> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, cand_key, tmdb_id, media_type FROM metadata_match_candidates
+                  WHERE run_id = ?1 ORDER BY cand_key",
+            )
+            .unwrap();
+        stmt.query_map(rusqlite::params![run_id], |row| {
+            let index: i64 = row.get(0)?;
+            let cand_key: String = row.get(1)?;
+            let tmdb_id: i64 = row.get(2)?;
+            let media_type: String = row.get(3)?;
+            Ok(ShadowCandidate {
+                candidate_id: index,
+                input: CandidateInput {
+                    tmdb_id,
+                    media_type,
+                    title: format!("候補 {cand_key}"),
+                    original_title: None,
+                    year: Some(2021),
+                    original_language: Some("ja".to_string()),
+                },
+            })
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// 予算切れでも、shadow でない run には skip 行を作らない
+    #[tokio::test]
+    async fn non_shadow_runs_never_get_a_skip_row() {
+        let mut conn = open_db();
+        let (client, _stub) = client_with(vec![Reply::Json(200, answers_body(1, "c1"))]).await;
+        let (session, _) = exhausted_session(&mut conn, &client, "shadow-skip-mode").await;
+
+        for (label, mode, applied) in [
+            ("safe", "safe", 0),
+            ("gated", "gated", 0),
+            ("applied", "shadow", 1),
+        ] {
+            let run_id = insert_run_with(&conn, mode, applied);
+            let input = call_input(&conn, run_id, 1);
+            let error = prepare_call(&mut conn, session.id, &input).await.unwrap_err();
+            assert!(
+                matches!(error, JevShadowError::Precondition(_)),
+                "{label}: {error}"
+            );
+            let calls: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM metadata_match_jev_calls WHERE run_id = ?1",
+                    rusqlite::params![run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(calls, 0, "{label}: skip 行を作っている");
+        }
+    }
+
+    /// 予算切れでも、ローカルの不整合は skip ではなくエラー
+    #[tokio::test]
+    async fn local_problems_are_errors_even_when_exhausted() {
+        let mut conn = open_db();
+        let (client, _stub) = client_with(vec![Reply::Json(200, answers_body(1, "c1"))]).await;
+        let (session, _) = exhausted_session(&mut conn, &client, "shadow-skip-local").await;
+
+        // 候補の取り違え
+        let run_a = insert_run(&conn);
+        let mut tampered = insert_candidates(&conn, run_a, 2);
+        tampered[1].input.tmdb_id = 4242;
+        let input_a = ShadowCallInput { run_id: run_a, local: local_evidence(), candidates: tampered };
+        assert!(matches!(
+            prepare_call(&mut conn, session.id, &input_a).await.unwrap_err(),
+            JevShadowError::Precondition(_)
+        ));
+
+        // evidence_class の食い違い
+        let run_b = insert_run(&conn);
+        let mut local = local_evidence();
+        local.evidence_class = Some("historical_audit_only".to_string());
+        let input_b = ShadowCallInput {
+            run_id: run_b,
+            local,
+            candidates: insert_candidates(&conn, run_b, 1),
+        };
+        assert!(matches!(
+            prepare_call(&mut conn, session.id, &input_b).await.unwrap_err(),
+            JevShadowError::Precondition(_)
+        ));
+
+        let skips: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metadata_match_jev_calls WHERE status = 'skipped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(skips, 0, "ローカル失敗を skip として記録している");
+    }
+
+    // ─── 未較正であることの記録 ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn scores_and_verdicts_record_that_they_are_uncalibrated() {
+        let mut conn = open_db();
+        let (client, _stub) = client_with(vec![
+            Reply::Json(200, answers_body(2, "c1")),
+            Reply::Json(200, answers_body(2, "NONE")),
+        ])
+        .await;
+        let session = open_session(&conn, &client, "shadow-uncalibrated").await;
+
+        // 候補を選んだ場合
+        let run_a = insert_run(&conn);
+        let input_a = call_input(&conn, run_a, 2);
+        run_one(&mut conn, &client, session.id, &input_a).await.unwrap();
+
+        let reasons: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT reasons_json FROM metadata_match_candidate_scores WHERE run_id = ?1",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map(rusqlite::params![run_a], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows
+        };
+        assert_eq!(reasons.len(), 2);
+        for reason in &reasons {
+            assert_eq!(
+                reason,
+                "{\"calibrated\":false,\"diagnostic_only\":true,\"source\":\"noul_same_work\"}"
+            );
+        }
+
+        let verdict: String = conn
+            .query_row(
+                "SELECT reasons_json FROM metadata_match_verdicts WHERE run_id = ?1",
+                rusqlite::params![run_a],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            verdict,
+            "[\"jev_selected_candidate\",\"shadow_only\",\"uncalibrated\"]"
+        );
+
+        // NONE の場合
+        let run_b = insert_run(&conn);
+        let input_b = call_input(&conn, run_b, 2);
+        run_one(&mut conn, &client, session.id, &input_b).await.unwrap();
+        let verdict: String = conn
+            .query_row(
+                "SELECT reasons_json FROM metadata_match_verdicts WHERE run_id = ?1",
+                rusqlite::params![run_b],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            verdict,
+            "[\"jev_answered_none\",\"shadow_only\",\"uncalibrated\"]"
+        );
     }
 
     // ─── shadow であることの担保 ─────────────────────────────────────────
