@@ -35,7 +35,8 @@
 
 use crate::db::DbState;
 use crate::services::jev_session::{
-    apply_preflight, close_session, plan_session, preflight_model, JevSessionConfig,
+    apply_preflight, close_session, is_canonical_model_name, plan_session, preflight_model,
+    JevSessionConfig,
 };
 use crate::services::jev_shadow::{
     acquire_call_permit, execute_call, persist_call, persist_skipped_call,
@@ -117,11 +118,14 @@ impl JevSidecarContext {
 
 /// 環境変数から pin したモデル名を読む。
 ///
-/// alias（`-latest` など）は受け付けない。**モデルを推測しない。**
+/// 受け付けるのは canonical な版名（`jev-<major>.<minor>.<patch>`）だけ。
+/// `jev-latest` / `jev-preview` のような alias は拒否する。alias は実際の呼び出しで
+/// 別の版へ解決され得るので、どの版で測ったのかが後から確定できなくなる。
+/// **モデルを推測しない。**
 fn pinned_model() -> Option<String> {
     let model = std::env::var(MODEL_ENV).ok()?;
     let model = model.trim().to_string();
-    if model.is_empty() || model.ends_with("-latest") || model == "latest" {
+    if !is_canonical_model_name(&model) {
         return None;
     }
     Some(model)
@@ -550,16 +554,28 @@ mod tests {
         assert_eq!(local.filename_year, Some(1999));
     }
 
+    /// pin として受理するのは canonical な版名だけ
     #[test]
-    fn a_pinned_model_is_required() {
-        // 実際の環境変数は触らず、判定の規則だけを固定する
-        for alias in ["jev-latest", "latest", "  ", ""] {
-            let model = alias.trim().to_string();
-            let rejected = model.is_empty() || model.ends_with("-latest") || model == "latest";
-            assert!(rejected, "{alias} を受け入れてしまう");
+    fn only_canonical_versions_are_accepted_as_a_pin() {
+        for good in ["jev-1.13.0", "jev-2.0.0"] {
+            assert!(is_canonical_model_name(good), "{good} を弾いている");
         }
-        let model = "jev-1.13.0".to_string();
-        assert!(!(model.is_empty() || model.ends_with("-latest") || model == "latest"));
+        for bad in [
+            "jev-preview",
+            "jev-latest",
+            "latest",
+            "jev-1.13",
+            "jev-1.13.0-preview",
+            "jev-a.b.c",
+            "",
+            "   ",
+        ] {
+            // 環境変数と同じく trim してから判定する
+            assert!(
+                !is_canonical_model_name(bad.trim()),
+                "{bad:?} を受け入れてしまう"
+            );
+        }
     }
 
     // ─── 候補の読み出し ──────────────────────────────────────────────────

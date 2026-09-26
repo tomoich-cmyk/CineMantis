@@ -103,6 +103,25 @@ impl JevSessionConfig {
     }
 }
 
+/// `jev-<major>.<minor>.<patch>` の形か。major/minor/patch は 10 進整数。
+///
+/// alias（`jev-latest` / `jev-preview` / `latest`）や桁の欠けた `jev-1.13`、
+/// 接尾辞つきの `jev-1.13.0-preview` は canonical ではない。**評価に使うモデルは
+/// 版を明示したものだけ**にしたいので、ここを通らない名前は pin として扱わない。
+pub fn is_canonical_model_name(name: &str) -> bool {
+    let Some(version) = name.strip_prefix("jev-") else {
+        return false;
+    };
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    // TypeSafe 側に無い桁数制限をこちらで足さない。数値として解釈もしない
+    parts
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 // ─── 結果とエラー ────────────────────────────────────────────────────────────
 
 /// DB 上の session 行。
@@ -395,8 +414,21 @@ pub struct SessionPlan {
 /// モデル A の session を blocked にする、といった取り違えが起こり得る。
 #[derive(Debug, Clone, PartialEq)]
 pub enum PreflightOutcome {
-    Available { requested_model: String, card: ModelCard },
+    Available { requested_model: String, identity: ModelIdentity },
     Unavailable { requested_model: String, reason: String },
+}
+
+/// そのモデルをどうやって「使える」と判断したか。
+///
+/// canonical な版は一覧を照会せずに受理する（TypeSafe は現状 alias しか一覧に出さないが、
+/// 版を直接指定した request は通る）。記録するのは **確認できた事実だけ**で、
+/// 照会していないことを「載っていない」と書き換えない。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelIdentity {
+    /// `GET /v1/models` に完全一致で載っていた
+    Listed(ModelCard),
+    /// 一覧を照会せず、canonical な版を明示指定した
+    ExplicitVersionPin,
 }
 
 impl PreflightOutcome {
@@ -485,15 +517,37 @@ pub fn plan_session(
     })
 }
 
-/// 手順 2（非同期）。pin したモデルが実在するかだけを見る。**DB に触らない。**
+/// 手順 2（非同期）。この session で使うモデルの素性を決める。**DB に触らない。**
 ///
-/// 完全一致でしか探さない（C3B の `verify_model_available`）。alias や最新版へ
-/// 勝手に乗り換えない。
+/// - canonical な版名（`jev-1.13.0` など）は **一覧を照会せずそのまま受理**する
+/// - それ以外（alias など）だけ `GET /v1/models` で完全一致を確認する
+///
+/// canonical 版が実際に使えるかどうかと、その identity の最終的な確認は、ここではなく
+/// SystemOne の応答で行う（`response.model` が要求と完全一致するか。C3B の exact match）。
+/// alias や最新版へ勝手に乗り換えることはしない。
 pub async fn preflight_model(client: &TypeSafeClient, plan: &SessionPlan) -> PreflightOutcome {
     // 見るモデルは plan のものだけ。呼び出し側が別の文字列を差し込めないようにする
     let requested_model = plan.config.requested_model.clone();
+
+    // 版を明示した名前は一覧を照会しない。
+    // TypeSafe の `GET /v1/models` は現状 alias しか載せないが、版を直接指定した
+    // SystemOne は通る。したがって canonical pin の identity を決めるのは一覧ではなく、
+    // **実際の応答の `model` が要求と完全一致するか**（C3B の exact match）である。
+    // 存在しない版（例: jev-9.9.9）でも session は作れるが、その場合は最初の
+    // SystemOne が失敗し、transport error として監査に残る。
+    if is_canonical_model_name(&requested_model) {
+        return PreflightOutcome::Available {
+            requested_model,
+            identity: ModelIdentity::ExplicitVersionPin,
+        };
+    }
+
+    // canonical でない名前（alias など）は従来どおり一覧で確認する
     match client.verify_model_available(&requested_model).await {
-        Ok(card) => PreflightOutcome::Available { requested_model, card },
+        Ok(card) => PreflightOutcome::Available {
+            requested_model,
+            identity: ModelIdentity::Listed(card),
+        },
         Err(error) => PreflightOutcome::Unavailable {
             reason: safe_preflight_reason(&error),
             requested_model,
@@ -509,15 +563,28 @@ fn safe_preflight_reason(error: &TypeSafeClientError) -> String {
     }
 }
 
-/// ModelCard の snapshot を canonical JSON にする。
+/// モデルの素性を canonical JSON にする。
 ///
 /// `typesafe_client.rs` に `Serialize` を足すために触りたくないので、ここで組み立てる。
-fn model_card_json(card: &ModelCard) -> String {
-    canonical_json(&json!({
-        "name": card.name,
-        "description": card.description,
-        "release_date": card.release_date,
-    }))
+///
+/// **確認できた事実しか書かない。** 版を明示指定した場合は一覧を照会していないので、
+/// description も release_date も手元に無い。一覧に「載っていない」ことすら確かめて
+/// いないので、そう書くこともしない。作り物の値を入れると、後から「どの世代のモデルで
+/// 測ったのか」が辿れなくなる。
+fn model_card_json(requested_model: &str, identity: &ModelIdentity) -> String {
+    match identity {
+        ModelIdentity::Listed(card) => canonical_json(&json!({
+            "name": card.name,
+            "description": card.description,
+            "release_date": card.release_date,
+            "identity_source": "models_listing",
+            "listed_in_models": true,
+        })),
+        ModelIdentity::ExplicitVersionPin => canonical_json(&json!({
+            "name": requested_model,
+            "identity_source": "explicit_version_pin",
+        })),
+    }
 }
 
 /// 手順 3（同期）。preflight の結果を session 行に反映する。
@@ -539,8 +606,9 @@ pub fn apply_preflight(
             found: outcome.requested_model().to_string(),
         });
     }
-    if let PreflightOutcome::Available { card, .. } = &outcome {
-        // C3B の verify_model_available が通常は保証するが、session 層でも確かめる
+    if let PreflightOutcome::Available { identity: ModelIdentity::Listed(card), .. } = &outcome {
+        // C3B の verify_model_available が通常は保証するが、session 層でも確かめる。
+        // 版の明示指定には card が無いので、比較できるのは一覧由来のときだけ
         if card.name != plan.config.requested_model {
             return Err(JevSessionError::PreflightModelMismatch {
                 expected: plan.config.requested_model.clone(),
@@ -550,7 +618,7 @@ pub fn apply_preflight(
     }
 
     match (plan.existing_id, outcome) {
-        (None, PreflightOutcome::Available { card, .. }) => {
+        (None, PreflightOutcome::Available { identity, requested_model }) => {
             let inserted = conn.execute(
                 "INSERT INTO jev_eval_sessions
                    (session_key, contract_version, state_schema_version, requested_model,
@@ -561,7 +629,7 @@ pub fn apply_preflight(
                     plan.contract_version,
                     plan.state_schema_version,
                     plan.config.requested_model,
-                    model_card_json(&card),
+                    model_card_json(&requested_model, &identity),
                     plan.config.max_calls,
                     plan.config.max_input_tokens,
                 ],
@@ -957,6 +1025,13 @@ mod tests {
     struct Stub {
         base: String,
         hits: Arc<AtomicUsize>,
+    }
+
+    impl Stub {
+        /// stub が受けた HTTP 接続数（このモジュールの stub は /v1/models しか返さない）
+        fn hits(&self) -> usize {
+            self.hits.load(Ordering::SeqCst)
+        }
     }
 
     async fn start_stub(body: Option<String>) -> Stub {
@@ -1797,11 +1872,11 @@ mod tests {
         // 手作りで「モデル B についての成功」を作る
         let outcome = PreflightOutcome::Available {
             requested_model: OTHER_MODEL.to_string(),
-            card: ModelCard {
+            identity: ModelIdentity::Listed(ModelCard {
                 name: OTHER_MODEL.to_string(),
                 description: "other".to_string(),
                 release_date: "2025-01-01".to_string(),
-            },
+            }),
         };
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
@@ -1827,11 +1902,11 @@ mod tests {
         let outcomes = [
             PreflightOutcome::Available {
                 requested_model: OTHER_MODEL.to_string(),
-                card: ModelCard {
+                identity: ModelIdentity::Listed(ModelCard {
                     name: OTHER_MODEL.to_string(),
                     description: "other".to_string(),
                     release_date: "2025-01-01".to_string(),
-                },
+                }),
             },
             PreflightOutcome::Unavailable {
                 requested_model: OTHER_MODEL.to_string(),
@@ -1864,11 +1939,11 @@ mod tests {
 
         let outcome = PreflightOutcome::Available {
             requested_model: MODEL.to_string(),
-            card: ModelCard {
+            identity: ModelIdentity::Listed(ModelCard {
                 name: OTHER_MODEL.to_string(),
                 description: "swapped".to_string(),
                 release_date: "2025-01-01".to_string(),
-            },
+            }),
         };
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
@@ -1894,7 +1969,9 @@ mod tests {
         let outcome = preflight_model(&client, &plan).await;
         assert_eq!(outcome.requested_model(), MODEL);
         match outcome {
-            PreflightOutcome::Available { card, .. } => assert_eq!(card.name, MODEL),
+            PreflightOutcome::Available { identity: ModelIdentity::Listed(card), .. } => {
+                assert_eq!(card.name, MODEL)
+            }
             other => panic!("利用可のはずが {other:?}"),
         }
     }
@@ -2411,6 +2488,164 @@ mod tests {
             JevSessionError::NotResumable { status: "closed".to_string() }
         );
         assert_eq!(load_session(&conn, created.id).unwrap().status, "closed");
+    }
+
+    // ─── canonical な版の pin ────────────────────────────────────────────
+
+    #[test]
+    fn canonical_model_names_are_versioned_only() {
+        for good in [
+            "jev-1.13.0",
+            "jev-2.0.0",
+            "jev-0.0.1",
+            "jev-10.200.3000",
+            // 桁数の上限は設けない（TypeSafe に無い制限を足さない）
+            "jev-1000000000.0.0",
+            "jev-99999999999999999999.1.2",
+        ] {
+            assert!(is_canonical_model_name(good), "{good} を弾いている");
+        }
+        for bad in [
+            "jev-preview",
+            "jev-latest",
+            "latest",
+            "jev-1.13",
+            "jev-1.13.0-preview",
+            "jev-a.b.c",
+            "jev-1.13.0.1",
+            "jev-1..0",
+            "jev-",
+            "1.13.0",
+            "",
+            "   ",
+        ] {
+            assert!(!is_canonical_model_name(bad), "{bad:?} を受け入れている");
+        }
+    }
+
+    /// canonical な版は `GET /v1/models` を見ずに使う
+    ///
+    /// TypeSafe の一覧には alias しか出ないが、版を直接指定した SystemOne は通る。
+    /// identity の最終的な根拠は応答の `model` の完全一致（C3B）であって一覧ではない。
+    #[tokio::test]
+    async fn a_canonical_version_pin_never_calls_the_models_endpoint() {
+        const PINNED: &str = "jev-1.13.0";
+        let conn = open_db();
+        // 一覧は alias だけ（実 API の現状と同じ）。呼ばれないことを確かめたいので用意する
+        let body = json!({"models": [
+            {"name": "jev-latest", "description": "alias", "release_date": "2026-09-10"},
+            {"name": "jev-preview", "description": "alias", "release_date": "2026-09-10"}
+        ]})
+        .to_string();
+        let stub = start_stub(Some(body)).await;
+        let client = TypeSafeClient::with_key_for_test(KEY, &stub.base);
+
+        let config = JevSessionConfig::new("eval-pin", PINNED);
+        let plan = plan_session(&conn, &config).unwrap();
+        let outcome = preflight_model(&client, &plan).await;
+        assert_eq!(
+            outcome,
+            PreflightOutcome::Available {
+                requested_model: PINNED.to_string(),
+                identity: ModelIdentity::ExplicitVersionPin,
+            }
+        );
+        assert_eq!(stub.hits(), 0, "canonical pin で GET /v1/models を呼んでいる");
+
+        let session = apply_preflight(&conn, &plan, outcome).unwrap();
+        assert_eq!(session.status, "open");
+        assert_eq!(session.requested_model, PINNED);
+        assert_eq!(stub.hits(), 0);
+
+        // 確認していないことは書かない
+        let card: Value = serde_json::from_str(&session.model_card_json).unwrap();
+        assert_eq!(card["name"], PINNED);
+        assert_eq!(card["identity_source"], "explicit_version_pin");
+        assert_eq!(
+            card.get("listed_in_models"),
+            None,
+            "一覧を見ていないのに掲載状況を書いている"
+        );
+        assert_eq!(card.get("description"), None, "description を捏造している");
+        assert_eq!(card.get("release_date"), None, "release_date を捏造している");
+    }
+
+    /// 一覧が落ちていても canonical pin は通る（そもそも見に行かない）
+    #[tokio::test]
+    async fn a_canonical_pin_does_not_depend_on_the_models_endpoint() {
+        let conn = open_db();
+        let stub = start_stub(None).await; // 何を返しても関係ない（HTTP 503）
+        let client = TypeSafeClient::with_key_for_test(KEY, &stub.base);
+
+        let config = JevSessionConfig::new("eval-pin-down", "jev-1.13.0");
+        let plan = plan_session(&conn, &config).unwrap();
+        let outcome = preflight_model(&client, &plan).await;
+        assert_eq!(
+            outcome,
+            PreflightOutcome::Available {
+                requested_model: "jev-1.13.0".to_string(),
+                identity: ModelIdentity::ExplicitVersionPin,
+            }
+        );
+        assert_eq!(stub.hits(), 0, "一覧を見に行っている");
+        assert!(apply_preflight(&conn, &plan, outcome).is_ok());
+    }
+
+    /// 構文上 canonical なら、実在しない版でも session は作れる。
+    /// 実際の可否は最初の SystemOne（応答 model の完全一致）で決まる
+    #[tokio::test]
+    async fn a_nonexistent_canonical_version_still_opens_a_session() {
+        let conn = open_db();
+        let stub = start_stub(Some(models_body())).await;
+        let client = TypeSafeClient::with_key_for_test(KEY, &stub.base);
+
+        let config = JevSessionConfig::new("eval-pin-ghost", "jev-9.9.9");
+        let plan = plan_session(&conn, &config).unwrap();
+        let outcome = preflight_model(&client, &plan).await;
+        let session = apply_preflight(&conn, &plan, outcome).unwrap();
+        assert_eq!(session.requested_model, "jev-9.9.9");
+        assert_eq!(session.status, "open");
+        assert_eq!(stub.hits(), 0);
+    }
+
+    /// 一覧に載っていれば従来どおり card をそのまま残す
+    #[tokio::test]
+    async fn a_listed_model_keeps_its_card() {
+        let conn = open_db();
+        let session = start_open_session(&conn, "eval-listed").await;
+        let card: Value = serde_json::from_str(&session.model_card_json).unwrap();
+        assert_eq!(card["name"], MODEL);
+        assert_eq!(card["description"], "test");
+        assert_eq!(card["release_date"], "2026-01-01");
+        assert_eq!(card["identity_source"], "models_listing");
+        assert_eq!(card["listed_in_models"], true);
+    }
+
+    /// canonical でない名前（alias）は従来どおり一覧で確認し、無ければ止める
+    #[tokio::test]
+    async fn an_unlisted_alias_is_still_rejected() {
+        let conn = open_db();
+        let body = json!({"models": [
+            {"name": "jev-1.13.0", "description": "x", "release_date": "2026-09-10"}
+        ]})
+        .to_string();
+        let stub = start_stub(Some(body)).await;
+        let client = TypeSafeClient::with_key_for_test(KEY, &stub.base);
+
+        for alias in ["jev-preview", "jev-latest"] {
+            let config = JevSessionConfig::new(format!("eval-alias-{alias}"), alias);
+            let plan = plan_session(&conn, &config).unwrap();
+            let outcome = preflight_model(&client, &plan).await;
+            assert!(
+                matches!(outcome, PreflightOutcome::Unavailable { .. }),
+                "{alias} が通ってしまう"
+            );
+            assert!(apply_preflight(&conn, &plan, outcome).is_err());
+        }
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM jev_eval_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 0);
     }
 
     // ─── 予算 ────────────────────────────────────────────────────────────
