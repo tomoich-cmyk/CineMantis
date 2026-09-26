@@ -751,6 +751,133 @@ pub fn set_match_source(
     Ok(())
 }
 
+// ─── Jev shadow sibling run（PR3 C4c）────────────────────────────────────────
+
+/// production の safe run と、それに対応する Jev 用 shadow run。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JevShadowRun {
+    pub safe_run_id: i64,
+    pub shadow_run_id: i64,
+}
+
+/// safe run の兄弟として shadow run を 1 件作る。
+///
+/// Jev（C4b）は `mode='shadow'` かつ `applied=0` の run しか受け付けない。production の
+/// run は `mode='safe'` のままにしたいので、**同じ入力を写した shadow の兄弟**を作って
+/// そちらに Jev の監査を積む。production 側の run は一切変更しない。
+///
+/// 戻り値が `None` なのは「Jev に渡せる deterministic な候補が無い」場合。予算も
+/// HTTP も使わず、shadow run も作らない。
+///
+/// 写すのは run の入力（snapshot / queries / policy / decision）と候補、そして
+/// 決定的な matcher の verdict だけ。`jev-*` の verdict は写さない（C4b 以降が作る）。
+/// review task / labels / rejections には触れない。
+pub fn create_jev_shadow_run(
+    conn: &Connection,
+    safe_run_id: i64,
+) -> Result<Option<JevShadowRun>, String> {
+    // 既に作ってあるなら作り直さない
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT shadow_run_id FROM metadata_match_jev_run_links WHERE safe_run_id = ?1",
+            rusqlite::params![safe_run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if existing.is_some() {
+        return Err(format!("run {safe_run_id} には既に shadow run があります"));
+    }
+
+    let source: Option<(String, i64, String)> = conn
+        .query_row(
+            "SELECT mode, applied, decision FROM metadata_match_runs WHERE id = ?1",
+            rusqlite::params![safe_run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((mode, applied, decision)) = source else {
+        return Err(format!("run {safe_run_id} がありません"));
+    };
+    if mode != "safe" {
+        return Err(format!("run {safe_run_id} は safe run ではありません"));
+    }
+    if applied != 0 {
+        return Err(format!("run {safe_run_id} は既に適用済みです"));
+    }
+    if decision == "ERROR" {
+        return Err(format!("run {safe_run_id} は ERROR です"));
+    }
+
+    // 決定的な順位が付いた候補が無ければ Jev に聞くことが無い
+    let ranked: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM metadata_match_candidates
+              WHERE run_id = ?1 AND rules_rank IS NOT NULL",
+            rusqlite::params![safe_run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if ranked == 0 {
+        return Ok(None);
+    }
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+
+    // run 本体を写す。mode だけ shadow にして、適用に関わる列は空にする
+    tx.execute(
+        "INSERT INTO metadata_match_runs
+           (work_id, batch_id, trigger_kind, mode, evidence_class, state_schema_version,
+            input_snapshot_json, search_queries_json, policy_version, policy_snapshot_json,
+            governing_matcher, decision, decision_reasons_json, applied, applied_tmdb_id,
+            applied_media_type, status_after, tmdb_calls, latency_ms, error_text)
+         SELECT work_id, batch_id, trigger_kind, 'shadow', evidence_class, state_schema_version,
+                input_snapshot_json, search_queries_json, policy_version, policy_snapshot_json,
+                'rules-safe', decision, decision_reasons_json, 0, NULL,
+                NULL, NULL, 0, 0, NULL
+           FROM metadata_match_runs WHERE id = ?1",
+        rusqlite::params![safe_run_id],
+    )
+    .map_err(|e| e.to_string())?;
+    let shadow_run_id = tx.last_insert_rowid();
+
+    // 候補はそのまま写す。cand_key は振り直さない
+    tx.execute(
+        "INSERT INTO metadata_match_candidates
+           (run_id, cand_key, tmdb_id, media_type, search_rank, rules_rank,
+            rules_score, rules_reasons_json, tmdb_snapshot_json, explicit_conflicts_json,
+            query_source)
+         SELECT ?2, cand_key, tmdb_id, media_type, search_rank, rules_rank,
+                rules_score, rules_reasons_json, tmdb_snapshot_json, explicit_conflicts_json,
+                query_source
+           FROM metadata_match_candidates WHERE run_id = ?1",
+        rusqlite::params![safe_run_id, shadow_run_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // 決定的な matcher の結論だけ写す。jev-* は写さない
+    tx.execute(
+        "INSERT INTO metadata_match_verdicts
+           (run_id, matcher, matcher_version, tmdb_id, media_type, decision, score, reasons_json)
+         SELECT ?2, matcher, matcher_version, tmdb_id, media_type, decision, score, reasons_json
+           FROM metadata_match_verdicts
+          WHERE run_id = ?1 AND matcher IN ('rules-1','rules-safe','rules-tags-shadow')",
+        rusqlite::params![safe_run_id, shadow_run_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.execute(
+        "INSERT INTO metadata_match_jev_run_links (safe_run_id, shadow_run_id)
+         VALUES (?1, ?2)",
+        rusqlite::params![safe_run_id, shadow_run_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(Some(JevShadowRun { safe_run_id, shadow_run_id }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

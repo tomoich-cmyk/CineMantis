@@ -4,6 +4,7 @@ use crate::models::match_source::MatchSource;
 use crate::models::match_status::MatchStatus;
 use crate::models::tmdb::*;
 use crate::services::{
+    jev_sidecar::{self, JevSidecarContext},
     match_history::{
         self, CandidateSource, LabelMethod, LabelWrite, RejectionSource, RulesOneVerdict, RunInput,
         SearchQuery, TriggerKind,
@@ -542,6 +543,8 @@ async fn match_once(
     snapshot: &PreMatchSnapshot,
     trigger_kind: TriggerKind,
     batch_id: Option<&str>,
+    // Jev の shadow 評価。無効なら None。結果は production の判定に使わない
+    jev: Option<&JevSidecarContext>,
 ) -> Result<AutoMatchResult, String> {
     let work_id = snapshot.work_id;
     let evidence = snapshot.local_evidence();
@@ -632,6 +635,13 @@ async fn match_once(
             },
         )?
     };
+
+    // Jev shadow sidecar。**works を動かす前に**呼び、送る state を凍結する。
+    // 失敗しても production の判定は変えない（結果は捨てる）
+    if let Some(jev) = jev {
+        let _report =
+            jev_sidecar::evaluate(db, jev, run_id, snapshot, &search.parsed).await;
+    }
 
     match (outcome.decision, applied_candidate) {
         (SafeDecision::Auto, Some((tmdb_id, media_type, confidence))) => {
@@ -950,15 +960,30 @@ pub async fn auto_match_work(
         ));
     }
 
-    match_once(
+    // 1 作品で 1 session。無効なら None のまま進む（production は従来どおり）
+    let sidecar = jev_sidecar::start(
+        &state,
+        jev_sidecar::single_session_key(work_id),
+        1,
+    )
+    .await;
+
+    let result = match_once(
         &app,
         &state,
         &client,
         &target.snapshot,
         TriggerKind::Single,
         None,
+        sidecar.as_ref(),
     )
-    .await
+    .await;
+
+    if let Some(context) = &sidecar {
+        jev_sidecar::finish(&state, context);
+    }
+
+    result
 }
 
 /// ソース単位で未照合の作品を一括照合
@@ -1193,6 +1218,14 @@ pub async fn auto_match_source_inner(
     let mut failed = 0usize;
     let mut last_error: Option<String> = None;
 
+    // バッチ全体で 1 session。対象が無ければ作らない。
+    // 予算は「1 作品 1 call」分だけ確保する
+    let sidecar = if total == 0 {
+        None
+    } else {
+        jev_sidecar::start(db, jev_sidecar::batch_session_key(&batch_id), total as i64).await
+    };
+
     let _ = app.emit(
         "metadata:batch_progress",
         MetadataBatchProgress {
@@ -1227,7 +1260,17 @@ pub async fn auto_match_source_inner(
             TriggerKind::Batch
         };
 
-        match match_once(app, db, &client, &target.snapshot, trigger_kind, Some(&batch_id)).await {
+        match match_once(
+            app,
+            db,
+            &client,
+            &target.snapshot,
+            trigger_kind,
+            Some(&batch_id),
+            sidecar.as_ref(),
+        )
+        .await
+        {
             Ok(result) if result.matched => {
                 eprintln!("[TMDb] MATCH: \"{}\" → {:?}", title, result.tmdb_id);
                 matched += 1;

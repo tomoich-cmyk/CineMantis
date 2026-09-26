@@ -388,8 +388,39 @@ pub async fn prepare_call(
     session_id: i64,
     input: &ShadowCallInput,
 ) -> Result<PrepareCallResult, JevShadowError> {
-    // HTTP の待ち時間に握るのはこの非同期ロックだけ。DB の同期ロックは持たない
-    let guard = call_lock().lock_owned().await;
+    let permit = acquire_call_permit().await;
+    prepare_call_with_permit(conn, session_id, input, permit)
+}
+
+/// 逐次実行の権利。これを持っている間だけ Jev の呼び出しを進められる。
+///
+/// アプリ側は DB の同期ロックを取る**前**にこれを取り、監査の保存が終わるまで
+/// 持ち回る。こうすると「permit を待つ間 DB を止める」ことがなくなる。
+pub struct JevCallPermit {
+    guard: OwnedMutexGuard<()>,
+}
+
+impl std::fmt::Debug for JevCallPermit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("JevCallPermit")
+    }
+}
+
+/// 逐次実行の権利を取る。**DB のロックを持たずに**呼ぶこと。
+pub async fn acquire_call_permit() -> JevCallPermit {
+    JevCallPermit { guard: call_lock().lock_owned().await }
+}
+
+/// [`prepare_call`] の同期版。permit は呼び出し側が先に取っておく。
+///
+/// `.await` を含まないので、DB の `std::sync::MutexGuard` を持ったまま安全に呼べる。
+pub fn prepare_call_with_permit(
+    conn: &mut Connection,
+    session_id: i64,
+    input: &ShadowCallInput,
+    permit: JevCallPermit,
+) -> Result<PrepareCallResult, JevShadowError> {
+    let guard = permit.guard;
 
     if input.candidates.is_empty() {
         return Err(JevShadowError::Precondition("候補がありません".into()));
