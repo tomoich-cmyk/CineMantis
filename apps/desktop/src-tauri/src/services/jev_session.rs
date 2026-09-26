@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! 1. plan_session(&conn, &config)      // 同期。contract 登録 + resume 判定まで
-//! 2. preflight_model(&client, model)   // 非同期。DB に触らない
+//! 2. preflight_model(&client, &plan)   // 非同期。DB に触らない
 //! 3. apply_preflight(&conn, plan, outcome)  // 同期。session 行を作る / 状態を戻す
 //! ```
 //!
@@ -162,6 +162,8 @@ pub enum JevSessionError {
     SessionNotFound,
     /// plan を立てた後に別の経路が状態を変えた
     ConcurrentSessionChange { expected: String, found: String },
+    /// preflight の対象モデルが plan と食い違っている
+    PreflightModelMismatch { expected: String, found: String },
     /// トークン数が不正、または加算で溢れた
     InvalidTokenCount(String),
     Db(String),
@@ -187,6 +189,10 @@ impl std::fmt::Display for JevSessionError {
             JevSessionError::ConcurrentSessionChange { expected, found } => write!(
                 f,
                 "session の状態が変わりました（{expected} を期待しましたが {found} でした）"
+            ),
+            JevSessionError::PreflightModelMismatch { expected, found } => write!(
+                f,
+                "preflight のモデルが一致しません（{expected} を期待しましたが {found} でした）"
             ),
             JevSessionError::InvalidTokenCount(reason) => {
                 write!(f, "トークン数が不正です: {reason}")
@@ -226,35 +232,19 @@ pub fn ensure_contract_registered(
 
     let row = match existing {
         Some(row) => row,
-        None => {
-            let inserted = conn.execute(
-                "INSERT INTO jev_contracts
-                   (contract_version, state_schema_version, instructions_text,
-                    questions_template_json, criteria_json, validation_policy_json,
-                    canonical_sha256, default_model)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    contract.contract_version,
-                    contract.state_schema_version,
-                    contract.instructions,
-                    questions_template,
-                    criteria,
-                    validation_policy,
-                    contract.canonical_sha256,
-                    default_model,
-                ],
-            );
-            match inserted {
-                Ok(_) => return Ok(()),
-                // 同時に別の接続が同じ版を入れた。先に入った行をそのまま尊重し、
-                // 凍結フィールドが一致するかだけを確かめる（default_model は見ない）。
-                Err(error) if is_contract_version_conflict(&error) => {
-                    read_contract_row(conn, &contract.contract_version)?
-                        .ok_or(JevSessionError::SessionNotFound)?
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        None => match insert_contract_or_reconcile(
+            conn,
+            contract,
+            default_model,
+            &questions_template,
+            &criteria,
+            &validation_policy,
+        )? {
+            // INSERT できた
+            None => return Ok(()),
+            // 競合したので、先に入った行を照合する
+            Some(row) => row,
+        },
     };
 
     let (
@@ -298,6 +288,48 @@ pub fn ensure_contract_registered(
 }
 
 type StoredContract = (String, String, String, String, String, String);
+
+/// contract を INSERT する。UNIQUE で負けたら既存行を読んで返す。
+///
+/// `Ok(None)` が「自分が入れた」、`Ok(Some(row))` が「先に入っていた行」。
+/// 競合しても UPDATE も REPLACE もしない。
+fn insert_contract_or_reconcile(
+    conn: &Connection,
+    contract: &JevContract,
+    default_model: &str,
+    questions_template: &str,
+    criteria: &str,
+    validation_policy: &str,
+) -> Result<Option<StoredContract>, JevSessionError> {
+    let inserted = conn.execute(
+        "INSERT INTO jev_contracts
+           (contract_version, state_schema_version, instructions_text,
+            questions_template_json, criteria_json, validation_policy_json,
+            canonical_sha256, default_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            contract.contract_version,
+            contract.state_schema_version,
+            contract.instructions,
+            questions_template,
+            criteria,
+            validation_policy,
+            contract.canonical_sha256,
+            default_model,
+        ],
+    );
+    match inserted {
+        Ok(_) => Ok(None),
+        // 同時に別の接続が同じ版を入れた。先に入った行をそのまま尊重し、
+        // 凍結フィールドが一致するかだけを呼び出し側が確かめる（default_model は見ない）。
+        Err(error) if is_contract_version_conflict(&error) => {
+            let row = read_contract_row(conn, &contract.contract_version)?
+                .ok_or(JevSessionError::SessionNotFound)?;
+            Ok(Some(row))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 
 fn read_contract_row(
     conn: &Connection,
@@ -358,10 +390,23 @@ pub struct SessionPlan {
 }
 
 /// preflight の結果。失敗理由は **安全な定型文だけ**にする。
+///
+/// どのモデルについての結果かを必ず持たせる。こうしないと、モデル B の失敗結果で
+/// モデル A の session を blocked にする、といった取り違えが起こり得る。
 #[derive(Debug, Clone, PartialEq)]
 pub enum PreflightOutcome {
-    Available(ModelCard),
-    Unavailable { reason: String },
+    Available { requested_model: String, card: ModelCard },
+    Unavailable { requested_model: String, reason: String },
+}
+
+impl PreflightOutcome {
+    /// この結果がどのモデルについてのものか。
+    pub fn requested_model(&self) -> &str {
+        match self {
+            PreflightOutcome::Available { requested_model, .. } => requested_model,
+            PreflightOutcome::Unavailable { requested_model, .. } => requested_model,
+        }
+    }
 }
 
 /// 手順 1（同期）。設定を検証し、contract を登録し、resume 可能かまで決める。
@@ -444,11 +489,14 @@ pub fn plan_session(
 ///
 /// 完全一致でしか探さない（C3B の `verify_model_available`）。alias や最新版へ
 /// 勝手に乗り換えない。
-pub async fn preflight_model(client: &TypeSafeClient, requested_model: &str) -> PreflightOutcome {
-    match client.verify_model_available(requested_model).await {
-        Ok(card) => PreflightOutcome::Available(card),
+pub async fn preflight_model(client: &TypeSafeClient, plan: &SessionPlan) -> PreflightOutcome {
+    // 見るモデルは plan のものだけ。呼び出し側が別の文字列を差し込めないようにする
+    let requested_model = plan.config.requested_model.clone();
+    match client.verify_model_available(&requested_model).await {
+        Ok(card) => PreflightOutcome::Available { requested_model, card },
         Err(error) => PreflightOutcome::Unavailable {
             reason: safe_preflight_reason(&error),
+            requested_model,
         },
     }
 }
@@ -483,8 +531,26 @@ pub fn apply_preflight(
     plan: &SessionPlan,
     outcome: PreflightOutcome,
 ) -> Result<JevSession, JevSessionError> {
+    // plan / preflight / ModelCard の三者が同じモデルを指していること。
+    // 1 つでも違えば DB へ一切書かずに止める
+    if outcome.requested_model() != plan.config.requested_model {
+        return Err(JevSessionError::PreflightModelMismatch {
+            expected: plan.config.requested_model.clone(),
+            found: outcome.requested_model().to_string(),
+        });
+    }
+    if let PreflightOutcome::Available { card, .. } = &outcome {
+        // C3B の verify_model_available が通常は保証するが、session 層でも確かめる
+        if card.name != plan.config.requested_model {
+            return Err(JevSessionError::PreflightModelMismatch {
+                expected: plan.config.requested_model.clone(),
+                found: card.name.clone(),
+            });
+        }
+    }
+
     match (plan.existing_id, outcome) {
-        (None, PreflightOutcome::Available(card)) => {
+        (None, PreflightOutcome::Available { card, .. }) => {
             let inserted = conn.execute(
                 "INSERT INTO jev_eval_sessions
                    (session_key, contract_version, state_schema_version, requested_model,
@@ -512,16 +578,16 @@ pub fn apply_preflight(
                 Err(error) => Err(error.into()),
             }
         }
-        (None, PreflightOutcome::Unavailable { reason }) => {
+        (None, PreflightOutcome::Unavailable { reason, .. }) => {
             // session 行は作らない。contract 行だけ先に入っていても問題ない
             Err(JevSessionError::Blocked { reason })
         }
-        (Some(id), PreflightOutcome::Available(_)) => {
+        (Some(id), PreflightOutcome::Available { .. }) => {
             // model_card_json は上書きしない（開始時の snapshot を残す）
             let (expected, revision) = expected_generation(plan)?;
             reopen_after_successful_preflight(conn, id, &expected, revision)
         }
-        (Some(id), PreflightOutcome::Unavailable { reason }) => {
+        (Some(id), PreflightOutcome::Unavailable { reason, .. }) => {
             // plan 時点の status からしか動かさない。別の preflight が先に
             // open へ戻していたら、この古い失敗で blocked に落とさない
             let (expected, revision) = expected_generation(plan)?;
@@ -780,6 +846,18 @@ fn load_blocked_reason(
 /// **論理 call 1 回分だけ超過し得る**。超過したらそこで `exhausted` にする。
 /// 出力トークンは記録するだけで、C4 v1 では上限に使わない。
 ///
+/// この「1 回分まで」は、**C4b v1 が同じ session の logical call を逐次実行する**
+/// という前提の上に成り立つ:
+///
+/// ```text
+/// reserve N → HTTP N → token accounting N → 初めて reserve N+1
+/// ```
+///
+/// 同一 session で複数の call を同時に in-flight にすると、消費量が判明する前に
+/// 予約が通ってしまい、上限を call 数分だけ超過し得る。`reserve_call_budget` が
+/// 並行安全であることと、C4b が並行実行してよいことは別の話。逐次性は C4b 側で
+/// テストする。
+///
 /// 既に `exhausted` になっていても、予約済み call の記帳は通す。
 pub fn record_token_usage(
     conn: &mut Connection,
@@ -942,7 +1020,7 @@ mod tests {
     async fn start_open_session(conn: &Connection, key: &str) -> JevSession {
         let plan = plan_session(conn, &config(key)).unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, &plan.config.requested_model).await;
+        let outcome = preflight_model(&client, &plan).await;
         apply_preflight(conn, &plan, outcome).unwrap()
     }
 
@@ -1093,6 +1171,94 @@ mod tests {
         assert_eq!(count, 1, "既存行が消えている");
         assert_eq!(session_id, None, "legacy 行は session を持たなくてよい");
         assert_eq!(request_id, None);
+        assert_eq!(db::foreign_key_check_rows(&conn).unwrap().len(), 0);
+    }
+
+    /// 023 までの DB に 024 を当てる、本物の upgrade
+    #[test]
+    fn upgrading_from_023_adds_the_new_schema_without_touching_old_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        db::apply_migrations_through_023(&conn).unwrap();
+
+        // 024 前の姿であることを確かめる
+        let columns = column_names(&conn, "metadata_match_jev_calls");
+        assert!(!columns.contains(&"request_id".to_string()), "024 が先に入っている");
+        assert!(!columns.contains(&"eval_session_id".to_string()));
+        let sessions: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='table' AND name='jev_eval_sessions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sessions, 0, "jev_eval_sessions が既にある");
+
+        // 023 時点の legacy 行を入れる
+        let contract = contract_v2();
+        ensure_contract_registered(&conn, &contract, MODEL).unwrap();
+        let run_id = insert_run(&conn);
+        conn.execute(
+            "INSERT INTO metadata_match_jev_calls
+               (run_id, call_seq, call_kind, contract_version, state_schema_version,
+                requested_model, state_json, questions_json, candidate_order_json, status)
+             VALUES (?1, 1, 'packed', ?2, ?3, ?4, '{\"s\":1}', '{\"q\":1}', '[\"c1\"]', 'error')",
+            rusqlite::params![
+                run_id,
+                contract.contract_version,
+                contract.state_schema_version,
+                MODEL
+            ],
+        )
+        .unwrap();
+
+        // ここで 024 を当てる
+        db::apply_migration_024(&conn).unwrap();
+
+        let columns = column_names(&conn, "metadata_match_jev_calls");
+        assert!(columns.contains(&"request_id".to_string()));
+        assert!(columns.contains(&"eval_session_id".to_string()));
+        let session_columns = column_names(&conn, "jev_eval_sessions");
+        assert!(session_columns.contains(&"lifecycle_revision".to_string()));
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type='index' AND name='idx_jev_calls_session'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+
+        // legacy 行は残り、新しい列は NULL
+        let (count, state, request_id, session_id): (i64, String, Option<String>, Option<i64>) =
+            conn.query_row(
+                "SELECT COUNT(*), MAX(state_json), MAX(request_id), MAX(eval_session_id)
+                   FROM metadata_match_jev_calls",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "legacy 行が消えている");
+        assert_eq!(state, "{\"s\":1}", "既存の値が書き換わっている");
+        assert_eq!(request_id, None);
+        assert_eq!(session_id, None);
+
+        // もう一度当てても壊れない
+        db::apply_migration_024(&conn).unwrap();
+        db::apply_migrations(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM metadata_match_jev_calls", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
         assert_eq!(db::foreign_key_check_rows(&conn).unwrap().len(), 0);
     }
 
@@ -1285,9 +1451,24 @@ mod tests {
             .is_none());
         ensure_contract_registered(&conn_a, &contract, "model-a").unwrap();
 
-        // 負けた側は UNIQUE を外へ出さず、凍結フィールドの一致だけを見る
+        // 負けた側は UNIQUE を外へ出さず、凍結フィールドの一致だけを見る。
+        // B の関数内 SELECT では既に A の行が見えてしまうので、INSERT 競合の分岐も
+        // 直接叩いて、その経路が既存行を返すことまで確かめる。
         ensure_contract_registered(&conn_b, &contract, "model-b")
             .expect("同じ contract なら成功する");
+
+        let reconciled = insert_contract_or_reconcile(
+            &conn_b,
+            &contract,
+            "model-b",
+            &canonical_json(&contract.questions_template),
+            &canonical_json(&contract.criteria),
+            &canonical_json(&contract.validation_policy),
+        )
+        .expect("競合しても Err にしない")
+        .expect("既存行が返る");
+        assert_eq!(reconciled.1, contract.instructions);
+        assert_eq!(reconciled.5, contract.canonical_sha256);
 
         let (count, default_model): (i64, String) = conn_a
             .query_row(
@@ -1302,6 +1483,42 @@ mod tests {
         drop(conn_a);
         drop(conn_b);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// INSERT 競合の分岐が、内容の違う既存行を黙って受け入れないこと
+    #[test]
+    fn the_insert_conflict_branch_surfaces_a_mismatch() {
+        let conn = open_db();
+        let contract = contract_v2();
+
+        // 別内容の同じ版が先に入っている
+        conn.execute(
+            "INSERT INTO jev_contracts
+               (contract_version, state_schema_version, instructions_text,
+                questions_template_json, criteria_json, validation_policy_json,
+                canonical_sha256, default_model)
+             VALUES (?1, ?2, '違う指示', '{}', '{}', '{}', 'deadbeef', 'model-a')",
+            rusqlite::params![contract.contract_version, contract.state_schema_version],
+        )
+        .unwrap();
+
+        // 競合分岐は既存行をそのまま返し、判断は呼び出し側の照合に任せる
+        let row = insert_contract_or_reconcile(
+            &conn,
+            &contract,
+            "model-b",
+            &canonical_json(&contract.questions_template),
+            &canonical_json(&contract.criteria),
+            &canonical_json(&contract.validation_policy),
+        )
+        .unwrap()
+        .expect("既存行が返る");
+        assert_eq!(row.1, "違う指示", "既存行を書き換えている");
+
+        assert_eq!(
+            ensure_contract_registered(&conn, &contract, "model-b").unwrap_err(),
+            JevSessionError::ContractMismatch { field: "instructions_text" }
+        );
     }
 
     /// 競合相手の contract 内容が違えば、書き換えずに mismatch
@@ -1403,7 +1620,7 @@ mod tests {
         let plan = plan_session(&conn, &config("eval-resume")).unwrap();
         assert_eq!(plan.existing_id, Some(first.id));
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let resumed = apply_preflight(&conn, &plan, outcome).unwrap();
         assert_eq!(resumed.id, first.id);
         let count: i64 = conn
@@ -1499,7 +1716,7 @@ mod tests {
         // 再開時に preflight が失敗 → blocked
         let plan = plan_session(&conn, &config("eval-block")).unwrap();
         let (client, _stub) = unavailable_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let error = apply_preflight(&conn, &plan, outcome).unwrap_err();
         assert!(matches!(error, JevSessionError::Blocked { .. }), "{error}");
 
@@ -1514,7 +1731,7 @@ mod tests {
         // blocked でも preflight が通れば open に戻る。snapshot は上書きしない
         let plan = plan_session(&conn, &config("eval-block")).unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let reopened = apply_preflight(&conn, &plan, outcome).unwrap();
         assert_eq!(reopened.status, "open");
         assert_eq!(reopened.blocked_reason, None);
@@ -1526,7 +1743,7 @@ mod tests {
         let conn = open_db();
         let plan = plan_session(&conn, &config("eval-new-fail")).unwrap();
         let (client, _stub) = unavailable_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
 
         let error = apply_preflight(&conn, &plan, outcome).unwrap_err();
         assert!(matches!(error, JevSessionError::Blocked { .. }));
@@ -1553,7 +1770,7 @@ mod tests {
         for name in ["jev-latest", "jev-test-model", "JEV-TEST-MODEL-1"] {
             let config = JevSessionConfig::new(format!("eval-{name}"), name);
             let plan = plan_session(&conn, &config).unwrap();
-            let outcome = preflight_model(&client, name).await;
+            let outcome = preflight_model(&client, &plan).await;
             assert!(
                 matches!(outcome, PreflightOutcome::Unavailable { .. }),
                 "{name} が採用されてしまった"
@@ -1565,6 +1782,121 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM jev_eval_sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(sessions, 0);
+    }
+
+    // ─── preflight と plan のモデル一致 ──────────────────────────────────
+
+    const OTHER_MODEL: &str = "jev-test-model-0";
+
+    /// 別モデルの preflight 結果で新規 session を作らない
+    #[tokio::test]
+    async fn a_new_session_rejects_an_outcome_for_another_model() {
+        let conn = open_db();
+        let plan = plan_session(&conn, &config("eval-model-bind")).unwrap();
+
+        // 手作りで「モデル B についての成功」を作る
+        let outcome = PreflightOutcome::Available {
+            requested_model: OTHER_MODEL.to_string(),
+            card: ModelCard {
+                name: OTHER_MODEL.to_string(),
+                description: "other".to_string(),
+                release_date: "2025-01-01".to_string(),
+            },
+        };
+        assert_eq!(
+            apply_preflight(&conn, &plan, outcome).unwrap_err(),
+            JevSessionError::PreflightModelMismatch {
+                expected: MODEL.to_string(),
+                found: OTHER_MODEL.to_string(),
+            }
+        );
+
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM jev_eval_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 0, "session 行を作ってしまっている");
+    }
+
+    /// resume でも、別モデルの成功・失敗のどちらも受け付けない
+    #[tokio::test]
+    async fn a_resume_rejects_outcomes_for_another_model() {
+        let conn = open_db();
+        let session = start_open_session(&conn, "eval-model-bind-resume").await;
+        let before = load_session(&conn, session.id).unwrap();
+
+        let outcomes = [
+            PreflightOutcome::Available {
+                requested_model: OTHER_MODEL.to_string(),
+                card: ModelCard {
+                    name: OTHER_MODEL.to_string(),
+                    description: "other".to_string(),
+                    release_date: "2025-01-01".to_string(),
+                },
+            },
+            PreflightOutcome::Unavailable {
+                requested_model: OTHER_MODEL.to_string(),
+                reason: "model preflight failed: overloaded".to_string(),
+            },
+        ];
+
+        for outcome in outcomes {
+            let plan = plan_session(&conn, &config("eval-model-bind-resume")).unwrap();
+            assert_eq!(
+                apply_preflight(&conn, &plan, outcome).unwrap_err(),
+                JevSessionError::PreflightModelMismatch {
+                    expected: MODEL.to_string(),
+                    found: OTHER_MODEL.to_string(),
+                }
+            );
+            assert_eq!(
+                load_session(&conn, session.id).unwrap(),
+                before,
+                "status / revision / snapshot のいずれかが動いている"
+            );
+        }
+    }
+
+    /// requested_model は合っているが ModelCard の名前が違う場合も弾く
+    #[tokio::test]
+    async fn a_mismatched_model_card_is_rejected() {
+        let conn = open_db();
+        let plan = plan_session(&conn, &config("eval-card-mismatch")).unwrap();
+
+        let outcome = PreflightOutcome::Available {
+            requested_model: MODEL.to_string(),
+            card: ModelCard {
+                name: OTHER_MODEL.to_string(),
+                description: "swapped".to_string(),
+                release_date: "2025-01-01".to_string(),
+            },
+        };
+        assert_eq!(
+            apply_preflight(&conn, &plan, outcome).unwrap_err(),
+            JevSessionError::PreflightModelMismatch {
+                expected: MODEL.to_string(),
+                found: OTHER_MODEL.to_string(),
+            }
+        );
+
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM jev_eval_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 0);
+    }
+
+    /// preflight は plan のモデルしか見に行かない
+    #[tokio::test]
+    async fn preflight_uses_the_planned_model_only() {
+        let conn = open_db();
+        let plan = plan_session(&conn, &config("eval-plan-model")).unwrap();
+        let (client, _stub) = available_client().await;
+
+        let outcome = preflight_model(&client, &plan).await;
+        assert_eq!(outcome.requested_model(), MODEL);
+        match outcome {
+            PreflightOutcome::Available { card, .. } => assert_eq!(card.name, MODEL),
+            other => panic!("利用可のはずが {other:?}"),
+        }
     }
 
     // ─── plan と apply の間に状態が変わる場合 ────────────────────────────
@@ -1593,7 +1925,7 @@ mod tests {
             .unwrap();
 
             let (client, _stub) = available_client().await;
-            let outcome = preflight_model(&client, MODEL).await;
+            let outcome = preflight_model(&client, &plan).await;
             let error = apply_preflight(&conn, &plan, outcome).unwrap_err();
             assert_eq!(
                 error,
@@ -1627,7 +1959,7 @@ mod tests {
             .unwrap();
 
             let (client, _stub) = unavailable_client().await;
-            let outcome = preflight_model(&client, MODEL).await;
+            let outcome = preflight_model(&client, &plan).await;
             let error = apply_preflight(&conn, &plan, outcome).unwrap_err();
             assert_eq!(
                 error,
@@ -1660,7 +1992,7 @@ mod tests {
         .unwrap();
 
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
             JevSessionError::ConcurrentSessionChange {
@@ -1702,7 +2034,7 @@ mod tests {
         .unwrap();
 
         let (client, _stub) = unavailable_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
             JevSessionError::ConcurrentSessionChange {
@@ -1748,7 +2080,7 @@ mod tests {
 
         // 古い失敗を適用しようとしても通らない
         let (client, _stub) = unavailable_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
             JevSessionError::ConcurrentSessionChange {
@@ -1801,7 +2133,7 @@ mod tests {
         .unwrap();
 
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
             JevSessionError::ConcurrentSessionChange {
@@ -1830,7 +2162,7 @@ mod tests {
         assert_eq!(session.lifecycle_revision, 0, "新規は 0 から");
         let plan = plan_session(&conn, &config("eval-rev")).unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let reopened = apply_preflight(&conn, &plan, outcome).unwrap();
         assert_eq!(reopened.status, "open");
         assert_eq!(reopened.lifecycle_revision, 1, "open→open でも世代を進める");
@@ -1838,7 +2170,7 @@ mod tests {
         // blocked → blocked の失敗 preflight でも +1
         let plan = plan_session(&conn, &config("eval-rev")).unwrap();
         let (client, _stub) = unavailable_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert!(apply_preflight(&conn, &plan, outcome).is_err());
         let blocked = load_session(&conn, session.id).unwrap();
         assert_eq!(blocked.status, "blocked");
@@ -1846,7 +2178,7 @@ mod tests {
 
         let plan = plan_session(&conn, &config("eval-rev")).unwrap();
         let (client, _stub) = unavailable_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert!(apply_preflight(&conn, &plan, outcome).is_err());
         let still_blocked = load_session(&conn, session.id).unwrap();
         assert_eq!(still_blocked.status, "blocked");
@@ -1855,7 +2187,7 @@ mod tests {
         // 通常の予約とトークン加算では世代を動かさない
         let plan = plan_session(&conn, &config("eval-rev")).unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let open = apply_preflight(&conn, &plan, outcome).unwrap();
         let base = open.lifecycle_revision;
 
@@ -1885,7 +2217,7 @@ mod tests {
         })
         .unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let session = apply_preflight(&conn, &plan, outcome).unwrap();
         let base = session.lifecycle_revision;
 
@@ -1911,7 +2243,7 @@ mod tests {
         })
         .unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let session = apply_preflight(&conn, &plan, outcome).unwrap();
         let base = session.lifecycle_revision;
 
@@ -1948,7 +2280,7 @@ mod tests {
         .unwrap();
 
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         assert_eq!(
             apply_preflight(&conn, &plan, outcome).unwrap_err(),
             JevSessionError::SessionNotFound
@@ -1971,11 +2303,11 @@ mod tests {
         assert_eq!(plan_a.existing_id, None);
         assert_eq!(plan_b.existing_id, None);
 
-        let outcome_a = preflight_model(&client, MODEL).await;
+        let outcome_a = preflight_model(&client, &plan_a).await;
         let created = apply_preflight(&conn, &plan_a, outcome_a).unwrap();
 
         // 後から来た方は UNIQUE 違反を外へ出さず、既存 session を使う
-        let outcome_b = preflight_model(&client, MODEL).await;
+        let outcome_b = preflight_model(&client, &plan_b).await;
         let second = apply_preflight(&conn, &plan_b, outcome_b).unwrap();
         assert_eq!(second.id, created.id, "別の session を作っている");
         assert_eq!(second.model_card_json, created.model_card_json, "snapshot を上書きしている");
@@ -2003,10 +2335,10 @@ mod tests {
         let plan_b = plan_session(&conn, &different).unwrap();
         assert_eq!(plan_b.existing_id, None);
 
-        let outcome_a = preflight_model(&client, MODEL).await;
+        let outcome_a = preflight_model(&client, &plan_a).await;
         let created = apply_preflight(&conn, &plan_a, outcome_a).unwrap();
 
-        let outcome_b = preflight_model(&client, MODEL).await;
+        let outcome_b = preflight_model(&client, &plan_b).await;
         assert_eq!(
             apply_preflight(&conn, &plan_b, outcome_b).unwrap_err(),
             JevSessionError::SessionConfigMismatch { field: "max_calls" }
@@ -2033,7 +2365,7 @@ mod tests {
         assert_eq!(plan_b.existing_id, None);
 
         let (ok_client, _ok_stub) = available_client().await;
-        let created = apply_preflight(&conn, &plan_a, preflight_model(&ok_client, MODEL).await)
+        let created = apply_preflight(&conn, &plan_a, preflight_model(&ok_client, &plan_a).await)
             .unwrap();
 
         // 相手が blocked になった
@@ -2047,7 +2379,7 @@ mod tests {
         .unwrap();
         let before = load_session(&conn, created.id).unwrap();
 
-        let outcome = preflight_model(&ok_client, MODEL).await;
+        let outcome = preflight_model(&ok_client, &plan_b).await;
         let error = apply_preflight(&conn, &plan_b, outcome).unwrap_err();
         assert!(
             matches!(error, JevSessionError::ConcurrentSessionChange { .. }),
@@ -2069,11 +2401,11 @@ mod tests {
         let plan_a = plan_session(&conn, &config("eval-concurrent-closed")).unwrap();
         let plan_b = plan_session(&conn, &config("eval-concurrent-closed")).unwrap();
 
-        let outcome_a = preflight_model(&client, MODEL).await;
+        let outcome_a = preflight_model(&client, &plan_a).await;
         let created = apply_preflight(&conn, &plan_a, outcome_a).unwrap();
         close_session(&conn, created.id).unwrap();
 
-        let outcome_b = preflight_model(&client, MODEL).await;
+        let outcome_b = preflight_model(&client, &plan_b).await;
         assert_eq!(
             apply_preflight(&conn, &plan_b, outcome_b).unwrap_err(),
             JevSessionError::NotResumable { status: "closed".to_string() }
@@ -2093,7 +2425,7 @@ mod tests {
         })
         .unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let session = apply_preflight(&conn, &plan, outcome).unwrap();
 
         for expected in 1..=3 {
@@ -2167,7 +2499,7 @@ mod tests {
         })
         .unwrap();
         let (client, _stub) = available_client().await;
-        let outcome = preflight_model(&client, MODEL).await;
+        let outcome = preflight_model(&client, &plan).await;
         let session = apply_preflight(&conn, &plan, outcome).unwrap();
 
         // 上限未満なら open のまま予約できる
@@ -2238,7 +2570,7 @@ mod tests {
             config.max_calls = 5;
             let plan = plan_session(&conn, &config).unwrap();
             let (client, _stub) = available_client().await;
-            let outcome = preflight_model(&client, MODEL).await;
+            let outcome = preflight_model(&client, &plan).await;
             apply_preflight(&conn, &plan, outcome).unwrap().id
         };
 

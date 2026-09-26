@@ -122,6 +122,17 @@ pub fn init(path: &Path) -> Result<()> {
 
 /// 全マイグレーションを適用する。起動ごとに再実行されても安全であること。
 pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
+    apply_migrations_inner(conn, true)
+}
+
+/// 023 までで止める。**テスト専用**（本物の 023 → 024 upgrade を再現するため）。
+#[cfg(test)]
+pub(crate) fn apply_migrations_through_023(conn: &Connection) -> Result<()> {
+    apply_migrations_inner(conn, false)
+}
+
+/// `include_024` が false のときだけ 024 を飛ばす。それ以外の順序と挙動は同じ。
+fn apply_migrations_inner(conn: &Connection, include_024: bool) -> Result<()> {
     conn.execute_batch(MIGRATION_001)?;
     // 002-005: ALTER TABLE / CREATE TABLE が既存の場合はエラーを無視
     for migration in [MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_LIBRARY_FIELDS, MIGRATION_LEGACY_COMPAT] {
@@ -153,7 +164,9 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
     rebuild_review_tasks_if_needed(&conn)?;
     rebuild_verdicts_if_needed(&conn)?;
     apply_lenient_migration(&conn, MIGRATION_JEV_SHADOW)?;
-    apply_lenient_migration(&conn, MIGRATION_JEV_EVAL_SESSIONS)?;
+    if include_024 {
+        apply_lenient_migration(&conn, MIGRATION_JEV_EVAL_SESSIONS)?;
+    }
     backfill_legacy_candidate_scores(&conn)?;
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
@@ -166,6 +179,12 @@ pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 024 だけを適用する。**テスト専用**。
+#[cfg(test)]
+pub(crate) fn apply_migration_024(conn: &Connection) -> Result<()> {
+    apply_lenient_migration(conn, MIGRATION_JEV_EVAL_SESSIONS)
 }
 
 fn apply_lenient_migration(conn: &Connection, migration: &str) -> Result<()> {
