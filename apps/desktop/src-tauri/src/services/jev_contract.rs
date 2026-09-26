@@ -36,7 +36,7 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 /// contract の版。文面・生成規則・検証規則を変えたら上げる
-pub const JEV_CONTRACT_VERSION: &str = "jev-contract-1";
+pub const JEV_CONTRACT_VERSION: &str = "jev-contract-2";
 
 /// 候補ごとの質問 ID（`c1_same_work` など）
 pub const SAME_WORK_SUFFIX: &str = "_same_work";
@@ -58,6 +58,15 @@ and a short list of catalogue candidates. \
 If the supplied state does not contain enough information to decide, say so with the \
 option that expresses uncertainty rather than picking a candidate. \
 Never refer to a catalogue id that is not listed in the state, and never invent one.";
+
+/// 共通 INSTRUCTIONS と質問固有の文を、wire に載せる形へ合成する。
+///
+/// SystemOne の request は `model` / `state` / `questions` だけで、共通の指示を
+/// 置ける top-level の場所が無い。そのため **各質問の instructions の先頭へ前置きする**
+/// ことでモデルへ届ける。Noul と Choice で実装を分けず、必ずここを通す。
+fn wire_instructions(local: &str) -> String {
+    format!("{INSTRUCTIONS}\n\n{local}")
+}
 
 // ─── 質問 ────────────────────────────────────────────────────────────────────
 
@@ -199,7 +208,11 @@ pub fn questions_to_json(questions: &[QuestionSpec]) -> Value {
     for question in questions {
         let mut object = Map::new();
         object.insert("type".into(), Value::String(question.kind.as_str().to_string()));
-        object.insert("instructions".into(), Value::String(question.instructions.clone()));
+        // QuestionSpec 側は質問固有の文のまま。合成するのは wire を作るここだけ
+        object.insert(
+            "instructions".into(),
+            Value::String(wire_instructions(&question.instructions)),
+        );
         if !question.criteria.is_empty() {
             let mut criteria = Map::new();
             for criterion in &question.criteria {
@@ -237,6 +250,9 @@ pub struct JevContract {
 fn questions_template() -> Value {
     json!({
         "wire_shape": "questions is an object keyed by question id; each value has type, instructions and (for choice) criteria",
+        "instructions_rule": "every question's wire instructions are INSTRUCTIONS + '\\n\\n' + the question-specific instructions below",
+        "instructions_composition": "common + blank line + question-specific",
+        "instructions_applies_to": "every generated question, noul and choice alike",
         "candidate_key_pattern": "c{index}",
         "max_candidates": MAX_CANDIDATES,
         "per_candidate": [
@@ -301,7 +317,7 @@ fn validation_policy() -> Value {
 }
 
 /// 初版の contract
-pub fn contract_v1() -> JevContract {
+pub fn contract_v2() -> JevContract {
     let instructions = INSTRUCTIONS.to_string();
     let questions_template = questions_template();
     let criteria = criteria();
@@ -768,24 +784,26 @@ mod tests {
     /// hash は変わらなかった（実装と canonical 化がどちらも正しかった）。
     /// その後 wire 形式（questions object 化・criteria の説明・best_match の文面）を
     /// 変えたため、**内容の変更として** golden を更新している。
-    /// C3A.1 の応答 wire 修正では contract 文書を変えていない。ただし初版を確定する際に
-    /// `score_rubric` を落として `supported_question_types` を入れたので、その分だけ
-    /// golden を更新している（jev-contract-1 は未登録・未使用のため版は据え置き）。
+    /// C3A.3 で共通 INSTRUCTIONS を実 wire へ前置きするようにし、その生成規則を
+    /// questions_template へ書いたので、contract の内容が変わった。版を `jev-contract-2`
+    /// へ上げ、golden を計算し直している（`jev-contract-1` は DB 未登録・live 未使用）。
     #[test]
     fn contract_hash_is_stable() {
-        let contract = contract_v1();
-        assert_eq!(contract.contract_version, "jev-contract-1");
+        let contract = contract_v2();
+        assert_eq!(contract.contract_version, "jev-contract-2");
+        assert_eq!(JEV_CONTRACT_VERSION, "jev-contract-2");
+        assert_eq!(contract.state_schema_version, "cm-jev-state-1", "state schema は据え置き");
         assert_eq!(contract.state_schema_version, JEV_STATE_SCHEMA_VERSION);
         assert_eq!(
             contract.canonical_sha256,
-            "d585fb9a49d39f77b45730a3763a35cb2a0cf85d36a4753a2e860f7be5765df3",
+            "26713189563d1222fe5217f4b891038df8f03783d1937cc12c9a4eff9ca5504c",
             "contract の内容が変わった。意図した変更なら contract_version を上げて golden を更新する"
         );
     }
 
     #[test]
     fn contract_hash_ignores_formatting_and_model() {
-        let contract = contract_v1();
+        let contract = contract_v2();
         let reordered = contract_hash(
             &contract.state_schema_version,
             &contract.instructions,
@@ -810,14 +828,17 @@ mod tests {
 
     #[test]
     fn contract_hash_does_not_depend_on_run_values() {
-        let before = contract_v1().canonical_sha256;
+        let before = contract_v2().canonical_sha256;
         let _ = build_questions(&keys(1)).unwrap();
         let _ = build_questions(&keys(3)).unwrap();
-        assert_eq!(contract_v1().canonical_sha256, before);
+        assert_eq!(contract_v2().canonical_sha256, before);
 
-        let template = canonical_json(&contract_v1().questions_template);
+        let template = canonical_json(&contract_v2().questions_template);
         assert!(!template.contains("\"c1\""), "実際の候補キーが template に入っている");
         assert!(template.contains("{cand_key}"), "生成規則として残す");
+        assert!(template.contains("instructions_rule"), "合成規則を書き残す");
+        assert!(!template.contains("tmdb_id"), "catalogue id が混ざっている");
+        assert!(!template.contains("Blade Runner"), "実タイトルが混ざっている");
     }
 
     // ─── 質問生成 ────────────────────────────────────────────────────────────
@@ -905,18 +926,100 @@ mod tests {
         }
     }
 
-    /// K=2 の wire JSON を丸ごと固定する（C4 が保存するのはこの形）
+    /// K=2 の wire JSON を丸ごと固定する（C4 が保存するのはこの形）。
+    ///
+    /// instructions は「共通 + 空行 + 質問固有」なので、期待値もその規則で組み立てる。
+    /// 文面そのものは `wire_carries_the_common_instructions` と criteria の assert で押さえる。
     #[test]
     fn wire_questions_match_the_expected_json() {
         let wire = questions_to_json(&build_questions(&keys(2)).unwrap());
-        let actual = serde_json::to_string(&wire).unwrap();
-        let expected = "{\"best_match\":{\"criteria\":{\"NONE\":\"None of the supplied candidates is the same work as the local file, or the supplied state does not show clearly enough that any of them is.\",\"c1\":\"Candidate c1 in the supplied state is the same work as the local file.\",\"c2\":\"Candidate c2 in the supplied state is the same work as the local file.\"},\"instructions\":\"Which of the supplied candidates does the state support as the same work as the local file? Each option below names one candidate by its key. Choose NONE if the state does not clearly support any of them.\",\"type\":\"choice\"},\"c1_same_work\":{\"instructions\":\"Considering only the supplied state, is candidate c1 the same work as the local file? Weigh the local titles, the years, the media kind, the audio and subtitle languages, and any edition markers that are present. Treat a missing field as no evidence rather than as disagreement.\",\"type\":\"noul\"},\"c2_same_work\":{\"instructions\":\"Considering only the supplied state, is candidate c2 the same work as the local file? Weigh the local titles, the years, the media kind, the audio and subtitle languages, and any edition markers that are present. Treat a missing field as no evidence rather than as disagreement.\",\"type\":\"noul\"}}";
-        assert_eq!(actual, expected, "wire JSON が変わった");
+        let expected = json!({
+            "c1_same_work": {
+                "type": "noul",
+                "instructions": format!("{INSTRUCTIONS}\n\n{}", same_work_prompt("c1"))
+            },
+            "c2_same_work": {
+                "type": "noul",
+                "instructions": format!("{INSTRUCTIONS}\n\n{}", same_work_prompt("c2"))
+            },
+            BEST_MATCH_ID: {
+                "type": "choice",
+                "instructions": format!("{INSTRUCTIONS}\n\n{}", best_match_prompt()),
+                "criteria": {
+                    "c1": "Candidate c1 in the supplied state is the same work as the local file.",
+                    "c2": "Candidate c2 in the supplied state is the same work as the local file.",
+                    "NONE": "None of the supplied candidates is the same work as the local file, or the supplied state does not show clearly enough that any of them is."
+                }
+            }
+        });
+        assert_eq!(
+            serde_json::to_string(&wire).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+            "wire JSON が変わった"
+        );
+    }
+
+    /// 共通 INSTRUCTIONS が実 wire の全質問に 1 回だけ載ること。
+    ///
+    /// SystemOne の request には共通指示を置ける場所が無いので、ここが抜けると
+    /// 「contract には書いてあるがモデルには届いていない」状態になる。
+    #[test]
+    fn wire_carries_the_common_instructions() {
+        for count in 1..=MAX_CANDIDATES {
+            let wire = questions_to_json(&build_questions(&keys(count)).unwrap());
+            let object = wire.as_object().unwrap();
+            assert_eq!(object.len(), count + 1);
+
+            let mut ids: Vec<&String> = object.keys().collect();
+            ids.sort();
+            for id in ids {
+                let text = object[id]["instructions"].as_str().unwrap();
+                assert!(
+                    text.starts_with(&format!("{INSTRUCTIONS}\n\n")),
+                    "K={count} {id}: 共通 instructions が前置きされていない"
+                );
+                for phrase in [
+                    "Judge only from the information supplied in this state",
+                    "Do not use any outside knowledge",
+                    "never invent one",
+                ] {
+                    assert!(text.contains(phrase), "K={count} {id}: {phrase} が無い");
+                }
+                assert_eq!(
+                    text.matches("Judge only from the information supplied in this state")
+                        .count(),
+                    1,
+                    "K={count} {id}: 共通 instructions が二重に入っている"
+                );
+                // 質問固有の文も残っている
+                assert!(text.len() > INSTRUCTIONS.len() + 2);
+            }
+
+            // Noul だけでなく best_match にも入っている
+            let best = object[BEST_MATCH_ID]["instructions"].as_str().unwrap();
+            assert!(best.starts_with(&format!("{INSTRUCTIONS}\n\n")));
+            assert!(best.contains("Which of the supplied candidates"));
+        }
+    }
+
+    /// 内部 spec は質問固有の文のまま保つ（合成は wire 生成時だけ）
+    #[test]
+    fn question_specs_do_not_carry_the_common_instructions() {
+        for count in 1..=MAX_CANDIDATES {
+            for question in build_questions(&keys(count)).unwrap() {
+                assert!(
+                    !question.instructions.contains("Do not use any outside knowledge"),
+                    "{}: spec 側に共通 instructions が入っている",
+                    question.id
+                );
+                assert!(!question.instructions.starts_with(INSTRUCTIONS));
+            }
+        }
     }
 
     #[test]
     fn instructions_forbid_outside_knowledge() {
-        let instructions = contract_v1().instructions;
+        let instructions = contract_v2().instructions;
         assert!(instructions.contains("Judge only from the information supplied in this state"));
         assert!(instructions.contains("Do not use any outside knowledge"));
         assert!(instructions.contains("never invent one"));
