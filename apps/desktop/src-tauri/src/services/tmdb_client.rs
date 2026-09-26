@@ -4,6 +4,13 @@ use reqwest::{Client, Response};
 pub const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p/w500";
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 
+/// 1 回の論理的な呼び出し（search_movie など）で送り得る HTTP の最大回数。
+///
+/// 失敗したときに同じ URL を送り直すので、**論理 1 回 = HTTP 最大 3 回**になる。
+/// 予算の見積もりでこの値を使うため、retry ループと同じ定数を共有する
+/// （production の再試行の挙動自体は変えない）。
+pub const MAX_HTTP_ATTEMPTS: usize = 3;
+
 // ─── クライアント ─────────────────────────────────────────────────────────────
 
 pub struct TmdbClient {
@@ -73,7 +80,7 @@ impl TmdbClient {
 
     async fn send_with_retry(&self, url: &str) -> Result<Response, String> {
         let mut last_kind = "request failed";
-        for attempt in 0..3 {
+        for attempt in 0..MAX_HTTP_ATTEMPTS {
             match self.client.get(url).send().await {
                 Ok(response) => return Ok(response),
                 Err(error) => {
@@ -86,7 +93,7 @@ impl TmdbClient {
                     } else {
                         "request failed"
                     };
-                    if attempt < 2 {
+                    if attempt + 1 < MAX_HTTP_ATTEMPTS {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             400 * (attempt + 1) as u64,
                         ))
@@ -95,7 +102,7 @@ impl TmdbClient {
                 }
             }
         }
-        Err(format!("TMDb {last_kind} after 3 attempts"))
+        Err(format!("TMDb {last_kind} after {MAX_HTTP_ATTEMPTS} attempts"))
     }
 
     pub async fn get_movie_detail(&self, tmdb_id: i64) -> Result<TmdbMovieDetail, String> {

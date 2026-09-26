@@ -261,22 +261,22 @@ fn load_match_target_locked(db: &DbState, work_id: i64) -> Result<MatchTarget, S
 }
 
 /// 1回の検索で分かったこと（履歴にそのまま残す）
-struct CandidateSearch {
+pub(crate) struct CandidateSearch {
     /// 旧経路（ファイル名・title_guess 由来の検索語）だけの候補。
     /// rules-1 と本番の rules-safe はこちらだけを見る（PR2.5 で経路を変えない）
-    legacy_ranked: Vec<TmdbCandidate>,
-    legacy_all: Vec<TmdbCandidate>,
+    pub(crate) legacy_ranked: Vec<TmdbCandidate>,
+    pub(crate) legacy_all: Vec<TmdbCandidate>,
     /// 埋め込みメタデータ由来の検索も混ぜた候補（rules-tags-shadow と候補ダイアログ用）
-    combined_ranked: Vec<TmdbCandidate>,
-    combined_all: Vec<TmdbCandidate>,
+    pub(crate) combined_ranked: Vec<TmdbCandidate>,
+    pub(crate) combined_all: Vec<TmdbCandidate>,
     /// 候補がどの検索語から出てきたか
-    sources: Vec<CandidateSource>,
+    pub(crate) sources: Vec<CandidateSource>,
     /// rules-1（凍結した比較基準）の判定。旧経路の生結果だけを凍結実装で採点したもの
-    rules_one: RulesOneVerdict,
+    pub(crate) rules_one: RulesOneVerdict,
     /// 旧経路の検索語を解析したもの（rules-safe の入力）
-    parsed: ParsedTitle,
-    queries: Vec<SearchQuery>,
-    tmdb_calls: usize,
+    pub(crate) parsed: ParsedTitle,
+    pub(crate) queries: Vec<SearchQuery>,
+    pub(crate) tmdb_calls: usize,
 }
 
 /// 検索語ごとの ParsedTitle を作る。
@@ -327,6 +327,67 @@ impl From<rules_v1::SearchPlanV1> for QueryPlan {
 /// 引数も raw title と media_kind だけで、共有 parser の出力を受け取らない。
 ///
 /// 埋め込み由来（embedded）の検索は本番側の実装（共有 parser + タグの年）のままにする。
+/// 証拠から候補を集める。**production も audit もここを通る。**
+///
+/// 照合に使えるタイトルが無い作品は TMDB を呼ばずに空の結果を返す
+/// （`match_once` にあった short-circuit をそのまま持ってきたもので、
+/// 判定は呼び出し側が UNRESOLVED として扱う）。audit 側が同じ short-circuit を
+/// 持たないと、production では 0 call の作品を audit だけが叩いてしまう。
+pub(crate) async fn search_candidates(
+    client: &TmdbClient,
+    evidence: &LocalEvidence,
+) -> Result<CandidateSearch, String> {
+    if skips_tmdb(evidence) {
+        return Ok(CandidateSearch {
+            legacy_ranked: Vec::new(),
+            legacy_all: Vec::new(),
+            combined_ranked: Vec::new(),
+            combined_all: Vec::new(),
+            sources: Vec::new(),
+            rules_one: RulesOneVerdict::default(),
+            parsed: parse_title(""),
+            queries: Vec::new(),
+            tmdb_calls: 0,
+        });
+    }
+    fetch_candidates(client, evidence).await
+}
+
+/// 照合に使えるタイトルが無いので TMDB を呼ばない、という判断。
+/// [`search_candidates`] と [`planned_logical_calls`] で同じものを使う。
+pub(crate) fn skips_tmdb(evidence: &LocalEvidence) -> bool {
+    evidence.title().trim().is_empty() && evidence.embedded_title().is_none()
+}
+
+/// この証拠で TMDB を何回呼ぶことになるかを、検索を始める前に数える。
+///
+/// `fetch_candidates` と同じ枝分かれをたどるだけの純関数。TMDB には触らない。
+/// 年ヒントつきの再検索は movie 側にしかないので、そこも `fetch_candidates` に合わせる。
+pub(crate) fn planned_logical_calls(evidence: &LocalEvidence) -> usize {
+    if skips_tmdb(evidence) {
+        return 0;
+    }
+    let media_kind = evidence.media_kind().to_string();
+    evidence
+        .search_inputs()
+        .iter()
+        .map(|input| {
+            let plan = query_plan_for(input, &media_kind);
+            let mut calls = 0;
+            if plan.search_movie {
+                calls += 1;
+                if plan.retry_without_year {
+                    calls += 1;
+                }
+            }
+            if plan.search_tv {
+                calls += 1;
+            }
+            calls
+        })
+        .sum()
+}
+
 pub(crate) fn query_plan_for(input: &SearchInput, media_kind: &str) -> QueryPlan {
     match input.source {
         QuerySource::Legacy => rules_v1::search_plan_v1(&input.title, media_kind).into(),
@@ -390,7 +451,7 @@ fn merge_candidate_sets(
 
 /// 候補を検索してスコアを付ける。入力は照合前スナップショット由来の [`LocalEvidence`] だけ。
 /// 年ヒントもファイル名側の値を使う（works.year は TMDB 適用で書き換わるため）。
-async fn fetch_candidates(
+pub(crate) async fn fetch_candidates(
     client: &TmdbClient,
     evidence: &LocalEvidence,
 ) -> Result<CandidateSearch, String> {
@@ -550,22 +611,7 @@ async fn match_once(
     let evidence = snapshot.local_evidence();
     let started = std::time::Instant::now();
 
-    // 照合に使えるタイトルが無い作品は TMDB を呼ばずに UNRESOLVED
-    let search = if evidence.title().trim().is_empty() && evidence.embedded_title().is_none() {
-        Ok(CandidateSearch {
-            legacy_ranked: Vec::new(),
-            legacy_all: Vec::new(),
-            combined_ranked: Vec::new(),
-            combined_all: Vec::new(),
-            sources: Vec::new(),
-            rules_one: RulesOneVerdict::default(),
-            parsed: parse_title(""),
-            queries: Vec::new(),
-            tmdb_calls: 0,
-        })
-    } else {
-        fetch_candidates(client, &evidence).await
-    };
+    let search = search_candidates(client, &evidence).await;
 
     let search = match search {
         Ok(search) => search,

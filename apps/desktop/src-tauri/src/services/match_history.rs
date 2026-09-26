@@ -60,6 +60,8 @@ impl TriggerKind {
 pub enum ReviewReason {
     ReviewDecision,
     LegacyPending,
+    /// ground truth を作るために抽出した（C5c）。production の判定とは無関係
+    AuditSample,
     /// 判定器どうしの不一致（PR3 以降）
     #[cfg_attr(not(test), allow(dead_code))]
     MatcherDisagreement,
@@ -73,6 +75,7 @@ impl ReviewReason {
         match self {
             ReviewReason::ReviewDecision => "review_decision",
             ReviewReason::LegacyPending => "legacy_pending",
+            ReviewReason::AuditSample => "audit_sample",
             ReviewReason::MatcherDisagreement => "matcher_disagreement",
             ReviewReason::UserInitiated => "user_initiated",
         }
@@ -303,13 +306,123 @@ fn candidates_to_store<'a>(
 /// run・候補・判定・（REVIEW なら）レビュー課題を1トランザクションで書く。
 /// works は変更しない（適用の記録は [`mark_run_applied`] / [`finish_run`]）。
 pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let run_id = persist_run(&tx, input)?;
+
+    // production だけの後処理。REVIEW なら人が見る課題を作る
+    if input.error_text.is_none() && input.rules_safe.decision == SafeDecision::Review {
+        let reason = match input.trigger_kind {
+            TriggerKind::LegacyRescan => ReviewReason::LegacyPending,
+            _ => ReviewReason::ReviewDecision,
+        };
+        open_review_task_in(&tx, input.work_id, Some(run_id), reason)?;
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(run_id)
+}
+
+/// ground truth 収集用の run を記録する（C5c）。
+///
+/// `record_run` との違いは **production の review 課題を作らない**ことだけ。判定も候補も
+/// 同じ経路で残すので、あとから production の run と同じように読める。
+/// 代わりに、抽出済みの `audit_sample` 課題をこの run へ繋ぎ、状態を `ready` にする。
+///
+/// works / files / match_status には一切触れない。
+pub fn record_audit_run(
+    conn: &Connection,
+    input: &RunInput,
+    audit_task_id: i64,
+) -> Result<i64, String> {
+    // 呼び出し側の規律に頼らず、ここで形を確かめる
+    if input.trigger_kind != TriggerKind::Batch {
+        return Err("audit run の trigger_kind は batch です".to_string());
+    }
+    let Some(sample_id) = input.batch_id else {
+        return Err("audit run には batch_id（sample_id）が要ります".to_string());
+    };
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let run_id = persist_run(&tx, input)?;
+
+    // 繋ぐ相手を WHERE で絞り切る。
+    //   - 抽出した課題であること
+    //   - その課題の work と、いま記録した run の work が同じであること
+    //   - まだ run が付いていないこと（二重に run を作らない）
+    //   - 未解決であること
+    //   - 課題の sample と run の batch_id が同じであること
+    //   - まだ未着手（selected / generation_error）であること。
+    //     stale と判定された課題を、遅れて戻ってきた generator が ready に
+    //     戻してしまわないようにする
+    // 1 行だけ更新できたときに限り commit する。並行して同じ課題を処理しても、
+    // 後から来た側はここで 0 行になり、run ごと巻き戻る。
+    let changed = tx
+        .execute(
+            "UPDATE metadata_review_tasks
+                SET run_id = ?2, details_json = ?3
+              WHERE id = ?1
+                AND reason = 'audit_sample'
+                AND work_id = ?4
+                AND run_id IS NULL
+                AND resolved_at IS NULL
+                AND json_extract(sampling_json,'$.sample_id') = ?5
+                AND COALESCE(json_extract(details_json,'$.state'),'')
+                    IN ('selected','generation_error')",
+            rusqlite::params![
+                audit_task_id,
+                run_id,
+                audit_details_json("ready", None),
+                input.work_id,
+                sample_id,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed != 1 {
+        // 課題と run が対応しないなら、run も候補も判定も残さない
+        tx.rollback().map_err(|e| e.to_string())?;
+        return Err(format!(
+            "audit_sample 課題 {audit_task_id} に run を繋げません\
+             （work / sample / state / run_id の不一致）"
+        ));
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(run_id)
+}
+
+/// `audit_sample` 課題の `details_json`。review の進行状態だけを持つ。
+///
+/// 抽出の記録（`sampling_json`）は作成後に変えない。こちらは lifecycle 用で更新する。
+pub fn audit_details_json(state: &str, stale_reason: Option<&str>) -> String {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "review_protocol_version".to_string(),
+        serde_json::Value::String(REVIEW_PROTOCOL_VERSION.to_string()),
+    );
+    object.insert("state".to_string(), serde_json::Value::String(state.to_string()));
+    if let Some(reason) = stale_reason {
+        object.insert(
+            "stale_reason".to_string(),
+            serde_json::Value::String(reason.to_string()),
+        );
+    }
+    serde_json::to_string(&serde_json::Value::Object(object))
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
+/// review lifecycle の版。`details_json` に入れる
+pub const REVIEW_PROTOCOL_VERSION: &str = "gt-review-1";
+
+/// run 本体・候補・判定を書く。production と audit で共通。
+///
+/// **review 課題は作らない。** production 固有の後処理は `record_run` 側に置く。
+fn persist_run(tx: &rusqlite::Transaction<'_>, input: &RunInput) -> Result<i64, String> {
     let decision = match (&input.error_text, input.rules_safe.decision) {
         (Some(_), _) => "ERROR".to_string(),
         (None, decision) => decision.as_str().to_string(),
     };
     let reasons: Vec<&str> = input.rules_safe.reasons.to_vec();
 
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute(
         "INSERT INTO metadata_match_runs
            (work_id, batch_id, trigger_kind, mode, evidence_class, state_schema_version,
@@ -379,7 +492,7 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
 
     // rules-safe（本番の判定）
     insert_verdict(
-        &tx,
+        tx,
         run_id,
         "rules-safe",
         POLICY_VERSION,
@@ -394,7 +507,7 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
         SafeDecision::Unresolved
     };
     insert_verdict_row(
-        &tx,
+        tx,
         run_id,
         "rules-1",
         RULES_V1_VERSION,
@@ -408,7 +521,7 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
     if let Some(shadow) = input.shadow {
         let shadow_reasons: Vec<&str> = shadow.reasons.to_vec();
         insert_verdict(
-            &tx,
+            tx,
             run_id,
             "rules-tags-shadow",
             SHADOW_VERSION,
@@ -418,15 +531,6 @@ pub fn record_run(conn: &Connection, input: &RunInput) -> Result<i64, String> {
         )?;
     }
 
-    if input.error_text.is_none() && input.rules_safe.decision == SafeDecision::Review {
-        let reason = match input.trigger_kind {
-            TriggerKind::LegacyRescan => ReviewReason::LegacyPending,
-            _ => ReviewReason::ReviewDecision,
-        };
-        open_review_task_in(&tx, input.work_id, Some(run_id), reason)?;
-    }
-
-    tx.commit().map_err(|e| e.to_string())?;
     Ok(run_id)
 }
 
