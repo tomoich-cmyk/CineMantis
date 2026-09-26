@@ -1050,7 +1050,7 @@ pub async fn apply_tmdb_match(
                 )?;
             }
         }
-        let run_id = match_history::latest_run_id(&conn, work_id);
+        let run_id = match_history::latest_safe_run_id(&conn, work_id);
         match_history::record_label(
             &conn,
             &LabelWrite {

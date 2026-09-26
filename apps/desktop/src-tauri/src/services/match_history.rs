@@ -519,10 +519,21 @@ pub fn finish_run(conn: &Connection, run_id: i64, status_after: MatchStatus) -> 
     Ok(())
 }
 
-/// その作品の直近の run（手動確定をどの run の候補から選んだかを辿るため）
-pub fn latest_run_id(conn: &Connection, work_id: i64) -> Option<i64> {
+/// その作品の直近の **production（safe）run**。
+///
+/// 人が確定した事実（label）と却下（rejection）は production の run に紐づける。
+/// C4c で Jev 用の shadow sibling run を作るようになったので、単に `ORDER BY id DESC`
+/// で拾うと shadow を指してしまう。shadow は評価の記録であって、人の判断の文脈ではない。
+///
+/// 較正のときは `label.run_id`（safe）→ `metadata_match_jev_run_links` →
+/// `shadow_run_id` の順に辿る。human label を shadow run へ直接付けない。
+///
+/// safe run が無ければ `None`。shadow へ寄せない。
+pub fn latest_safe_run_id(conn: &Connection, work_id: i64) -> Option<i64> {
     conn.query_row(
-        "SELECT id FROM metadata_match_runs WHERE work_id = ?1 ORDER BY id DESC LIMIT 1",
+        "SELECT id FROM metadata_match_runs
+          WHERE work_id = ?1 AND mode = 'safe'
+          ORDER BY id DESC LIMIT 1",
         rusqlite::params![work_id],
         |row| row.get(0),
     )
@@ -730,7 +741,7 @@ pub fn record_rejection(
             media_type,
             previous_match_source,
             source.as_str(),
-            latest_run_id(conn, work_id),
+            latest_safe_run_id(conn, work_id),
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -975,6 +986,138 @@ mod tests {
             latency_ms: 12,
             error_text: None,
         }
+    }
+
+    /// safe run を 1 件作る（候補つき）
+    fn safe_run_with_candidates(f: &Fixture, count: usize) -> i64 {
+        let snapshot = PreMatchSnapshot::capture(&f.conn, f.work_id).unwrap();
+        let ranked: Vec<TmdbCandidate> = (1..=count)
+            .map(|index| candidate(1000 + index as i64, "候補", Some(1979), 70))
+            .collect();
+        let outcome = metadata_matcher::rules_safe_best_candidate(&ranked, &f.parsed);
+        record_run(
+            &f.conn,
+            &run_for(f, &snapshot, &ranked, &ranked, &outcome, TriggerKind::Single),
+        )
+        .unwrap()
+    }
+
+    fn label_run_id(conn: &Connection, work_id: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT run_id FROM metadata_match_labels WHERE work_id = ?1
+              ORDER BY id DESC LIMIT 1",
+            rusqlite::params![work_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap()
+        .flatten()
+    }
+
+    fn rejection_run_id(conn: &Connection, work_id: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT run_id FROM metadata_match_rejections WHERE work_id = ?1
+              ORDER BY id DESC LIMIT 1",
+            rusqlite::params![work_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap()
+        .flatten()
+    }
+
+    /// 人の判断は shadow sibling ではなく production の safe run に紐づく
+    #[test]
+    fn human_records_bind_to_the_safe_run_not_the_shadow_sibling() {
+        let f = fixture("Alien.1979.mkv");
+        let safe_run_id = safe_run_with_candidates(&f, 2);
+        let shadow = create_jev_shadow_run(&f.conn, safe_run_id).unwrap().unwrap();
+        assert!(
+            shadow.shadow_run_id > safe_run_id,
+            "shadow の方が新しい id である前提が崩れている"
+        );
+        assert_eq!(latest_safe_run_id(&f.conn, f.work_id), Some(safe_run_id));
+
+        // 手動確定
+        record_label(
+            &f.conn,
+            &LabelWrite {
+                work_id: f.work_id,
+                run_id: latest_safe_run_id(&f.conn, f.work_id),
+                tmdb: Some((1001, "movie")),
+                method: LabelMethod::ManualApply,
+                note: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(label_run_id(&f.conn, f.work_id), Some(safe_run_id));
+        assert_ne!(label_run_id(&f.conn, f.work_id), Some(shadow.shadow_run_id));
+
+        // 却下
+        record_rejection(
+            &f.conn,
+            f.work_id,
+            1002,
+            "movie",
+            None,
+            RejectionSource::Clear,
+        )
+        .unwrap();
+        assert_eq!(rejection_run_id(&f.conn, f.work_id), Some(safe_run_id));
+        assert_ne!(rejection_run_id(&f.conn, f.work_id), Some(shadow.shadow_run_id));
+    }
+
+    /// safe run が複数あれば最後の safe run。間に shadow が挟まっても変わらない
+    #[test]
+    fn the_latest_safe_run_skips_shadow_siblings() {
+        let f = fixture("Alien.1979.mkv");
+        let safe_one = safe_run_with_candidates(&f, 1);
+        let shadow_one = create_jev_shadow_run(&f.conn, safe_one).unwrap().unwrap();
+        let safe_two = safe_run_with_candidates(&f, 1);
+        let shadow_two = create_jev_shadow_run(&f.conn, safe_two).unwrap().unwrap();
+
+        assert!(shadow_two.shadow_run_id > safe_two);
+        assert_eq!(latest_safe_run_id(&f.conn, f.work_id), Some(safe_two));
+
+        record_rejection(&f.conn, f.work_id, 1001, "movie", None, RejectionSource::Clear)
+            .unwrap();
+        assert_eq!(rejection_run_id(&f.conn, f.work_id), Some(safe_two));
+        assert_ne!(rejection_run_id(&f.conn, f.work_id), Some(shadow_one.shadow_run_id));
+        assert_ne!(rejection_run_id(&f.conn, f.work_id), Some(shadow_two.shadow_run_id));
+    }
+
+    /// safe run が無ければ shadow へ寄せない
+    #[test]
+    fn a_missing_safe_run_does_not_fall_back_to_a_shadow_run() {
+        let f = fixture("Alien.1979.mkv");
+        assert_eq!(latest_safe_run_id(&f.conn, f.work_id), None, "run が無い");
+
+        // shadow だけがある状態を作る
+        let safe_run_id = safe_run_with_candidates(&f, 1);
+        let shadow = create_jev_shadow_run(&f.conn, safe_run_id).unwrap().unwrap();
+        f.conn
+            .execute(
+                "DELETE FROM metadata_match_jev_run_links WHERE safe_run_id = ?1",
+                rusqlite::params![safe_run_id],
+            )
+            .unwrap();
+        f.conn
+            .execute(
+                "DELETE FROM metadata_match_runs WHERE id = ?1",
+                rusqlite::params![safe_run_id],
+            )
+            .unwrap();
+
+        assert_eq!(
+            latest_safe_run_id(&f.conn, f.work_id),
+            None,
+            "shadow run {} を拾っている",
+            shadow.shadow_run_id
+        );
+
+        record_rejection(&f.conn, f.work_id, 1001, "movie", None, RejectionSource::Clear)
+            .unwrap();
+        assert_eq!(rejection_run_id(&f.conn, f.work_id), None);
     }
 
     /// テスト用: 共有の候補から rules-1 相当の verdict を作る

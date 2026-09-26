@@ -277,7 +277,7 @@ fn record_bulk_history(
                     conn,
                     &LabelWrite {
                         work_id: *work_id,
-                        run_id: match_history::latest_run_id(conn, *work_id),
+                        run_id: match_history::latest_safe_run_id(conn, *work_id),
                         tmdb: Some((*tmdb_id, media_type)),
                         method: LabelMethod::Lock,
                         note: None,
