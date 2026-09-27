@@ -91,6 +91,12 @@ pub enum LabelMethod {
     ManualDirectId,
     /// 固定した（一括操作を含むので弱い証拠）
     Lock,
+    /// GT レビューで、run の候補から選んだ（C5c.3）
+    ReviewConfirm,
+    /// GT レビューで、候補に無い TMDB 作品を指定した（C5c.3）
+    ReviewPickOther,
+    /// GT レビューで「TMDB に該当なし」と判断した（C5c.3）
+    ReviewNone,
 }
 
 impl LabelMethod {
@@ -99,6 +105,9 @@ impl LabelMethod {
             LabelMethod::ManualApply => "manual_apply",
             LabelMethod::ManualDirectId => "manual_direct_id",
             LabelMethod::Lock => "lock",
+            LabelMethod::ReviewConfirm => "review_confirm",
+            LabelMethod::ReviewPickOther => "review_pick_other",
+            LabelMethod::ReviewNone => "review_none",
         }
     }
 
@@ -770,10 +779,14 @@ pub fn record_label(conn: &Connection, write: &LabelWrite) -> Result<i64, String
         .map_err(|e| e.to_string())?;
     }
 
+    // audit_sample（ground truth 用の抽出課題）は production の review lifecycle の
+    // 外にある。production の確定で勝手に閉じると、GT が欠けた理由が記録に残らない。
+    // ラベルの作成と割り当ての意味は変えず、繋ぎ先と解決対象からだけ外す。
     let open_task: Option<i64> = tx
         .query_row(
             "SELECT id FROM metadata_review_tasks
-             WHERE work_id = ?1 AND resolved_at IS NULL ORDER BY id LIMIT 1",
+             WHERE work_id = ?1 AND resolved_at IS NULL AND reason <> 'audit_sample'
+             ORDER BY id LIMIT 1",
             rusqlite::params![write.work_id],
             |row| row.get(0),
         )
@@ -802,7 +815,7 @@ pub fn record_label(conn: &Connection, write: &LabelWrite) -> Result<i64, String
     tx.execute(
         "UPDATE metadata_review_tasks
          SET resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), resolution_label_id = ?2
-         WHERE work_id = ?1 AND resolved_at IS NULL",
+         WHERE work_id = ?1 AND resolved_at IS NULL AND reason <> 'audit_sample'",
         rusqlite::params![write.work_id, label_id],
     )
     .map_err(|e| e.to_string())?;

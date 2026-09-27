@@ -3,6 +3,7 @@ pub mod work;
 pub mod stats;
 pub mod tag;
 pub mod tags;
+pub mod review;
 pub mod scan;
 pub mod thumbnail;
 pub mod tmdb;
