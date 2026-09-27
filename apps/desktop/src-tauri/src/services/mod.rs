@@ -1,5 +1,8 @@
 pub mod audit_run;
 pub mod container_tags;
+/// 手動作業用のランナー。製品には出ない（test ビルドのときだけ）
+#[cfg(test)]
+pub mod gt_operator;
 pub mod gt_review;
 pub mod gt_sampling;
 pub mod jev_contract;
