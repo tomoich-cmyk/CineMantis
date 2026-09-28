@@ -38,11 +38,11 @@
 //! | `CM_GT_TARGET_COUNT` | 何件抽出するか（手順 2 のみ）。profile が範囲を決める |
 //! | `CM_GT_MAX_WORKS` | 1 回の生成で処理する上限（手順 3 のみ） |
 //! | `CM_GT_MAX_HTTP` | 送ってよい HTTP の本数の上限（手順 3 のみ） |
+//! | `CM_GT_SOURCE_SHA` | 抽出時のコードの commit SHA（40 桁 hex、手順 2 のみ） |
 //!
 //! `pilot` は 1〜10 件 / 1〜90 attempts の範囲で受ける。`expansion` は
 //! 50 件 / 50 works / 450 attempts の **ちょうどその値**だけを受ける。
 //! 抽出の件数は凍結されて後から足せないので、拡張側は範囲にしない。
-//! | `CM_GT_SOURCE_SHA` | 抽出時のコードの commit SHA（40 桁 hex、手順 2 のみ） |
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
