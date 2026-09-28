@@ -32,11 +32,16 @@
 //! | 変数 | 意味 |
 //! |---|---|
 //! | `CM_GT_ACTION` | これから行う手順の名前。**指定した 1 手順しか動かない** |
+//! | `CM_GT_PROFILE` | 作業の規模。`pilot`（1〜10 件）か `expansion`（ちょうど 50 件） |
 //! | `CM_GT_DB` | 対象 DB のフルパス。コピーか production かは呼ぶ人が決める |
 //! | `CM_GT_SAMPLE_ID` | 抽出の識別子。run の `batch_id` と seed を兼ねる |
-//! | `CM_GT_TARGET_COUNT` | 何件抽出するか（手順 2 のみ） |
+//! | `CM_GT_TARGET_COUNT` | 何件抽出するか（手順 2 のみ）。profile が範囲を決める |
 //! | `CM_GT_MAX_WORKS` | 1 回の生成で処理する上限（手順 3 のみ） |
 //! | `CM_GT_MAX_HTTP` | 送ってよい HTTP の本数の上限（手順 3 のみ） |
+//!
+//! `pilot` は 1〜10 件 / 1〜90 attempts の範囲で受ける。`expansion` は
+//! 50 件 / 50 works / 450 attempts の **ちょうどその値**だけを受ける。
+//! 抽出の件数は凍結されて後から足せないので、拡張側は範囲にしない。
 //! | `CM_GT_SOURCE_SHA` | 抽出時のコードの commit SHA（40 桁 hex、手順 2 のみ） |
 
 use std::path::PathBuf;
@@ -65,6 +70,82 @@ const PURPOSE: SamplePurpose = SamplePurpose::Development;
 const MAX_PILOT_WORKS: usize = 10;
 const MAX_PILOT_HTTP: usize = 90;
 
+/// C5c.5 の development 拡張。**件数を固定する。**
+///
+/// 50 件 × 最悪 9 attempts = 450。上限ではなく「ちょうどこの値」を求めるのは、
+/// 打ち間違いで 5 件だけ凍結された manifest ができると、その sample が
+/// 「50 件のつもりだった 5 件」として残り、後から件数を足せないため。
+/// 抽出の件数は凍結されるので、ここだけは緩い範囲にしない。
+const EXPANSION_WORKS: usize = 50;
+const EXPANSION_HTTP: usize = 450;
+
+/// どの規模で作業しているか。**既定値は無い。**
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Profile {
+    /// C5c.4 の 10 件 pilot（上限つきの範囲）
+    Pilot,
+    /// C5c.5 の 50 件 development 拡張（固定値）
+    Expansion,
+}
+
+impl Profile {
+    fn as_str(self) -> &'static str {
+        match self {
+            Profile::Pilot => "pilot",
+            Profile::Expansion => "expansion",
+        }
+    }
+
+    /// 抽出する件数。pilot は 1..=10、expansion はちょうど 50
+    fn target_count(self) -> usize {
+        match self {
+            Profile::Pilot => required_bounded("CM_GT_TARGET_COUNT", MAX_PILOT_WORKS),
+            Profile::Expansion => required_exact("CM_GT_TARGET_COUNT", EXPANSION_WORKS),
+        }
+    }
+
+    /// 生成の予算
+    fn budget(self) -> GenerationBudget {
+        match self {
+            Profile::Pilot => GenerationBudget {
+                max_works: required_bounded("CM_GT_MAX_WORKS", MAX_PILOT_WORKS),
+                max_outbound_http_attempts: required_bounded("CM_GT_MAX_HTTP", MAX_PILOT_HTTP),
+            },
+            Profile::Expansion => GenerationBudget {
+                max_works: required_exact("CM_GT_MAX_WORKS", EXPANSION_WORKS),
+                max_outbound_http_attempts: required_exact("CM_GT_MAX_HTTP", EXPANSION_HTTP),
+            },
+        }
+    }
+
+    /// 凍結済みの sample が、いま選んでいる規模のものか
+    fn check_manifest(self, manifest: &crate::services::gt_sampling::SampleManifest) {
+        let frozen = manifest.config.target_count;
+        match self {
+            Profile::Expansion => assert_eq!(
+                frozen, EXPANSION_WORKS as i64,
+                "sample {} は {frozen} 件です。expansion で扱えるのは {EXPANSION_WORKS} 件の sample だけです",
+                manifest.sample_id
+            ),
+            Profile::Pilot => assert!(
+                (1..=MAX_PILOT_WORKS as i64).contains(&frozen),
+                "sample {} は {frozen} 件です。pilot で扱えるのは 1〜{MAX_PILOT_WORKS} 件の sample だけです",
+                manifest.sample_id
+            ),
+        }
+    }
+}
+
+/// いまの作業の規模を読む。**既定値は無い。**
+fn require_profile() -> Profile {
+    let raw = required("CM_GT_PROFILE");
+    match raw.as_str() {
+        "pilot" => Profile::Pilot,
+        "expansion" => Profile::Expansion,
+        other => panic!("CM_GT_PROFILE は pilot か expansion です（{other}）"),
+    }
+}
+
 // ─── 入力 ────────────────────────────────────────────────────────────────────
 
 fn required(name: &str) -> String {
@@ -78,6 +159,16 @@ fn required_usize(name: &str) -> usize {
     let raw = required(name);
     raw.parse::<usize>()
         .unwrap_or_else(|_| panic!("環境変数 {name} は正の整数です（{raw}）"))
+}
+
+/// ちょうどこの値でなければ止める（件数を凍結する側で使う）
+fn required_exact(name: &str, expected: usize) -> usize {
+    let value = required_usize(name);
+    assert_eq!(
+        value, expected,
+        "環境変数 {name} は {expected} です（{value}）"
+    );
+    value
 }
 
 /// 上限つきで読む。既定値は無く、範囲外はその場で止める
@@ -279,23 +370,27 @@ fn manual_preflight_report() {
 
 /// 対象を凍結する。ここでは通信しない。
 #[test]
-#[ignore = "手動。CM_GT_ACTION=freeze / CM_GT_DB / CM_GT_SAMPLE_ID / CM_GT_TARGET_COUNT / CM_GT_SOURCE_SHA"]
+#[ignore = "手動。CM_GT_ACTION=freeze / CM_GT_PROFILE / CM_GT_DB / CM_GT_SAMPLE_ID / CM_GT_TARGET_COUNT / CM_GT_SOURCE_SHA"]
 fn manual_freeze_sample() {
     require_action("freeze");
+    let profile = require_profile();
     let mut conn = open_target();
     let request = SampleRequest {
         sample_id: required("CM_GT_SAMPLE_ID"),
         // live を渡す道を作らない
         cohort: COHORT.to_string(),
         purpose: PURPOSE,
-        target_count: required_bounded("CM_GT_TARGET_COUNT", MAX_PILOT_WORKS),
+        target_count: profile.target_count(),
         source_git_sha: required("CM_GT_SOURCE_SHA"),
         state_schema_version: STATE_SCHEMA_VERSION.to_string(),
         rules_policy_version: POLICY_VERSION.to_string(),
     };
     println!(
-        "抽出: sample_id={} / target={} / sha={}",
-        request.sample_id, request.target_count, request.source_git_sha
+        "抽出: profile={} / sample_id={} / target={} / sha={}",
+        profile.as_str(),
+        request.sample_id,
+        request.target_count,
+        request.source_git_sha
     );
 
     let manifest = gt_sampling::freeze_sample(&mut conn, &request).expect("抽出に失敗しました");
@@ -321,26 +416,29 @@ fn manual_freeze_sample() {
 /// **予算は呼ぶ人が明示する。** 既定の 600 は初回の作業には広すぎるので、
 /// ここでは環境変数を必須にしてある。足りなければ検索を呼ばずに飛ばす。
 #[tokio::test]
-#[ignore = "手動。実 TMDB を呼ぶ。CM_GT_ACTION=generate / CM_GT_DB / CM_GT_SAMPLE_ID / CM_GT_MAX_WORKS / CM_GT_MAX_HTTP"]
+#[ignore = "手動。実 TMDB を呼ぶ。CM_GT_ACTION=generate / CM_GT_PROFILE / CM_GT_DB / CM_GT_SAMPLE_ID / CM_GT_MAX_WORKS / CM_GT_MAX_HTTP"]
 async fn manual_generate_runs() {
     require_action("generate");
+    let profile = require_profile();
     let sample_id = required("CM_GT_SAMPLE_ID");
-    let budget = GenerationBudget {
-        max_works: required_bounded("CM_GT_MAX_WORKS", MAX_PILOT_WORKS),
-        max_outbound_http_attempts: required_bounded("CM_GT_MAX_HTTP", MAX_PILOT_HTTP),
-    };
+    let budget = profile.budget();
 
     let conn = open_target();
 
     // **API キーを読む前に**、対象が development の sample かを確かめる。
     // ここで落ちれば TMDB には 1 本も飛ばない
     let manifest = load_development_manifest(&conn, &sample_id).expect("対象を確認できません");
+    // 選んだ規模と、凍結されている規模が食い違っていないか。
+    // pilot のつもりで 50 件の sample を回す（またはその逆）のを防ぐ
+    profile.check_manifest(&manifest);
     println!(
-        "対象: sample={} cohort={} purpose={} 件数={}",
+        "対象: profile={} sample={} cohort={} purpose={} 件数={} (凍結 {})",
+        profile.as_str(),
         manifest.sample_id,
         manifest.cohort,
         manifest.purpose.as_str(),
-        manifest.entries.len()
+        manifest.entries.len(),
+        manifest.config.target_count
     );
 
     // キーは DB から読むだけ。値も長さもどこにも出さない
@@ -387,7 +485,7 @@ fn manual_sample_report() {
 
     let manifest = load_development_manifest(&conn, &sample_id).expect("対象を確認できません");
     println!(
-        "sample={} cohort={} purpose={} 母集団={} target={}",
+        "sample={} cohort={} purpose={} 母集団={} target={}（読み取りのみ）",
         manifest.sample_id,
         manifest.cohort,
         manifest.purpose.as_str(),
@@ -474,6 +572,14 @@ mod tests {
     use crate::commands::scan::insert_scanned_work;
     use crate::db::test_support::insert_source;
 
+    /// 環境変数はプロセス全体で 1 つしかない。
+    /// 触るテストが同時に走ると、お互いの値を壊してしまうので順番に通す
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// reconstructed_clean になる work（scan 後に backfill した形）
     fn seed_reconstructed(conn: &Connection, index: usize) -> i64 {
         seed_work(conn, index, r"D:\Import", false)
@@ -533,6 +639,7 @@ mod tests {
     /// 入力は必須。既定値で勝手に動かない
     #[test]
     fn missing_input_is_a_hard_error() {
+        let _env = env_guard();
         let name = "CM_GT_TEST_ABSENT_VARIABLE";
         std::env::remove_var(name);
         assert!(std::panic::catch_unwind(|| required(name)).is_err());
@@ -594,6 +701,7 @@ mod tests {
     /// 手順は 1 つずつしか動かない
     #[test]
     fn an_action_must_be_selected_explicitly() {
+        let _env = env_guard();
         // 指定が無い
         std::env::remove_var("CM_GT_ACTION");
         assert!(
@@ -622,9 +730,161 @@ mod tests {
         std::env::remove_var("CM_GT_ACTION");
     }
 
+    // ─── 作業の規模（profile）────────────────────────────────────────
+
+    /// 規模を選ばずには動かない
+    #[test]
+    fn a_profile_must_be_selected_explicitly() {
+        let _env = env_guard();
+        std::env::remove_var("CM_GT_PROFILE");
+        assert!(
+            std::panic::catch_unwind(require_profile).is_err(),
+            "CM_GT_PROFILE 無しで動いてしまう"
+        );
+        for bad in ["", "   ", "Pilot", "PILOT", "dev", "expansion50", "10"] {
+            std::env::set_var("CM_GT_PROFILE", bad);
+            assert!(
+                std::panic::catch_unwind(require_profile).is_err(),
+                "{bad} を規模として受け付けている"
+            );
+        }
+        std::env::set_var("CM_GT_PROFILE", "pilot");
+        assert_eq!(std::panic::catch_unwind(require_profile).unwrap(), Profile::Pilot);
+        std::env::set_var("CM_GT_PROFILE", "expansion");
+        assert_eq!(std::panic::catch_unwind(require_profile).unwrap(), Profile::Expansion);
+        std::env::remove_var("CM_GT_PROFILE");
+    }
+
+    /// pilot は 10 / 90 の範囲のまま
+    #[test]
+    fn the_pilot_profile_keeps_its_range() {
+        let _env = env_guard();
+        assert_eq!(MAX_PILOT_WORKS, 10);
+        assert_eq!(MAX_PILOT_HTTP, 90);
+
+        for (count, ok) in [("0", false), ("1", true), ("10", true), ("11", false), ("50", false)] {
+            std::env::set_var("CM_GT_TARGET_COUNT", count);
+            assert_eq!(
+                std::panic::catch_unwind(|| Profile::Pilot.target_count()).is_ok(),
+                ok,
+                "pilot の target_count {count}"
+            );
+        }
+        for (works, http, ok) in [
+            ("1", "1", true),
+            ("10", "90", true),
+            ("11", "90", false),
+            ("10", "91", false),
+            ("50", "450", false),
+        ] {
+            std::env::set_var("CM_GT_MAX_WORKS", works);
+            std::env::set_var("CM_GT_MAX_HTTP", http);
+            assert_eq!(
+                std::panic::catch_unwind(|| Profile::Pilot.budget()).is_ok(),
+                ok,
+                "pilot の budget {works}/{http}"
+            );
+        }
+        clear_numbers();
+    }
+
+    /// expansion は 50 / 50 / 450 ちょうどだけ
+    #[test]
+    fn the_expansion_profile_requires_exact_numbers() {
+        let _env = env_guard();
+        assert_eq!(EXPANSION_WORKS, 50);
+        assert_eq!(EXPANSION_HTTP, 450);
+
+        for (count, ok) in [("49", false), ("50", true), ("51", false), ("10", false), ("0", false)]
+        {
+            std::env::set_var("CM_GT_TARGET_COUNT", count);
+            assert_eq!(
+                std::panic::catch_unwind(|| Profile::Expansion.target_count()).is_ok(),
+                ok,
+                "expansion の target_count {count}"
+            );
+        }
+        for (works, ok) in [("49", false), ("50", true), ("51", false)] {
+            std::env::set_var("CM_GT_MAX_WORKS", works);
+            std::env::set_var("CM_GT_MAX_HTTP", "450");
+            assert_eq!(
+                std::panic::catch_unwind(|| Profile::Expansion.budget()).is_ok(),
+                ok,
+                "expansion の max_works {works}"
+            );
+        }
+        for (http, ok) in [("449", false), ("450", true), ("451", false), ("90", false)] {
+            std::env::set_var("CM_GT_MAX_WORKS", "50");
+            std::env::set_var("CM_GT_MAX_HTTP", http);
+            assert_eq!(
+                std::panic::catch_unwind(|| Profile::Expansion.budget()).is_ok(),
+                ok,
+                "expansion の max_http {http}"
+            );
+        }
+        clear_numbers();
+    }
+
+    /// 凍結済みの規模と、選んだ規模が食い違っていたら動かない
+    #[test]
+    fn a_profile_cannot_operate_another_profiles_manifest() {
+        use crate::services::gt_sampling::freeze_sample;
+
+        let mut conn = crate::db::test_support::open_migrated();
+        for index in 1..=60 {
+            seed_reconstructed(&conn, index);
+        }
+        let base = SampleRequest {
+            sample_id: "c5c5-pilot".to_string(),
+            cohort: COHORT.to_string(),
+            purpose: PURPOSE,
+            target_count: 10,
+            source_git_sha: "b".repeat(40),
+            state_schema_version: STATE_SCHEMA_VERSION.to_string(),
+            rules_policy_version: POLICY_VERSION.to_string(),
+        };
+        let pilot = freeze_sample(&mut conn, &base).unwrap();
+        let expansion = freeze_sample(
+            &mut conn,
+            &SampleRequest {
+                sample_id: "c5c5-expansion".to_string(),
+                target_count: EXPANSION_WORKS,
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(pilot.config.target_count, 10);
+        assert_eq!(expansion.config.target_count, EXPANSION_WORKS as i64);
+
+        // それぞれ自分の規模なら通る
+        Profile::Pilot.check_manifest(&pilot);
+        Profile::Expansion.check_manifest(&expansion);
+
+        // 取り違えは止める
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Profile::Expansion
+                .check_manifest(&pilot)))
+            .is_err(),
+            "expansion で pilot の sample を動かせてしまう"
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Profile::Pilot
+                .check_manifest(&expansion)))
+            .is_err(),
+            "pilot で expansion の sample を動かせてしまう"
+        );
+    }
+
+    fn clear_numbers() {
+        for name in ["CM_GT_TARGET_COUNT", "CM_GT_MAX_WORKS", "CM_GT_MAX_HTTP"] {
+            std::env::remove_var(name);
+        }
+    }
+
     /// pilot の上限を超える入力は受け付けない
     #[test]
     fn the_pilot_ceilings_are_enforced() {
+        let _env = env_guard();
         let name = "CM_GT_TEST_BOUNDED";
         for (value, ok) in [("0", false), ("1", true), ("10", true), ("11", false)] {
             std::env::set_var(name, value);
