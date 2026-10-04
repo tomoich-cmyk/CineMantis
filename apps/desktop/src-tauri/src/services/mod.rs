@@ -18,6 +18,7 @@ pub mod match_history;
 pub mod metadata_matcher;
 pub mod poster_store;
 pub mod prematch_inputs;
+pub mod pr4_diagnostics;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;

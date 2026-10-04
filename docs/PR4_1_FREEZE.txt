@@ -1,0 +1,12 @@
+PR4-1 freeze. Hashes are SHA-256.
+f5ea859e59a1b8143ba2e0eee03db8a4bd1a72ad2149f409f04d6bc6b7549287  apps/desktop/src-tauri/src/services/pr4_diagnostics.rs
+e41a1c073000a08d777242e54077e59b76de7ef98eda0256d304b54773c5eb1d  apps/desktop/src-tauri/src/services/mod.rs
+5e0ede2a0cc53402f24d93f80732d058def9a8bba6bbc971e857327a18bd85c5  docs/PR4_1_REPORT.md
+e1ebef75d737251f3a8e9d049d95d0efef9a5af5358201ee17f4462948be28b7  docs/PR4_1_CONTRACT_AMENDMENTS.md
+
+report_version: pr4-diagnostic-report-1
+amendments: docs/PR4_1_CONTRACT_AMENDMENTS.md (A1 both-no-identity = not_comparable; A2 final_promotion.reason = HOLDOUT_SEALED_POLICY_NOT_FROZEN; A3 live exclusion reason = live_evidence_policy_ambiguous (temporary); A4 cohort_boundary_integrity = APPLICATION_VALIDATED_NOT_DB_ENFORCED). PR4-0 frozen files unchanged.
+tests: cargo test --lib pr4_diagnostics = 27 passed / 0 failed; cargo test --lib = 466 passed / 0 failed / 8 ignored; cargo check --lib = ok (no warnings from the new module)
+base: HEAD 79e0bf17616572fba65f8d52517cad34da90593a. Changed: mod.rs (+1 line), pr4_diagnostics.rs (new), docs (new). No migration / DB / matcher / Jev change.
+holdout unopened. FINAL promotion: NOT_RUN. policy freeze: not defined.
+(PR4_1_FREEZE.txt itself is not hashed.)
