@@ -1,0 +1,215 @@
+{
+ "artifact": "pr4_metric_contract",
+ "contract_version": "pr4-agg-contract-0",
+ "status": "DRAFT_FROZEN_BY_PR4_0 (design only; no implementation)",
+ "cohort_types": {
+  "A1_development_audit": {
+   "definition": "metadata_review_tasks.reason='audit_sample' かつ sampling_json.purpose='development' の task に繋がる audit run（mode=safe, trigger_kind=batch, batch_id=sample_id）",
+   "labels": "task に繋がる有効な strong ラベル",
+   "may_use_for": [
+    "diagnostic_gt metrics",
+    "distribution metrics"
+   ]
+  },
+  "A2_production_observed": {
+   "definition": "mode='safe'・audit_sample task に繋がっていない・trigger_kind<>'replay' の run",
+   "labels": "none（ラベル無しの分布指標だけ）",
+   "may_use_for": [
+    "distribution metrics only"
+   ],
+   "holdout_overlap": "BLOCKED BY POLICY FREEZE: holdout の所属定義が未確定。evidence_class='live' の bucket は holdout との重なりが UNKNOWN のため、調整・昇格に使わない旨を report に必ず明記し、他の bucket と合算しない"
+  },
+  "B_sealed_holdout": {
+   "definition": "sampling_json.purpose='holdout'（live）。PR4-0 / 通常 PR4 では読まない・集計しない",
+   "access": "FORBIDDEN until policy freeze",
+   "required_predicate": "通常集計の SQL は purpose='holdout' の task・その run・その label を除く条件を持ち、テストでそれを検証する（将来）"
+  },
+  "C_historical_incompatible": {
+   "definition": "バージョン / スキーマ / verdict 行が直接比較できない行",
+   "rules": [
+    "policy_version != 現行",
+    "rules-tags-shadow の matcher_version != 現行 または verdict 行なし",
+    "query_source IS NULL（022 より前）",
+    "rules-1 verdict が freeze（91b533d）前に作られた可能性（version 文字列で区別不能）"
+   ],
+   "handling": "別 bucket で報告。A1 / A2 に混ぜない。backfill しない"
+  }
+ },
+ "report_metadata_required": [
+  "report_version",
+  "generated_at",
+  "cohort_type",
+  "matcher_versions {rules-1, rules-safe, rules-tags-shadow}",
+  "policy_version(s)",
+  "state_schema_version(s)",
+  "source_run_selection (SQL predicate + run_id min/max + count)",
+  "eligible_rows",
+  "excluded_rows",
+  "exclusion_reasons {reason: count}"
+ ],
+ "eligibility": {
+  "run_exclusions (report each with count)": [
+   "mode='shadow'",
+   "trigger_kind='replay'",
+   "decision IN ('ERROR','SKIPPED')",
+   "applied rows are NOT excluded (applied は結果であって適格性ではない)",
+   "holdout 所属 / 所属不明（BLOCKED BY POLICY FREEZE）",
+   "version が bucket C"
+  ],
+  "eligible_rows": "上記を除いた run の件数。matcher ごとの指標は、その matcher の verdict 行がある run だけを分母にする（行が無い run は not_comparable / missing_verdict として別計上）"
+ },
+ "metrics": {
+  "reason_code_counts": {
+   "status": "FROZEN_SHAPE",
+   "per_matcher": [
+    "rules-safe",
+    "rules-tags-shadow"
+   ],
+   "source": "metadata_match_verdicts.reasons_json（decision_reasons_json は rules-safe の複製なので使わない）",
+   "rules": [
+    "1 行に複数コードがありうる（multi-label）。count = そのコードを含む行数、rate = count / eligible_rows（合計は 1 を超えうる）",
+    "reasons_json が空配列 → bucket 'NO_REASON_AUTO'",
+    "reasons_json が NULL・配列でない・未知のコード → bucket 'UNKNOWN_OR_NULL'（捨てない）",
+    "主理由（primary reason）は定義しない: コードに優先順位の定義が無い（UNKNOWN）",
+    "rules-1 の reasons_json は notes で理由コードの語彙ではない → この指標に含めない"
+   ]
+  },
+  "review_rate": {
+   "status": "FROZEN_SHAPE",
+   "per_matcher": [
+    "rules-safe",
+    "rules-tags-shadow"
+   ],
+   "numerator": "verdict.decision='REVIEW'",
+   "denominator": "eligible_rows（その matcher の verdict 行がある）",
+   "note": "REVIEW に当たる永続値は verdicts.decision / runs.decision の 'REVIEW'。rules-1 は REVIEW を出さない。review task（review_decision / legacy_pending）は別の概念で、REVIEW run から作られる課題の件数として別に報告し、REVIEW rate と同一視しない"
+  },
+  "profile_agreement_rules_safe_vs_shadow": {
+   "status": "FROZEN_SHAPE",
+   "comparable_when": "同じ run_id に rules-safe と rules-tags-shadow の verdict 行が両方ある（かつ bucket C でない）",
+   "not_comparable": "片方の verdict 行が無い（例: 022 より前の run）。捨てずに件数を出す",
+   "design_note": "rules-safe の入力は legacy 候補のみ（legacy_ranked）、rules-tags-shadow は combined 候補（combined_ranked）。入力集合が違うことを前提に比較する",
+   "separate_definitions": {
+    "decision_agreement": "decision が同じ（AUTO / REVIEW / UNRESOLVED）",
+    "top_identity_agreement": "(tmdb_id, media_type) が同じ。両方 NULL（候補なし）は一致として数えるが別掲",
+    "auto_outcome": "{both_auto_same_identity, both_auto_different_identity, rules_safe_auto_only, shadow_auto_only, neither_auto}",
+    "reason_set_agreement": "理由コード集合の完全一致"
+   },
+   "forbidden": "4 つの定義を 1 つの『一致率』に潰さない。agreement を昇格判断に使わない"
+  },
+  "auto_coverage": {
+   "status": "FROZEN_SHAPE",
+   "per_matcher": [
+    "rules-safe",
+    "rules-tags-shadow",
+    "rules-1 (参考)"
+   ],
+   "numerator": "verdict.decision='AUTO'",
+   "denominator": "eligible_rows（cohort 内の適格 run 全件）",
+   "basis": "audit_run.rs の集計定義コメント（AUTO coverage = AUTO / 全件）。FINAL では holdout 全件が分母だが、診断では cohort の適格 run 全件に置き換える（分母の定義は report に明記）"
+  },
+  "abstention_rate": {
+   "status": "FROZEN_SHAPE",
+   "numerator": "verdict.decision IN ('REVIEW','UNRESOLVED')",
+   "denominator": "eligible_rows",
+   "basis": "audit_run.rs の集計定義コメント（abstention rate = (REVIEW + UNRESOLVED) / 全件）。REVIEW と同一視しない。ERROR / SKIPPED は abstention ではなく除外として別計上。人手の defer（GT 側）と Jev の『決定なし』は別の概念で、この指標に入れない",
+   "relation": "decision の取りうる値が 3 つなので、同一 eligible_rows 上では auto_coverage + abstention_rate = 1。冗長だが両方出し、一致を report 内で検査する"
+  },
+  "diagnostic_conditional_auto_precision": {
+   "status": "FROZEN_SHAPE_WITH_BLOCKED_PARTS",
+   "cohort": "A1_development_audit のみ",
+   "label_name_in_report": "diagnostic_conditional_auto_precision（FINAL precision とは呼ばない）",
+   "evaluable_gt": "task.details_json.state='resolved' かつ label.review_task_id=task.id かつ label.run_id=task.run_id かつ strength='strong' かつ method in (review_confirm, review_pick_other, review_none) かつ superseded_at IS NULL",
+   "unresolved_gt (reported, excluded)": "state in (deferred, ready, selected, stale, generation_error)、およびラベルが superseded された task（理由別に件数）",
+   "subset": "label='tmdb' かつ ラベルの (tmdb_id, media_type) が候補の rules_rank<=3 に居る run。ここでの top-3 は combined candidate set 上の rules_rank に基づく（audit_run.rs の定義コメントどおり『GT が top3 に居た部分集合』）。matcher 別 rank を書く production 経路は無い（candidate_scores 参照）",
+   "numerator": "subset のうち、その matcher の verdict が AUTO で top (tmdb_id, media_type) がラベルと一致する件数",
+   "denominator": "subset のうち、その matcher の verdict が AUTO の件数",
+   "report": [
+    "numerator",
+    "denominator",
+    "evaluable_gt_count",
+    "unresolved_gt_count (by state)",
+    "excluded_count (by reason)",
+    "subset_size"
+   ],
+   "blocked": {
+    "label_none_rows": "label='none' の扱い（AUTO が出たら誤りとして数えるか）はコードに定義が無い → NOT FROZEN。none ラベルの件数は別掲し、precision には入れない。定義は policy freeze で決める",
+    "top3_basis": "combined rank を top-3 の基準にしてよいかは policy freeze で確認する（matcher 別 rank が永続化されていないため）",
+    "manual_apply_labels": "production run に紐づく manual_* の strong ラベルを GT として使うかは未定義（UNKNOWN）。PR4-0 では使わない"
+   },
+   "forbidden": "FINAL precision と呼ぶ・昇格判断に使う・candidate set 外の正解を黙って除く（FINAL では分子から外し分母に残す。ここでは subset 定義で明示的に除外して報告する）"
+  }
+ },
+ "final_promotion": {
+  "metric": "FINAL end-to-end AUTO precision",
+  "status": "NOT_RUN",
+  "reason": "HOLDOUT_SEALED / POLICY_NOT_FROZEN",
+  "documented_in_code": "正しい AUTO / すべての AUTO（holdout 全体）。candidate set の外に正解があるのに別候補を AUTO した場合も誤り 1 件（分子から外し分母に残す）。AUTO coverage と abstention rate を併記する（audit_run.rs の集計定義コメント）",
+  "denominator_semantics": "BLOCKED BY POLICY FREEZE: label='none'・GT 未解決・abstain の扱いは policy 仕様で定義する。PR4-0 では分母を発明しない",
+  "principles": [
+   "holdout は policy freeze の後にだけ 1 回開く",
+   "development の診断指標を昇格ロジックの入力にしない",
+   "通常の PR4 report と別の実行経路（別の関数・別の入口）にする",
+   "通常 report は final_promotion を development データで埋めない（常に NOT_RUN）"
+  ]
+ },
+ "report_schema": {
+  "report_metadata": [
+   "report_version",
+   "generated_at",
+   "cohort_type",
+   "matcher_versions",
+   "source_run_selection",
+   "eligible_rows",
+   "excluded_rows",
+   "exclusion_reasons"
+  ],
+  "reason_codes": {
+   "<matcher>": {
+    "counts": {},
+    "rates": {},
+    "unknown_or_null_bucket": 0,
+    "no_reason_auto_bucket": 0
+   }
+  },
+  "review": {
+   "<matcher>": {
+    "review_count": 0,
+    "review_rate": null,
+    "denominator": 0
+   },
+   "review_tasks_opened": "別掲"
+  },
+  "profile_comparison": {
+   "comparable_count": 0,
+   "agreement_count": 0,
+   "disagreement_count": 0,
+   "not_comparable_count": 0,
+   "agreement_definition": "decision | top_identity | auto_outcome | reason_set を別々に",
+   "auto_outcome_breakdown": {}
+  },
+  "auto": {
+   "<matcher>": {
+    "auto_count": 0,
+    "auto_coverage": null,
+    "abstention_count": 0,
+    "abstention_rate": null,
+    "denominator": 0
+   }
+  },
+  "diagnostic_gt": {
+   "cohort": "A1_development_audit",
+   "evaluable_gt_count": 0,
+   "unresolved_gt_count": {},
+   "subset_size": 0,
+   "numerator": 0,
+   "denominator": 0,
+   "diagnostic_conditional_auto_precision": null,
+   "label_none_count": 0
+  },
+  "final_promotion": {
+   "status": "NOT_RUN",
+   "reason": "HOLDOUT_SEALED / POLICY_NOT_FROZEN"
+  }
+ }
+}

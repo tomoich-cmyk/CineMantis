@@ -1,0 +1,51 @@
+PR4-0: Aggregation Contract and Metric Boundary Freeze — REPORT
+(design / inventory only; no implementation; holdout sealed; no promotion decision)
+
+repository: branch feat/awards-festivals, HEAD 63af1445ba0cc84eae6a485c20053cde07d547e1 (origin synchronized at start)
+method: read-only inspection of source, migrations 020-025, db.rs and git history. No database file was opened.
+
+artifacts (new): docs/PR4_AGGREGATION_CONTRACT.md, docs/PR4_POLICY_FREEZE_CHECKLIST.md,
+                 docs/pr4_schema_inventory.json (47 field rows), docs/pr4_metric_contract.json, docs/PR4_0_REPORT.txt, docs/PR4_0_FREEZE.txt
+artifacts (modified): docs/FOLLOWUPS.md (item 4 backfill description corrected; see below)
+
+KEY FINDINGS
+1. Per-matcher conclusions live in metadata_match_verdicts; runs.decision duplicates rules-safe (ERROR overrides).
+2. REVIEW / AUTO / UNRESOLVED mapping is established for rules-safe and rules-tags-shadow (AUTO iff no reason; UNRESOLVED iff no candidates; else REVIEW).
+   rules-1 never emits REVIEW and its reasons_json holds notes, not reason codes. Jev never writes AUTO.
+3. rules-safe consumes legacy candidates only; rules-tags-shadow consumes the combined set. candidates.rules_rank / rules_score are combined-set values.
+4. No production path persists a matcher-specific candidate rank for rules-safe or rules-tags-shadow. candidate_scores is written only by
+   the db.rs legacy backfill (score only, rank NULL) and by the Jev shadow path.
+5. mode='shadow' runs are copies of safe runs and must be excluded from run counts. Audit runs are distinguishable only through review tasks.
+6. evidence_class is a property of the work's files, not of the run type.
+7. Version history is compressed into 2026-09-23 (rules-safe/shadow -1 -> -2 at af63b4d; rules-1 frozen at 91b533d without a version-string change).
+8. sampling_json (purpose / cohort) is not DB-protected; tampering is detected on read but a direct SQL update is not prevented.
+
+CONTRACT STATUS
+- reason-code counts, REVIEW rate, profile agreement (4 separate notions), AUTO coverage, abstention rate: shape FROZEN, denominators explicitly defined.
+- diagnostic_conditional_auto_precision: shape frozen; BLOCKED parts: label='none' handling, use of combined rank for top-3, use of manual_* labels.
+- FINAL end-to-end AUTO precision: boundary defined, NOT_RUN. Denominator semantics BLOCKED BY POLICY FREEZE (not invented).
+- policy-freeze checklist: 20 items classified; FROZEN 1 (rules-1 logic), NOT APPLICABLE 1 (Jev pin), UNKNOWN 2, NOT FROZEN 16. Holdout opening prerequisites listed.
+
+CORRECTIONS MADE DURING PR4-0
+- docs/FOLLOWUPS.md item 4 (committed in 63af144) said migration 023 had no backfill of existing rows. 023_jev_shadow.sql has none, but
+  db.rs backfill_legacy_candidate_scores does run at startup (legacy-only candidates, score only). The text now says so and records that no
+  matcher-specific rank is persisted for rules-safe / rules-tags-shadow.
+- While drafting, two unsupported statements were removed before freezing: a reference to "299 / 598" counts (not present in the repository)
+  and a claim that sampling_json is DB-trigger-protected (it is not).
+
+REQUIRED CHECKS
+[x] holdout never read                       no .db file was opened at all
+[x] no DB writes                             none
+[x] no network                               none (git operations were local reads)
+[x] no application code changes              git diff --name-only -- apps packages: 0 files
+[x] no migration changes                     0 files under packages/
+[x] C5c.5 docs unchanged                     docs/C5C5_CLOSEOUT.md identical to HEAD
+[x] diagnostic vs FINAL metrics separated    contract section 3 vs 4; final_promotion fixed at NOT_RUN
+[x] every denominator defined or unresolved  defined for 3.1-3.6; FINAL denominator BLOCKED BY POLICY FREEZE
+[x] UNKNOWN semantics not guessed            listed in inventory (writers_not_found_in_non_test_code) and checklist
+[x] historical incompatibilities surfaced   contract section 5 and cohort C
+[x] policy-freeze gaps listed                docs/PR4_POLICY_FREEZE_CHECKLIST.md
+[x] FINAL metric remains NOT_RUN             yes
+LIMITS: actual row counts per version were not inspected (DB not read). Population statements are derived from schema, migrations, backfill code and git history.
+
+STOP: design frozen. No PR4 aggregation implemented. No commit made.

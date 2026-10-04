@@ -1,0 +1,592 @@
+{
+ "artifact": "pr4_schema_inventory",
+ "pr4_0": true,
+ "repo_head_at_inventory": "63af1445ba0cc84eae6a485c20053cde07d547e1",
+ "method": "code / migration / db.rs / git history のみ。DB の行は一切読んでいない（holdout を開かないため）。historical_population はスキーマ制約・migration・backfill コード・git 履歴からの導出で、実際の行数は未確認",
+ "unknown_marker": "UNKNOWN",
+ "fields": [
+  {
+   "table": "metadata_match_runs",
+   "field": "id",
+   "type": "INTEGER PK",
+   "nullable": false,
+   "semantics_established_by_code": "run の識別子",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "selection"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "work_id",
+   "type": "INTEGER FK works",
+   "nullable": false,
+   "semantics_established_by_code": "照合した作品",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "join to labels / review tasks"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "batch_id",
+   "type": "TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "production: 一括照合の batch 識別子。audit run: sample_id（record_audit_run が必須にする）。run 単体では production と audit を区別できない",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "cohort selection (audit join only)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs record_audit_run"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "trigger_kind",
+   "type": "TEXT CHECK batch|single|legacy_rescan|replay",
+   "nullable": false,
+   "semantics_established_by_code": "照合のきっかけ。replay は works を変えない再生（本番の生成元はコード上テストのみ）。audit run は batch 固定",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "eligibility filter"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs TriggerKind; gt_review.rs EXPECTED_RUN_TRIGGER"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "mode",
+   "type": "TEXT CHECK safe|shadow|gated",
+   "nullable": false,
+   "semantics_established_by_code": "safe = production と audit の run。shadow = create_jev_shadow_run が作る兄弟 run（decision / reasons / 候補 / 決定的 verdict を safe run から写す）。gated は非テストの書き込み元が見つからない",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "eligibility filter (shadow must be excluded: duplicates the safe run)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs create_jev_shadow_run"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "evidence_class",
+   "type": "TEXT CHECK live|reconstructed_clean|historical_audit_only",
+   "nullable": false,
+   "semantics_established_by_code": "照合前入力の出どころ分類（files の original 取得状況から導出）。run の種別（production / audit）ではない。live = 全ファイルが scan 時に original を取得済み、reconstructed_clean = original は後埋めだが NAS 整理で改名されていない、historical_audit_only = original 欠落または改名済み",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "cohort_type",
+    "stratification"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/prematch_snapshot.rs evidence_class_for"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "state_schema_version",
+   "type": "TEXT",
+   "nullable": false,
+   "semantics_established_by_code": "照合前 state の schema 版（現行 cm-prematch-2）",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "version bucketing"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/prematch_snapshot.rs STATE_SCHEMA_VERSION"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "policy_version",
+   "type": "TEXT",
+   "nullable": false,
+   "semantics_established_by_code": "rules-safe の版。現行 rules-safe-2。af63b4d（2026-09-23 12:41）で -1 から更新された。-1 の run は存在しうる",
+   "historical_population": "ALWAYS (value changed at af63b4d)",
+   "consumed_by": [
+    "version bucketing / historical exclusion"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs POLICY_VERSION; git af63b4d"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "policy_snapshot_json",
+   "type": "TEXT JSON",
+   "nullable": false,
+   "semantics_established_by_code": "判定時の閾値・矛盾ルールの凍結（policy_version, threshold_auto, threshold_candidate, year_tolerance, embedded_*, shadow_matcher_version, rules_v1_version）",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "threshold identity",
+    "policy-freeze evidence"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs PolicySnapshot"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "governing_matcher",
+   "type": "TEXT CHECK rules-safe|policy",
+   "nullable": false,
+   "semantics_established_by_code": "本番で works に反映する判定器。記録される値は rules-safe。'policy' は非テストの書き込み元が見つからない",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "eligibility filter"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs persist_run"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "decision",
+   "type": "TEXT CHECK AUTO|REVIEW|UNRESOLVED|SKIPPED|ERROR",
+   "nullable": false,
+   "semantics_established_by_code": "rules-safe の結論（AUTO / REVIEW / UNRESOLVED）。error_text があれば ERROR で上書き。SKIPPED は非テストの書き込み元が見つからない",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "run-level state",
+    "exclusion (ERROR / SKIPPED)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs persist_run"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "decision_reasons_json",
+   "type": "TEXT JSON array",
+   "nullable": false,
+   "semantics_established_by_code": "rules-safe の理由コード配列。AUTO は空配列、UNRESOLVED は [NO_CANDIDATES]、REVIEW は 1 つ以上。shadow 兄弟 run には safe run の値が複製される",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "reason-code counts (prefer verdicts)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/metadata_matcher.rs rules_core"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "applied",
+   "type": "INTEGER 0|1",
+   "nullable": false,
+   "semantics_established_by_code": "works に反映したか。replay / shadow / audit run は 0",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "production-outcome filter (not a metric input)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_review.rs validate_bound_run"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "applied_tmdb_id",
+   "type": "INTEGER",
+   "nullable": true,
+   "semantics_established_by_code": "反映した TMDB ID（applied=1 のとき必須）",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "not consumed in PR4-0"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql CHECK"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "applied_media_type",
+   "type": "TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "反映した media_type",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "not consumed in PR4-0"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql CHECK"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "status_after",
+   "type": "TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "反映後の works.match_status。audit run は NULL でなければならない",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "not consumed"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_review.rs validate_bound_run"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "error_text",
+   "type": "TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "TMDB 検索失敗など。ある run は decision=ERROR",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "exclusion"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql CHECK"
+  },
+  {
+   "table": "metadata_match_runs",
+   "field": "tmdb_calls / latency_ms / created_at",
+   "type": "INTEGER / INTEGER / TEXT",
+   "nullable": "mixed",
+   "semantics_established_by_code": "コスト・時刻の記録",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "not consumed in PR4-0"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql"
+  },
+  {
+   "table": "metadata_match_candidates",
+   "field": "run_id, cand_key, tmdb_id, media_type",
+   "type": "INTEGER, TEXT, INTEGER, TEXT",
+   "nullable": false,
+   "semantics_established_by_code": "run が保存した候補の identity。cand_key は run 内で c1..",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "GT join",
+    "agreement (identity)"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql"
+  },
+  {
+   "table": "metadata_match_candidates",
+   "field": "search_rank",
+   "type": "INTEGER",
+   "nullable": true,
+   "semantics_established_by_code": "legacy + embedded を統合した全検索結果リスト内の位置（1 始まり）",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "not consumed"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs candidates_to_store"
+  },
+  {
+   "table": "metadata_match_candidates",
+   "field": "rules_rank",
+   "type": "INTEGER",
+   "nullable": true,
+   "semantics_established_by_code": "merge_and_rank を通った combined candidate set 上の順位。閾値で落ちた候補は NULL。判定器固有の順位ではない",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "top-3 membership (combined-set basis only)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs RunInput doc"
+  },
+  {
+   "table": "metadata_match_candidates",
+   "field": "rules_score",
+   "type": "INTEGER",
+   "nullable": false,
+   "semantics_established_by_code": "combined set 上の最良スコア（rules-1 / rules-safe 固有ではない）",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "not consumed (explicitly not a matcher-specific score)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs RunInput doc"
+  },
+  {
+   "table": "metadata_match_candidates",
+   "field": "query_source",
+   "type": "TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "候補がどの検索語から出たか（legacy / embedded / both と記載）",
+   "historical_population": "FROM 022 (NULL for earlier rows)",
+   "consumed_by": [
+    "identifying rules-safe's input subset (legacy | both)"
+   ],
+   "evidence": "packages/db/migrations/022_container_tags.sql"
+  },
+  {
+   "table": "metadata_match_candidates",
+   "field": "explicit_conflicts_json",
+   "type": "TEXT JSON",
+   "nullable": true,
+   "semantics_established_by_code": "候補ごとの明示的矛盾（EPISODE_MARKER_VS_MOVIE / PART_MISMATCH）",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "not consumed"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs persist_run"
+  },
+  {
+   "table": "metadata_match_verdicts",
+   "field": "matcher",
+   "type": "TEXT CHECK rules-1|rules-safe|rules-tags-shadow|jev-policy|jev-choice-shuffled|jev-isolated",
+   "nullable": false,
+   "semantics_established_by_code": "判定器。UNIQUE (run_id, matcher)。rules-tags-shadow は 022（db.rs の作り直し）で CHECK に追加。jev-choice-shuffled / jev-isolated は非テストの書き込み元が見つからない",
+   "historical_population": "ALWAYS; rules-tags-shadow only for runs recorded after 09d2e08",
+   "consumed_by": [
+    "profile identity",
+    "agreement"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/db.rs VERDICTS_NEW_SQL; services/match_history.rs persist_run"
+  },
+  {
+   "table": "metadata_match_verdicts",
+   "field": "matcher_version",
+   "type": "TEXT",
+   "nullable": false,
+   "semantics_established_by_code": "rules-1 / rules-safe-2 / rules-tags-shadow-2 / jev-policy-1。rules-safe と shadow は af63b4d 前に -1。rules-1 は freeze（91b533d）後も文字列が据え置きで、凍結前後の行を version 文字列から区別できない",
+   "historical_population": "ALWAYS (value history above)",
+   "consumed_by": [
+    "version bucketing"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs; services/rules_v1.rs header"
+  },
+  {
+   "table": "metadata_match_verdicts",
+   "field": "decision",
+   "type": "TEXT CHECK AUTO|REVIEW|UNRESOLVED",
+   "nullable": false,
+   "semantics_established_by_code": "判定器ごとの結論。rules-safe / shadow: 理由が空なら AUTO、候補なしなら UNRESOLVED、それ以外は REVIEW。rules-1: 候補があれば AUTO、無ければ UNRESOLVED（REVIEW は出ない）。Jev: AUTO は書かない（REVIEW / UNRESOLVED のみ）",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "REVIEW rate",
+    "AUTO coverage",
+    "abstention",
+    "agreement",
+    "diagnostic precision"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/metadata_matcher.rs rules_core; match_history.rs persist_run; jev_shadow.rs header"
+  },
+  {
+   "table": "metadata_match_verdicts",
+   "field": "tmdb_id, media_type",
+   "type": "INTEGER, TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "その判定器の top candidate。REVIEW でも top があれば入る（AUTO のときだけ適用される）。候補なしは両方 NULL",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "agreement (identity)",
+    "GT correctness"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs insert_verdict"
+  },
+  {
+   "table": "metadata_match_verdicts",
+   "field": "score",
+   "type": "REAL",
+   "nullable": true,
+   "semantics_established_by_code": "top candidate の confidence。判定器間で採点式の版が違うので比較しない",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "not consumed"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs insert_verdict"
+  },
+  {
+   "table": "metadata_match_verdicts",
+   "field": "reasons_json",
+   "type": "TEXT JSON array",
+   "nullable": true,
+   "semantics_established_by_code": "rules-safe / shadow: 理由コード配列（AUTO は空）。rules-1: 凍結側の notes（理由コードの語彙ではない）。jev-policy: 記録形式は本棚卸しでは未確認",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "reason-code counts (rules-safe, rules-tags-shadow only)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs RulesOneVerdict.notes; metadata_matcher.rs reason"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "reason",
+   "type": "TEXT CHECK review_decision|legacy_pending|audit_sample|matcher_disagreement|user_initiated (+ metadata_conflict via db.rs rebuild)",
+   "nullable": false,
+   "semantics_established_by_code": "レビュー対象になった理由。audit_sample = GT 用に抽出した課題。review_decision / legacy_pending は production の rules-safe REVIEW run から作られる。matcher_disagreement / user_initiated は非テストの書き込み元が見つからない",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "cohort selection (audit_sample)",
+    "review-task counts (separate from REVIEW rate)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs record_run; db.rs REVIEW_TASKS"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "run_id",
+   "type": "INTEGER FK runs",
+   "nullable": true,
+   "semantics_established_by_code": "audit_sample 課題が指す audit run。GT ラベルの run もここ",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "GT join"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_review.rs header"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "sampling_json.cohort",
+   "type": "TEXT",
+   "nullable": false,
+   "semantics_established_by_code": "抽出時の evidence_class（reconstructed_clean / historical_audit_only / live）。作成後に変えない",
+   "historical_population": "audit_sample rows only",
+   "consumed_by": [
+    "cohort_type"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_sampling.rs sampling_json"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "sampling_json.purpose",
+   "type": "TEXT development|holdout",
+   "nullable": false,
+   "semantics_established_by_code": "GT の用途。抽出時に固定。live は holdout 専用（live+development 禁止）",
+   "historical_population": "audit_sample rows only",
+   "consumed_by": [
+    "cohort_type (holdout exclusion predicate)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_sampling.rs SamplePurpose"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "sampling_json.{sample_id, protocol_version, rules_policy_version, state_schema_version, sample_rank, frame_sha256, strata, source_git_sha}",
+   "type": "TEXT/INT",
+   "nullable": false,
+   "semantics_established_by_code": "抽出手順の凍結記録",
+   "historical_population": "audit_sample rows only",
+   "consumed_by": [
+    "selection boundary",
+    "version bucketing"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_sampling.rs sampling_json"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "details_json.state",
+   "type": "TEXT selected|ready|stale|generation_error|deferred|resolved",
+   "nullable": true,
+   "semantics_established_by_code": "audit_sample の review lifecycle。deferred = 人が「判断できない」とした状態、resolved = ラベルが付いて閉じた状態",
+   "historical_population": "FROM 022 details_json column; audit_sample rows only",
+   "consumed_by": [
+    "evaluable vs unresolved GT"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_review.rs; audit_run.rs; match_history.rs audit_details_json"
+  },
+  {
+   "table": "metadata_review_tasks",
+   "field": "resolved_at / resolution_label_id",
+   "type": "TEXT / INTEGER",
+   "nullable": true,
+   "semantics_established_by_code": "解決時刻 / 解決ラベル",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "GT join"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql"
+  },
+  {
+   "table": "metadata_match_labels",
+   "field": "label, tmdb_id, media_type",
+   "type": "TEXT tmdb|none, INTEGER, TEXT",
+   "nullable": "tmdb_id/media_type NULL iff label=none",
+   "semantics_established_by_code": "人が確定した正解。none = TMDB に該当なし",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "GT correctness"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql CHECK"
+  },
+  {
+   "table": "metadata_match_labels",
+   "field": "method",
+   "type": "TEXT manual_apply|manual_direct_id|lock|review_confirm|review_pick_other|review_none|bulk_accept",
+   "nullable": false,
+   "semantics_established_by_code": "確定方法。GT レビューが作るのは review_confirm / review_pick_other / review_none（strong）。lock / bulk_accept は weak",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "GT eligibility"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs LabelMethod"
+  },
+  {
+   "table": "metadata_match_labels",
+   "field": "strength",
+   "type": "TEXT strong|weak",
+   "nullable": false,
+   "semantics_established_by_code": "精度の計算に使ってよいのは strong だけ（コード注記）",
+   "historical_population": "ALWAYS",
+   "consumed_by": [
+    "GT eligibility"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/match_history.rs LabelMethod::strength"
+  },
+  {
+   "table": "metadata_match_labels",
+   "field": "run_id, review_task_id",
+   "type": "INTEGER, INTEGER",
+   "nullable": true,
+   "semantics_established_by_code": "audit ラベルは task.run_id（人が見た run）に紐づく。manual_* ラベルは production の safe run に紐づく（shadow へは付けない）",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "GT join"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/services/gt_review.rs; match_history.rs latest_safe_run_id"
+  },
+  {
+   "table": "metadata_match_labels",
+   "field": "superseded_at",
+   "type": "TEXT",
+   "nullable": true,
+   "semantics_established_by_code": "NULL = 有効。work ごとに有効ラベルは 1 件（部分 UNIQUE）。後から別ラベルで上書きされた audit ラベルは評価から外す必要がある",
+   "historical_population": "ALWAYS (nullable)",
+   "consumed_by": [
+    "GT eligibility"
+   ],
+   "evidence": "packages/db/migrations/021_match_history.sql ux_mml_active"
+  },
+  {
+   "table": "metadata_match_candidate_scores",
+   "field": "matcher, matcher_version, score, rank, in_candidate_set",
+   "type": "TEXT legacy|rules-tags-shadow|jev-call, TEXT, REAL, INTEGER, INTEGER",
+   "nullable": "score/rank nullable",
+   "semantics_established_by_code": "候補ごとの matcher 別の値。非テストの書き込み元は 2 つだけ: db.rs backfill_legacy_candidate_scores（query_source='legacy' の候補に legacy / rules-1 の score を移送、rank は NULL）と jev_shadow.rs（jev-call）。rules-safe と rules-tags-shadow の matcher 別 rank を書く production 経路は見つからない",
+   "historical_population": "FROM 023; legacy backfill only for legacy-only candidates",
+   "consumed_by": [
+    "NOT usable for rules-safe / shadow rank (no producer)"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/db.rs backfill_legacy_candidate_scores; services/jev_shadow.rs"
+  },
+  {
+   "table": "metadata_match_jev_run_links",
+   "field": "safe_run_id, shadow_run_id",
+   "type": "INTEGER PK, INTEGER UNIQUE",
+   "nullable": false,
+   "semantics_established_by_code": "safe run と Jev shadow 兄弟 run の 1 対 1 対応",
+   "historical_population": "FROM 025 (only runs processed by the sidecar)",
+   "consumed_by": [
+    "exclude shadow siblings from run counts"
+   ],
+   "evidence": "packages/db/migrations/025_jev_run_links.sql"
+  },
+  {
+   "table": "metadata_match_jev_calls",
+   "field": "status, call_kind, selected_candidate_id, answered_none, eval_session_id, ...",
+   "type": "mixed",
+   "nullable": "mixed",
+   "semantics_established_by_code": "Jev 呼び出しの監査記録。eval_session_id は 024 で追加され nullable。Jev の verdict は AUTO を書かない。PR4-0 の通常指標は Jev を入力にしない",
+   "historical_population": "FROM 023 / 024",
+   "consumed_by": [
+    "not consumed in PR4-0"
+   ],
+   "evidence": "packages/db/migrations/023_jev_shadow.sql; 024_jev_eval_sessions.sql; services/jev_shadow.rs"
+  },
+  {
+   "table": "jev_eval_sessions / jev_contracts",
+   "field": "(all)",
+   "type": "mixed",
+   "nullable": "mixed",
+   "semantics_established_by_code": "Jev 評価の予算・contract・モデル固定の記録",
+   "historical_population": "FROM 023 / 024",
+   "consumed_by": [
+    "not consumed in PR4-0"
+   ],
+   "evidence": "packages/db/migrations/023_jev_shadow.sql; 024_jev_eval_sessions.sql"
+  },
+  {
+   "table": "works",
+   "field": "match_source, last_match_run_id",
+   "type": "TEXT, INTEGER",
+   "nullable": true,
+   "semantics_established_by_code": "021 で追加。021 以前に照合済みの works は db.rs が match_source='legacy' に後埋めする。last_match_run_id の意味はこの棚卸しでは未確認",
+   "historical_population": "FROM 021; match_source backfilled",
+   "consumed_by": [
+    "not consumed in PR4-0"
+   ],
+   "evidence": "apps/desktop/src-tauri/src/db.rs backfill_match_source"
+  }
+ ],
+ "writers_not_found_in_non_test_code": {
+  "metadata_match_runs.mode='gated'": "テストのみ",
+  "metadata_match_runs.governing_matcher='policy'": "CHECK のみ",
+  "metadata_match_runs.decision='SKIPPED'": "CHECK のみ",
+  "metadata_match_verdicts.matcher in (jev-choice-shuffled, jev-isolated)": "CHECK のみ",
+  "metadata_review_tasks.reason in (matcher_disagreement, user_initiated)": "enum はあるが dead_code 扱い"
+ }
+}

@@ -50,8 +50,11 @@ rules-1 固有でも rules-safe 固有でもない（同じ作品が旧経路と
   guard 込みの rules-safe は、候補スコアの出どころには使わない。
 - 採点式の版を `matcher_version` に必ず持ち、`in_candidate_set` で「入力に入っていない候補」と
   「入っていたが選ばれなかった候補」を区別する。
-- 023 に、**既存の run 行を埋める INSERT は無い**（過去の run には matcher 別の値が付いていない）。
-  過去分をどう扱うか（空のままにするか、推定で埋めるか）は決まっていない。
+- 後埋めは `023_jev_shadow.sql` ではなく `db.rs` の `backfill_legacy_candidate_scores` が行う（起動時）。
+  `query_source='legacy'` の候補だけに旧経路の score を移し、**rank は移さない**（NULL）。
+  rules-tags-shadow と jev-call の過去分は後埋めしない。
+- **rules-safe と rules-tags-shadow について、matcher 別の候補 rank を書く production の経路は無い。**
+  `candidates.rules_rank` は統合集合上の順位のまま（PR4-0 の棚卸し: `docs/pr4_schema_inventory.json`）。
 
 注記: 候補ダイアログは統合後のスコアを表示し続けてよい。ただしこの数値を
 production AUTO の確信度として扱わないこと。
