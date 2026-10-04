@@ -1,0 +1,491 @@
+{
+ "artifact": "pr4_gt_semantics",
+ "contract_version": "pr4-gt-contract-1",
+ "gate": "PR4-2",
+ "repo_head_at_contract": "407623180210d29672a74d56a8290b4c66b0f13f",
+ "status": "CONTRACT_FROZEN (design only; no implementation; no database was read)",
+ "amends": "PR4-0 の BLOCKED だった 3 点（label='none'、統合 rank、manual_*）を決着させる。PR4-0 の凍結ファイルは書き換えない",
+ "metric": {
+  "name": "diagnostic_conditional_auto_precision",
+  "scope": "DEVELOPMENT / DIAGNOSTIC ONLY",
+  "is_not": [
+   "FINAL end-to-end AUTO precision",
+   "promotion metric",
+   "recall@1",
+   "recall@3"
+  ],
+  "evaluation_unit": "review task（audit_sample）= そのラベルが指す audit run（label.run_id = task.run_id）。作品単位ではない",
+  "denominator": "適格な評価単位（PR4-1 の A1 cohort）のうち、(1) その matcher の verdict が AUTO で、(2) 信頼できる・解決済み・評価可能な GT がある単位の数（matcher ごと）",
+  "numerator": "denominator のうち、positive GT かつ AUTO が選んだ (media_type, tmdb_id) が GT と完全一致する単位の数",
+  "formula": "auto_correct_count / auto_evaluable_count（matcher ごと）",
+  "zero_denominator": "null（NaN・無限大・0 にしない）",
+  "correctness": {
+   "positive_gt": "exact (media_type, tmdb_id) 一致だけが正しい。部分点なし",
+   "none_gt": "AUTO が候補を選んでいれば常に誤り（分母に入る）",
+   "not_used": [
+    "title の類似",
+    "rank の近さ",
+    "top-3 に居たこと",
+    "score",
+    "Jev",
+    "理由コード",
+    "同一シリーズ / collection"
+   ]
+  },
+  "per_matcher": [
+   "rules-safe",
+   "rules-tags-shadow"
+  ],
+  "machine_source": "metadata_match_verdicts（PR4-1 と同じ。runs.decision は権威ではない）。AUTO の状態は verdict.decision='AUTO' だけ。REVIEW / UNRESOLVED は precision の分母に入らない（coverage / REVIEW rate / abstention rate には残る）"
+ },
+ "none_semantics": {
+  "rule": "信頼できる strong の review_none は、評価可能な negative GT",
+  "in_auto_precision": "AUTO が候補を選べば誤りとして分母に入る",
+  "in_positive_only_metrics": "TMDB-positive 専用の指標（candidate recall など）では従来どおり分母外",
+  "never_infer_from": [
+   "候補 0 件",
+   "検索結果 0 件",
+   "UNRESOLVED",
+   "defer",
+   "ラベルが無いこと"
+  ],
+  "must_come_from": "明示的に信頼できる GT の判断（allowlist を満たす review_none）"
+ },
+ "defer_semantics": {
+  "persisted_as": "課題の state（details_json.state = 'deferred'）。ラベルの値ではない",
+  "rule": "未解決。正しくも誤りでもなく、precision の分母から外し、unresolved_gt_count に出す。none に変換しない",
+  "other_unresolved_states": [
+   "ready",
+   "selected",
+   "stale",
+   "generation_error"
+  ]
+ },
+ "top3_decision": {
+  "top3_for_auto_precision": "NOT_APPLICABLE",
+  "reason": "rules-safe は旧経路の候補集合、rules-tags-shadow は統合候補集合を入力にし、永続化された rules_rank は統合集合上の値。matcher 別の rank は永続化されていない。precision に top-3 の部分点を入れない",
+  "future_metric": "diagnostic_candidate_recall_at_3 は別の指標。同じ候補集合（profile）に属する rank だと証明できる場合だけ計算する。rules-safe が統合 rules_rank を流用することは禁止"
+ },
+ "trusted_gt_source": {
+  "principle": "manual だから GT とは扱わない。最新のラベルだから使う、とも扱わない。prefix 一致（review_* 全部）を使わない。明示的な allowlist だけ",
+  "allowlist_conditions_all_required": [
+   "label.method が review_confirm / review_pick_other / review_none のいずれか（3 値を明示列挙）",
+   "label.strength = 'strong'",
+   "label.review_task_id が指す課題が reason='audit_sample' で、task.work_id = label.work_id かつ task.run_id = label.run_id（NULL でない）",
+   "task.resolved_at が NULL でなく、task.resolution_label_id = label.id",
+   "details_json: state='resolved'、review_protocol_version='gt-review-1'、resolution_method = label.method",
+   "review_pick_other は details_json.tmdb_verified = true（TMDB での存在確認の記録）が必須",
+   "sampling_json: protocol_version='gt-protocol-1'、purpose='development'（PR4-1 の A1 cohort の条件）、sample_id が下の allowlist に含まれる",
+   "label.superseded_at IS NULL"
+  ],
+  "sample_id_allowlist": [
+   "c5c5c-redo-01",
+   "c5c5c-redo-02",
+   "c5c5c-redo-03",
+   "c5c5c-redo-04",
+   "c5c5c-redo-05"
+  ],
+  "sample_id_allowlist_source": "docs/C5C5_CLOSEOUT.md（committed）。開発用 50 task = c5c5c-redo-01〜05。旧 provisional の c5c5-dev-expand-01（出所未確定）は含めない。task ID は使わない",
+  "production_manual_labels": {
+   "trusted_for_diagnostic_precision": false,
+   "exclusion_reason": "untrusted_manual_gt_source",
+   "why": "どの UI / protocol で作られたか、blind だったか、候補集合が何だったか、後から変わっていないかを永続化されたデータから証明できない"
+  },
+  "extension_rule": "将来、別の GT 群が正式な protocol 由来だと証明できたら、別の amendment で allowlist に追加する"
+ },
+ "conflict_policy": {
+  "latest_label_wins": false,
+  "same_unit_identical_trusted_gt": "同じ評価単位（同じ review_task_id）の内容が同一の信頼できる GT は 1 件に畳む",
+  "same_unit_conflicting_trusted_gt": "gt_conflict として除外（どちらも使わない）",
+  "trusted_plus_untrusted": "信頼できるラベルを使い、信頼できないラベルは除外として記録する",
+  "resolved_plus_defer": "resolved を自動的に優先しない。置き換えの意味が protocol で確立されていないため。課題が resolved ならラベルがあり deferred ではない（同時には起きない）",
+  "superseded_trusted_label": "gt_superseded として除外。後続のラベル（production の manual_apply などは active ラベルを strong も含めて superseded にする）が GT の誤りの発見なのか別の操作なのかを protocol が定めていない",
+  "multiple_trusted_units_for_one_work": "gt_multiple_units_per_work として全て除外"
+ },
+ "label_inventory": [
+  {
+   "persisted_label": "tmdb",
+   "method": "review_confirm",
+   "strength": "strong",
+   "semantic_class": "POSITIVE",
+   "requires_candidate_identity": true,
+   "identity_source": "task.run_id の候補行（呼び出し側が渡した ID ではなく DB の候補行から読む）",
+   "trusted_source": "yes（allowlist を満たすとき）",
+   "usable_for_diagnostic_precision": "yes（条件つき）",
+   "exclusion_reason_when_no": "gt_sample_not_allowlisted / gt_provenance_incomplete / gt_superseded"
+  },
+  {
+   "persisted_label": "tmdb",
+   "method": "review_pick_other",
+   "strength": "strong",
+   "semantic_class": "POSITIVE",
+   "requires_candidate_identity": true,
+   "identity_source": "候補集合の外の TMDB 作品（存在確認済みのものだけ。details.tmdb_verified）",
+   "trusted_source": "yes（allowlist と tmdb_verified を満たすとき）",
+   "usable_for_diagnostic_precision": "yes（条件つき）。AUTO はどの候補を選んでも誤りになる",
+   "exclusion_reason_when_no": "gt_provenance_incomplete / gt_sample_not_allowlisted / gt_superseded"
+  },
+  {
+   "persisted_label": "none",
+   "method": "review_none",
+   "strength": "strong",
+   "semantic_class": "NONE",
+   "requires_candidate_identity": false,
+   "identity_source": "なし（tmdb_id / media_type は NULL。CHECK で保証）",
+   "trusted_source": "yes（allowlist を満たすとき）",
+   "usable_for_diagnostic_precision": "yes（negative GT）",
+   "exclusion_reason_when_no": "gt_sample_not_allowlisted / gt_provenance_incomplete / gt_superseded"
+  },
+  {
+   "persisted_label": "tmdb | none",
+   "method": "manual_apply",
+   "strength": "strong",
+   "semantic_class": "UNKNOWN（値の意味は positive / none だが、GT としての出どころが UNKNOWN）",
+   "requires_candidate_identity": "tmdb のとき yes",
+   "trusted_source": "no",
+   "usable_for_diagnostic_precision": "no",
+   "exclusion_reason_when_no": "untrusted_manual_gt_source"
+  },
+  {
+   "persisted_label": "tmdb | none",
+   "method": "manual_direct_id",
+   "strength": "strong",
+   "semantic_class": "UNKNOWN",
+   "requires_candidate_identity": "tmdb のとき yes",
+   "trusted_source": "no",
+   "usable_for_diagnostic_precision": "no",
+   "exclusion_reason_when_no": "untrusted_manual_gt_source"
+  },
+  {
+   "persisted_label": "tmdb | none",
+   "method": "lock",
+   "strength": "weak",
+   "semantic_class": "UNKNOWN（固定の操作。中身を確かめたとは限らない）",
+   "requires_candidate_identity": "tmdb のとき yes",
+   "trusted_source": "no",
+   "usable_for_diagnostic_precision": "no",
+   "exclusion_reason_when_no": "weak_label_not_gt"
+  },
+  {
+   "persisted_label": "tmdb | none",
+   "method": "bulk_accept",
+   "strength": "weak",
+   "semantic_class": "UNKNOWN（非テストの書き込み元が見つからない。LabelMethod に variant も無い）",
+   "requires_candidate_identity": "tmdb のとき yes",
+   "trusted_source": "no",
+   "usable_for_diagnostic_precision": "no",
+   "exclusion_reason_when_no": "weak_label_not_gt（CHECK により strength は常に weak）"
+  },
+  {
+   "persisted_label": "（上記以外の method）",
+   "method": "any other value",
+   "strength": "n/a",
+   "semantic_class": "UNKNOWN",
+   "requires_candidate_identity": "n/a",
+   "trusted_source": "no",
+   "usable_for_diagnostic_precision": "no",
+   "exclusion_reason_when_no": "unknown_label_semantics"
+  },
+  {
+   "persisted_label": "（ラベルなし）",
+   "method": "task state deferred / ready / selected / stale / generation_error",
+   "strength": "n/a",
+   "semantic_class": "DEFER / UNRESOLVED",
+   "requires_candidate_identity": "n/a",
+   "trusted_source": "n/a",
+   "usable_for_diagnostic_precision": "no",
+   "exclusion_reason_when_no": "unresolved_gt（state 別に件数）"
+  }
+ ],
+ "exclusion_reasons": {
+  "gt_side": [
+   "untrusted_manual_gt_source",
+   "weak_label_not_gt",
+   "unknown_label_semantics",
+   "gt_sample_not_allowlisted",
+   "gt_provenance_incomplete",
+   "gt_superseded",
+   "gt_conflict",
+   "gt_multiple_units_per_work"
+  ],
+  "machine_side_not_in_denominator": [
+   "machine_not_auto",
+   "auto_without_identity",
+   "machine_verdict_missing"
+  ],
+  "cohort_side": "PR4-1 の除外理由をそのまま再利用する（sealed_holdout を含む。GT の組み立ての前に除く）"
+ },
+ "cohort_boundary": {
+  "reuse": "PR4-1 の A1 cohort の選択と除外",
+  "holdout": "封印のまま。照会しない・PR4-2 の意味の検証にも使わない・ラベル / verdict / 候補 / 件数を寄与させない。holdout の評価単位は GT を組み立てる前に除く",
+  "cohort_boundary_integrity": "APPLICATION_VALIDATED_NOT_DB_ENFORCED"
+ },
+ "diagnostic_gt_report_fields_contract": {
+  "note": "将来の diagnostic_gt セクション。PR4-2 は本番 DB から件数を計算しない",
+  "status": "IMPLEMENTABLE | BLOCKED",
+  "gt_source_contract_version": "pr4-gt-contract-1",
+  "positive_gt_count": "int",
+  "none_gt_count": "int",
+  "unresolved_gt_count": "{state: int}",
+  "excluded_gt": {
+   "untrusted_manual_gt_source": "int",
+   "weak_label_not_gt": "int",
+   "unknown_label_semantics": "int",
+   "gt_sample_not_allowlisted": "int",
+   "gt_provenance_incomplete": "int",
+   "gt_superseded": "int",
+   "gt_conflict": "int",
+   "gt_multiple_units_per_work": "int"
+  },
+  "excluded_holdout_count": "int（PR4-1 と同じ）",
+  "by_matcher": {
+   "<rules-safe | rules-tags-shadow>": {
+    "auto_evaluable_count": "int",
+    "auto_correct_count": "int",
+    "auto_incorrect_count": "int",
+    "not_in_denominator": {
+     "machine_not_auto": "int",
+     "auto_without_identity": "int",
+     "machine_verdict_missing": "int"
+    },
+    "diagnostic_conditional_auto_precision": "number | null"
+   }
+  },
+  "denominator_definition": "AUTO かつ信頼できる評価可能な GT がある適格な評価単位（matcher ごと）",
+  "correctness_definition": "exact_media_type_tmdb_id（none の GT は AUTO を常に誤りとする）",
+  "top3": "NOT_APPLICABLE",
+  "cohort_boundary_integrity": "APPLICATION_VALIDATED_NOT_DB_ENFORCED"
+ },
+ "final_metric_separation": {
+  "final_promotion_status": "NOT_RUN",
+  "reason": "HOLDOUT_SEALED_POLICY_NOT_FROZEN",
+  "note": "PR4-2 の GT の意味は、自動的に FINAL の意味にはならない。FINAL の分母と abstention の扱いは policy freeze まで BLOCKED のまま"
+ },
+ "known_limitations": [
+  "D / E / F の段階で解決した GT（例: 71, 93, 96, 104）は、監査ディレクトリの判断であって DB のラベルになっていない（docs/C5C5_CLOSEOUT.md: DB には触れていない）。DB だけから診断 precision を作ると、それらは未解決として数えられる。取り込みの protocol は未定義（PR4-3 の範囲外。別の amendment が要る）",
+  "gt_superseded の扱い（後続の manual ラベルによる上書き）は保守的に除外している。後から意味が確立されれば amendment で変えられる",
+  "allowlist の sample_id は docs/C5C5_CLOSEOUT.md に由来する。別の sample を使うには amendment が要る",
+  "none の信頼できる GT が allowlist の sample に実際に何件あるかは未確認（DB を読んでいない）",
+  "rules-safe と rules-tags-shadow は入力の候補集合が違うので、matcher 間の precision の比較は候補集合の違いを前提に読む"
+ ],
+ "validation": {
+  "method": "(1) 参照評価器（リポジトリには入れていない）で合成した評価単位 25 ケースを評価（必須の 12 ケース + 境界 13 ケース）。(2) 契約が依拠する事実 19 件を、コードとスキーマに対して静的に検証。本番 DB・holdout には触れていない",
+  "reference_evaluator_cases": [
+   {
+    "case": "1_positive_gt_auto_exact_match_is_correct",
+    "pass": true
+   },
+   {
+    "case": "2_positive_gt_auto_different_identity_is_incorrect",
+    "pass": true
+   },
+   {
+    "case": "3_none_gt_auto_is_incorrect_and_in_the_denominator",
+    "pass": true
+   },
+   {
+    "case": "4_defer_gt_with_auto_is_excluded_from_the_denominator",
+    "pass": true
+   },
+   {
+    "case": "5_no_gt_with_auto_is_excluded",
+    "pass": true
+   },
+   {
+    "case": "6_manual_label_with_auto_is_excluded_as_untrusted_manual_gt_source",
+    "pass": true
+   },
+   {
+    "case": "7_conflicting_trusted_gt_is_excluded_as_gt_conflict",
+    "pass": true
+   },
+   {
+    "case": "8_review_machine_state_with_trusted_gt_is_not_in_the_denominator",
+    "pass": true
+   },
+   {
+    "case": "9_unresolved_machine_state_with_trusted_gt_is_not_in_the_denominator",
+    "pass": true
+   },
+   {
+    "case": "10_zero_evaluable_auto_gives_null_precision",
+    "pass": true
+   },
+   {
+    "case": "11_top3_match_but_wrong_selected_candidate_is_incorrect",
+    "pass": true
+   },
+   {
+    "case": "12_holdout_fixture_is_excluded_before_gt_materialization",
+    "pass": true
+   },
+   {
+    "case": "13_identical_duplicate_trusted_gt_is_deduplicated",
+    "pass": true
+   },
+   {
+    "case": "14_untrusted_plus_trusted_uses_the_trusted_and_records_the_untrusted",
+    "pass": true
+   },
+   {
+    "case": "15_provisional_sample_label_is_not_allowlisted",
+    "pass": true
+   },
+   {
+    "case": "16_superseded_trusted_label_is_not_used",
+    "pass": true
+   },
+   {
+    "case": "17_weak_lock_label_is_not_gt",
+    "pass": true
+   },
+   {
+    "case": "18_bulk_accept_is_weak_so_it_is_not_gt",
+    "pass": true
+   },
+   {
+    "case": "19_unknown_method_is_unknown_label_semantics",
+    "pass": true
+   },
+   {
+    "case": "20_pick_other_without_tmdb_verification_is_incomplete_provenance",
+    "pass": true
+   },
+   {
+    "case": "21_verified_pick_other_gt_makes_any_candidate_auto_incorrect",
+    "pass": true
+   },
+   {
+    "case": "22_two_units_for_one_work_are_excluded",
+    "pass": true
+   },
+   {
+    "case": "23_media_type_is_part_of_the_identity",
+    "pass": true
+   },
+   {
+    "case": "24_auto_without_identity_is_an_anomaly_not_a_correctness_result",
+    "pass": true
+   },
+   {
+    "case": "25_precision_is_per_matcher",
+    "pass": true
+   }
+  ],
+  "reference_evaluator_cases_total": 25,
+  "reference_evaluator_cases_passed": 25,
+  "repo_fact_checks": [
+   {
+    "check": "labels.label は tmdb / none だけ",
+    "pass": true,
+    "source": "021_match_history.sql"
+   },
+   {
+    "check": "labels.method の列挙は 7 値",
+    "pass": true,
+    "source": "021_match_history.sql"
+   },
+   {
+    "check": "lock / bulk_accept は weak、それ以外は strong（CHECK）",
+    "pass": true,
+    "source": "021_match_history.sql"
+   },
+   {
+    "check": "none は identity が NULL・tmdb は identity 必須（CHECK）",
+    "pass": true,
+    "source": "021_match_history.sql"
+   },
+   {
+    "check": "review_none は label=none（CHECK）",
+    "pass": true,
+    "source": "021_match_history.sql"
+   },
+   {
+    "check": "作品ごとの有効ラベルは 1 件（部分 UNIQUE）",
+    "pass": true,
+    "source": "021_match_history.sql"
+   },
+   {
+    "check": "GT の resolve は label に review_task_id と task.run_id を書く",
+    "pass": true,
+    "source": "gt_review.rs resolve"
+   },
+   {
+    "check": "GT の resolve は課題に resolution_label_id を書き state=resolved にする",
+    "pass": true,
+    "source": "gt_review.rs resolve"
+   },
+   {
+    "check": "確定できるのは state=ready の課題だけ（deferred は resume が先）",
+    "pass": true,
+    "source": "gt_review.rs resolve"
+   },
+   {
+    "check": "GT は抽出後に付いた strong ラベルがあれば作らない",
+    "pass": true,
+    "source": "gt_review.rs resolve"
+   },
+   {
+    "check": "review_confirm の identity は run の候補行から読む",
+    "pass": true,
+    "source": "gt_review.rs resolve"
+   },
+   {
+    "check": "review_pick_other は候補外・存在確認済みだけ（tmdb_verified を記録）",
+    "pass": true,
+    "source": "gt_review.rs"
+   },
+   {
+    "check": "defer は課題の state であってラベルではない",
+    "pass": true,
+    "source": "gt_review.rs set_review_state"
+   },
+   {
+    "check": "production の record_label は active ラベルを（strong も）superseded にする",
+    "pass": true,
+    "source": "match_history.rs record_label"
+   },
+   {
+    "check": "manual_apply / manual_direct_id / lock は production の操作から作られる",
+    "pass": true,
+    "source": "commands/bulk.rs; commands/tmdb.rs"
+   },
+   {
+    "check": "bulk_accept を書く非テストのコードが無い（LabelMethod に variant も無い）",
+    "pass": true,
+    "source": "match_history.rs LabelMethod; bulk.rs"
+   },
+   {
+    "check": "LabelMethod::strength は lock だけ weak",
+    "pass": true,
+    "source": "match_history.rs"
+   },
+   {
+    "check": "committed な docs に正式な sample 群 c5c5c-redo-01..05 と除外する provisional sample がある",
+    "pass": true,
+    "source": "docs/C5C5_CLOSEOUT.md"
+   },
+   {
+    "check": "committed な docs が『DB には触れていない』と記録（D/E/F の解決は DB のラベルになっていない）",
+    "pass": true,
+    "source": "docs/C5C5_CLOSEOUT.md"
+   }
+  ],
+  "repo_fact_checks_total": 19,
+  "repo_fact_checks_passed": 19,
+  "required_case_map": {
+   "1": "1_positive_gt_auto_exact_match_is_correct",
+   "2": "2_positive_gt_auto_different_identity_is_incorrect",
+   "3": "3_none_gt_auto_is_incorrect_and_in_the_denominator",
+   "4": "4_defer_gt_with_auto_is_excluded_from_the_denominator",
+   "5": "5_no_gt_with_auto_is_excluded",
+   "6": "6_manual_label_with_auto_is_excluded_as_untrusted_manual_gt_source",
+   "7": "7_conflicting_trusted_gt_is_excluded_as_gt_conflict",
+   "8": "8_review_machine_state_with_trusted_gt_is_not_in_the_denominator",
+   "9": "9_unresolved_machine_state_with_trusted_gt_is_not_in_the_denominator",
+   "10": "10_zero_evaluable_auto_gives_null_precision",
+   "11": "11_top3_match_but_wrong_selected_candidate_is_incorrect",
+   "12": "12_holdout_fixture_is_excluded_before_gt_materialization"
+  }
+ }
+}

@@ -1,0 +1,13 @@
+PR4-2 freeze (not committed). Hashes are SHA-256.
+6eff45b882dd1b0131951af341d0ec2b47a95cd1b2a3a6d77a73da500a1b6d79  docs/PR4_DIAGNOSTIC_GT_CONTRACT.md
+17ad5b24600912dbc7f2fc65fc7b73ba2bd180f3d5cf36e2aca2a1548ab64d35  docs/pr4_gt_semantics.json
+ed7f2df88ac9eb1fb1243b974439e59e533db88d8e8ee22cf19e24536b1d5788  docs/PR4_2_REPORT.md
+
+contract_version: pr4-gt-contract-1
+validation: reference evaluator 25/25 cases (12 required + 13 boundary); repository fact checks 19/19 (schema + code). No production DB, no holdout, no network.
+validation tools (outside the repository, not committed):
+71637b0d54f5ef44fc8542bb98409a00f6b2a228bcf09c445a3cb4bba6003a95  gt_contract_ref.py
+cabe25b69a4725a17bd881af96cf0a3200235917cc51e9e72ca8ab2065874b6c  repo_fact_checks.py
+base: HEAD 407623180210d29672a74d56a8290b4c66b0f13f. Changed: docs only (3 new files + this freeze file). PR4-0 / PR4-1 frozen files, application code and migrations unchanged.
+holdout sealed. FINAL promotion: NOT_RUN. policy freeze: not defined. Not committed.
+(PR4_2_FREEZE.txt itself is not hashed.)
