@@ -1,0 +1,255 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "$id": "pr4-diagnostic-gt-bridge-1",
+ "title": "PR4 diagnostic GT bridge (off-DB formal resolved GT only)",
+ "description": "C5c.5 の正式な解決済み GT のうち DB に無いものだけを持つ sidecar。title・overview・画像・候補の順位・機械の score・Jev・無関係なレビュー証拠は持たない。additionalProperties=false で、余分なキーは reject する",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "bridge_version",
+  "formal_study",
+  "integrity",
+  "records",
+  "sources"
+ ],
+ "properties": {
+  "bridge_version": {
+   "const": "pr4-diagnostic-gt-bridge-1"
+  },
+  "formal_study": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "closeout_sha256",
+    "deferred",
+    "f_closeout_sha256",
+    "resolved",
+    "study"
+   ],
+   "properties": {
+    "study": {
+     "const": "C5c.5"
+    },
+    "resolved": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "deferred": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "closeout_sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    },
+    "f_closeout_sha256": {
+     "type": "string",
+     "pattern": "^[0-9a-f]{64}$"
+    }
+   }
+  },
+  "sources": {
+   "type": "array",
+   "minItems": 1,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "name",
+     "path",
+     "sha256"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+     }
+    }
+   }
+  },
+  "integrity": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "expected_final_deferred",
+    "expected_final_resolved",
+    "holdout_read",
+    "holdout_scope",
+    "off_db_records",
+    "production_db_modified",
+    "stage_counts",
+    "trusted_db_expected"
+   ],
+   "properties": {
+    "off_db_records": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "expected_final_resolved": {
+     "type": "integer"
+    },
+    "expected_final_deferred": {
+     "type": "integer"
+    },
+    "trusted_db_expected": {
+     "type": "integer"
+    },
+    "stage_counts": {
+     "type": "object",
+     "additionalProperties": {
+      "type": "integer"
+     }
+    },
+    "holdout_scope": {
+     "type": "string"
+    },
+    "production_db_modified": {
+     "const": false
+    },
+    "holdout_read": {
+     "const": false
+    }
+   }
+  },
+  "records": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "evaluation_unit",
+     "media_type",
+     "provenance_class",
+     "reviewed_run_id",
+     "semantic",
+     "source_artifact",
+     "source_artifact_sha256",
+     "source_protocol_version",
+     "source_stage",
+     "tmdb_id"
+    ],
+    "properties": {
+     "evaluation_unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "sample_id",
+       "task_id",
+       "work_id"
+      ],
+      "properties": {
+       "sample_id": {
+        "type": "string",
+        "minLength": 1
+       },
+       "task_id": {
+        "type": "integer"
+       },
+       "work_id": {
+        "type": "integer"
+       }
+      }
+     },
+     "reviewed_run_id": {
+      "type": "integer"
+     },
+     "semantic": {
+      "enum": [
+       "POSITIVE",
+       "NONE"
+      ]
+     },
+     "media_type": {
+      "enum": [
+       "movie",
+       "tv",
+       null
+      ]
+     },
+     "tmdb_id": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "source_stage": {
+      "type": "string"
+     },
+     "source_artifact": {
+      "type": "string"
+     },
+     "source_artifact_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+     },
+     "source_protocol_version": {
+      "type": "string"
+     },
+     "provenance_class": {
+      "const": "FROZEN_OFF_DB_GT"
+     }
+    },
+    "allOf": [
+     {
+      "if": {
+       "properties": {
+        "semantic": {
+         "const": "POSITIVE"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "media_type": {
+         "enum": [
+          "movie",
+          "tv"
+         ]
+        },
+        "tmdb_id": {
+         "type": "integer",
+         "minimum": 1
+        }
+       }
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "semantic": {
+         "const": "NONE"
+        }
+       }
+      },
+      "then": {
+       "properties": {
+        "media_type": {
+         "type": "null"
+        },
+        "tmdb_id": {
+         "type": "null"
+        }
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "x-semantic-rules": {
+  "defer": "DEFER は GT ではない。bridge に DEFER / 未解決 / 候補 0 件 の record は入れない",
+  "unit_key": [
+   "sample_id",
+   "task_id",
+   "work_id"
+  ],
+  "unit_attribute": "reviewed_run_id（key の成分ではない。DB の task.run_id と一致しなければ gt_source_conflict）",
+  "duplicates": "同じ評価単位の record は 1 件だけ。内容が同一でも重複は reject（duplicate_unit_identical）、食い違えば gt_source_conflict"
+ }
+}

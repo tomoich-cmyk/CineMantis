@@ -1,0 +1,16 @@
+PR4-2A freeze (not committed). Hashes are SHA-256.
+6369840ab0d7d9d46e89804bb98c006e79c8829e19aaf070118028b796c6e0b0  docs/PR4_DIAGNOSTIC_GT_BRIDGE_CONTRACT.md
+cbba05a7194d51f6559a6a0329664ddf7e3606ab6be5c1b7a9a8476c3a441aa4  docs/pr4_gt_bridge_schema.json
+e3ec1e5c4b2ea6c1df5f40b27898148f547bb80f15f93ca54fe13c5ce57ed090  docs/PR4_2A_REPORT.md
+
+external bridge artifacts (outside the repository; hashes only, content not in the repo):
+0f31ea9678cb7e078b82970fca3d9f3beb1338640ee8b9cfe1fe7e623cb8559c  diagnostic_gt_bridge.json
+5a0e21408bcc44283ccafaba067b7e6150007211a7951c35697b4d8711f26958  build_diagnostic_gt_bridge.py
+4387792d09a7e968de0151c79f848c586d3c025761b5734efc3726ae322d9684  test_build_diagnostic_gt_bridge.py
+
+bridge_version: pr4-diagnostic-gt-bridge-1 | status: READY | off_db_records: 4 | expected_final_resolved: 44 | expected_final_deferred: 6
+root anchors: C5c5_FINAL_CLOSEOUT.json 31c30915d3d21db90b06fb40334787ab041e818b5a935a14e5f4c2dde9bd9c8b ; F_CLOSEOUT.json 172c797196c7896cd1689fc187a005aaef3b1eb9f88edc7027b1f61150c55ead
+tests: external test_build_diagnostic_gt_bridge.py = 40 / 40 passed (15 required cases + 25 additional); evaluation-unit key proof: 10 / 10 tasks matched (frozen snapshot, metadata rows only)
+base: HEAD 687adb163a8c1e03b7761b7c2a4d3be98160edac. Repository changes: docs only (3 new files + this freeze file). Application code, migrations, PR4-0 / PR4-1 / PR4-2 frozen files unchanged.
+production DB modified: false | holdout read: false | diagnostic precision computed: no | FINAL promotion: NOT_RUN | policy freeze: not defined | Not committed (awaiting audit approval).
+(PR4_2A_FREEZE.txt itself is not hashed.)
