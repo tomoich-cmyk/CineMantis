@@ -22,6 +22,9 @@ pub mod pr4_diagnostics;
 /// PR4-3 の実データ検証 runner。手動専用で、製品には出ない（test ビルドのときだけ）
 #[cfg(test)]
 pub mod pr4_3v_runner;
+/// PR4-PF0A: holdout の件数と所属の commitment（count-only・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0a;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;
