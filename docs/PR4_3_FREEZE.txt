@@ -1,0 +1,11 @@
+PR4-3 freeze (not committed). Hashes are SHA-256.
+a7bd05c1dcc87b15be4e9ef5535e6038b3c5c78d00f15f69ba61981c0e459f21  apps/desktop/src-tauri/src/services/pr4_diagnostics.rs
+e4a9802ae5014b56d7f7380ae316048e28bfe745971e92852051450d48d7df55  docs/PR4_3_REPORT.md
+
+tests: cargo test --lib pr4_diagnostics = 47 passed / 0 failed (27 PR4-1 + 20 PR4-3); cargo test --lib = 486 passed / 0 failed / 8 ignored; cargo check --lib = ok (no warnings from the module)
+real frozen bridge (path via CM_PR4_BRIDGE_PATH): SHA and schema accepted, 4 records read
+amendment: reviewed_run_id is an attribute, not a GT conflict (same key + same canonical GT + different reviewed_run_id => merge, both provenance refs kept; same key + different canonical GT => gt_source_conflict). A2 diagnostic_gt = NOT_APPLICABLE follows the frozen A1-only contract (PR4-0).
+pinned bridge SHA-256: 0f31ea9678cb7e078b82970fca3d9f3beb1338640ee8b9cfe1fe7e623cb8559c ; production config: population 50 / resolved 44 / deferred 6
+base: HEAD 5241d62b4e42832e83740675a8731793c73d5ff0 (PR4-2A docs checkpoint; git log -2 / git show --stat recorded in PR4_3_REPORT.md). Changed: pr4_diagnostics.rs (modified), docs (2 new). mod.rs, other code, migrations, DB, matcher/rules/Jev and the PR4-0/1/2/2A frozen files unchanged.
+diagnostic precision validated on real data: no (separate read-only gate) | holdout read: no | FINAL promotion: NOT_RUN | policy freeze: not defined | Not committed (awaiting audit approval).
+(PR4_3_FREEZE.txt itself is not hashed.)
