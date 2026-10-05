@@ -1,0 +1,10 @@
+PR4-3V0 freeze (not committed). Hashes are SHA-256.
+0e7721ec7fe1cad43adc9616027f5966cf5b09742b11a2e9f66fe76d5c584456  apps/desktop/src-tauri/src/services/pr4_3v_runner.rs
+7bbe15879dd172fb330b4deccb2a4124ea74b15e46d235522e599ee040fc1107  apps/desktop/src-tauri/src/services/mod.rs
+323ca9ddf660a950e817a7300bbee81ccb15e2f213eff489ddf16b090f45af41  docs/PR4_3V_REAL_DATA_VALIDATION_PROTOCOL.md
+1456f712d8a9b1036a885e99f43f04456d2d8d0c036279a111b7f30958e74d10  docs/PR4_3V0_REPORT.md
+
+tests: cargo test --lib pr4_3v_runner = 13 passed / 0 failed / 1 ignored; cargo test --lib = 499 passed / 0 failed / 9 ignored; cargo check --lib = ok. evaluation_head = 67e6f41 (fixed); runner_head = separate SHA recorded at run time
+base: HEAD 67e6f41bcee9746258c3fdb16c2a1d77604cae04. Changed: mod.rs (+2 lines, cfg(test)), pr4_3v_runner.rs (new), docs (3 new + this freeze). pr4_diagnostics.rs, product code, migrations, DB, matcher/rules/Jev unchanged.
+production DB accessed: no | snapshot created: no | real-data run: no | holdout read: no | FINAL promotion: NOT_RUN | policy freeze: not defined | Not committed (awaiting audit approval).
+(PR4_3V0_FREEZE.txt itself is not hashed.)
