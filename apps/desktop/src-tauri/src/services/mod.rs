@@ -28,6 +28,9 @@ pub mod pr4_pf0a;
 /// PR4-PF0B: FINAL パイプラインの予行演習（synthetic のみ・test ビルドだけ）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0b;
+/// PR4-PF0D: H2 蓄積の feasibility census（count-only・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0d;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;

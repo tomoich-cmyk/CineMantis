@@ -1,0 +1,26 @@
+{
+ "rules_version": "pr4-h2-enrollment-rules-1",
+ "status": "FROZEN_BY_PF0D",
+ "h1": {"units": 25, "membership_commitment_sha256": "22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031", "role": "legacy_sealed_diagnostic_tranche", "used_for_primary_promotion_metric": false, "stays_sealed_and_unopened": true, "source_count": 28, "excluded_by_ever_strong_predicate": 3},
+ "h2": {
+  "role": "primary_final_holdout",
+  "prospective_only": true,
+  "t0": "UTC timestamp of the first enrollment run after PF0D contract and enrollment-tool freeze is committed and pushed; recorded as first_seen_at in the external ledger; no retroactive enrollment",
+  "enrollment_time_source": "external ledger first_seen_at (works.created_at is not schema-protected and is not used as the enrollment time)",
+  "population": "live-cohort works first observed by the enrollment tool at or after T0",
+  "strong_or_manual_labels_in_selection": "NEVER",
+  "membership_immutable_after_enrollment": true,
+  "removal_or_dropout": "FORBIDDEN (labels, manual correction, matched/locked, matcher output changes never remove a unit)",
+  "dedup": "against H1, C5c.5 units and past GT by work identity; applied at enrollment only, never re-applied",
+  "inclusion_rule": "deterministic: every population work, ordered by work id; no discretionary selection",
+  "input_snapshot": "canonical hash of evaluation-input identity and matcher-input fields captured at enrollment",
+  "ledger": "external audit-side, append-only, hash-chained tranche commitments; production DB receives no membership data",
+  "isolation": "enrolled units are excluded from ordinary development, GT and tuning; no backflow",
+  "binding_minimum_eligible": 598,
+  "operational_target_eligible": 946,
+  "no_machine_output_or_performance_view_until_target": true,
+  "gt_review": "blind review of the full H2 membership under one protocol, after machine output is frozen; machine state hidden from reviewers; reviewer capacity for 946 units is a feasibility requirement",
+  "slow_accumulation": "wait; monthly count-only census allowed (new entries, cumulative enrolled, remaining to target); never relax thresholds, target or population; no post-hoc additions"
+ },
+ "pf0c_policy_unchanged": {"policy_sha256": "1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4", "note": "sample_size block in pr4_final_policy.json (H2=573, H1 included) is superseded for sizing by this file; statistical thresholds unchanged"}
+}
