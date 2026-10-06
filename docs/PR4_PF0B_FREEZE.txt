@@ -1,0 +1,15 @@
+PR4-PF0B freeze. Hashes are SHA-256.
+1c67f8169c9f694b4ed148417fc33f68eda276fc8ababdfbbfea640d7c8ba547  apps/desktop/src-tauri/src/services/pr4_pf0b.rs
+f1cfed78ab79d8adf78e4ba0d915791743f91977ed3a8015b1eb232f485a47eb  apps/desktop/src-tauri/src/services/mod.rs
+ffd939dbaeff41c6e1bd824ca39cac834ccbf1b7940b6d3a6293de683b659805  docs/PR4_PF0B_REPORT.md
+
+tests: cargo test --lib pr4_pf0b = 20 passed / 0 failed; cargo test --lib = 527 passed / 0 failed / 10 ignored; cargo check --lib = ok.
+base: HEAD 218842d3606e527e0e9a19f2c480d4ecfad399ea. Changed: mod.rs (+3 lines, cfg(test)), pr4_pf0b.rs (new), docs (REPORT + this freeze). Product code, migrations, DB, matcher/rules/Jev unchanged.
+definitions: confidence bound = one-sided exact Clopper-Pearson lower bound (P(X>=k|n,p)=1-c solved by bisection; k=0 -> 0; k=n -> (1-c)^(1/n)).
+zero denominator: precision and lower bound = null (never NaN/inf/0); zero AUTO -> INCONCLUSIVE.
+technical failure (membership mismatch, missing/invalid machine output, run failure, invalid policy, empty membership): metrics = null; no performance metric is emitted.
+AUTO with GT unresolved/defer: BlockEvaluation -> INCONCLUSIVE (the only binding treatment; Exclude/CountAsWrong are synthetic-test-only and rejected for Frozen policies).
+coverage = binding criterion; abstention rate = mandatory report only (no threshold).
+policy: every numeric value in this tool is TEST_ONLY_HYPOTHETICAL_POLICY, non-binding, not a candidate for the FINAL policy. Numeric policy = PF0C.
+production DB accessed: no | network: no | holdout read: no | H1 opened: no | FINAL promotion: NOT_RUN | policy freeze: not defined.
+(PR4_PF0B_FREEZE.txt itself is not hashed.)

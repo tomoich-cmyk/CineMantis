@@ -25,6 +25,9 @@ pub mod pr4_3v_runner;
 /// PR4-PF0A: holdout の件数と所属の commitment（count-only・手動専用）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0a;
+/// PR4-PF0B: FINAL パイプラインの予行演習（synthetic のみ・test ビルドだけ）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0b;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;
