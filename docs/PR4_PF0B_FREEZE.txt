@@ -13,3 +13,6 @@ coverage = binding criterion; abstention rate = mandatory report only (no thresh
 policy: every numeric value in this tool is TEST_ONLY_HYPOTHETICAL_POLICY, non-binding, not a candidate for the FINAL policy. Numeric policy = PF0C.
 production DB accessed: no | network: no | holdout read: no | H1 opened: no | FINAL promotion: NOT_RUN | policy freeze: not defined.
 (PR4_PF0B_FREEZE.txt itself is not hashed.)
+
+amendment (PF0C gate): PR4_PF0B_REPORT.md gained a note about the cross-session commit 3d72255; the hash line above is the originally frozen one.
+8cfa83a015292e9e5ef0cf45c7354c0496db9a3dfed1c12b19681e2cc3676999  docs/PR4_PF0B_REPORT.md (after the note)

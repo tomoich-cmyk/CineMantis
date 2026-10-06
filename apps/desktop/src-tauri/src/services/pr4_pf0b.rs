@@ -98,6 +98,64 @@ impl PolicyConfig {
         }
     }
 
+    /// 凍結した binding policy（`docs/pr4_final_policy.json`）から作る（PF0C）。未知のキー・不足・型の違い・想定と違う分類は拒否する。
+    /// provenance は、キーを辞書順に並べた compact な JSON（canonical JSON）の SHA-256。
+    pub fn from_frozen_json(text: &str) -> Result<Self, String> {
+        let v: Value = serde_json::from_str(text).map_err(|e| format!("policy が JSON として読めません: {e}"))?;
+        let obj = v.as_object().ok_or("policy が object ではありません")?;
+        const KEYS: [&str; 17] = [
+            "policy_version", "status", "confidence", "precision_lower_bound_required", "minimum_auto_count", "minimum_auto_coverage", "maximum_wrong_auto",
+            "unevaluable_auto", "abstention", "wrong_auto_count", "insufficient_auto", "coverage_below_minimum", "lower_bound_below_required", "technical_failure",
+            "post_hoc_sample_addition", "change_after_seeing_holdout_performance", "sample_size",
+        ];
+        if obj.len() != KEYS.len() || !KEYS.iter().all(|k| obj.contains_key(*k)) {
+            return Err("policy のキーが想定と違います（未知のキー・不足は拒否）".into());
+        }
+        let text_is = |k: &str, want: &str| -> Result<(), String> {
+            if obj[k].as_str() == Some(want) { Ok(()) } else { Err(format!("{k} は {want} でなければなりません")) }
+        };
+        text_is("policy_version", "pr4-final-policy-1")?;
+        text_is("status", "BINDING_FROZEN_BY_PF0C")?;
+        text_is("unevaluable_auto", "BlockEvaluation")?;
+        text_is("insufficient_auto", "INCONCLUSIVE")?;
+        text_is("coverage_below_minimum", "NO_PROMOTION")?;
+        text_is("lower_bound_below_required", "NO_PROMOTION")?;
+        text_is("technical_failure", "TECHNICAL_FAILURE")?;
+        text_is("post_hoc_sample_addition", "FORBIDDEN")?;
+        text_is("change_after_seeing_holdout_performance", "FORBIDDEN")?;
+        for k in ["abstention", "wrong_auto_count"] {
+            let o = obj[k].as_object().ok_or(format!("{k} が object ではありません"))?;
+            if o.get("role").and_then(Value::as_str) != Some("mandatory_reporting_only") || !o.get("threshold").is_some_and(Value::is_null) {
+                return Err(format!("{k} は必須併記だけで、独立した閾値を持てません"));
+            }
+        }
+        if !obj["maximum_wrong_auto"].is_null() {
+            return Err("maximum_wrong_auto は持てません（下限の条件が誤りの件数を統計的に制約する）".into());
+        }
+        let conf = obj["confidence"].as_object().ok_or("confidence が object ではありません")?;
+        if conf.get("method").and_then(Value::as_str) != Some("one-sided exact Clopper-Pearson") {
+            return Err("信頼区間の方式が違います".into());
+        }
+        let level = conf.get("level").and_then(Value::as_f64).ok_or("confidence.level がありません")?;
+        let bound = obj["precision_lower_bound_required"].as_f64().ok_or("precision_lower_bound_required がありません")?;
+        let min_auto = obj["minimum_auto_count"].as_u64().ok_or("minimum_auto_count がありません")?;
+        let min_cov = obj["minimum_auto_coverage"].as_f64().ok_or("minimum_auto_coverage がありません")?;
+        // canonical JSON（serde_json の Map は辞書順。compact）の SHA-256
+        let canonical = serde_json::to_string(&v).map_err(|e| e.to_string())?;
+        let policy_sha256 = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+        let policy = PolicyConfig {
+            provenance: PolicyProvenance::Frozen { policy_sha256 },
+            minimum_auto_count: min_auto,
+            minimum_auto_coverage: min_cov,
+            confidence_level: level,
+            minimum_precision_lower_bound: bound,
+            maximum_wrong_auto: None,
+            unevaluable_auto: UnevaluableAuto::BlockEvaluation,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
     fn validate(&self) -> Result<(), String> {
         if !(self.confidence_level > 0.0 && self.confidence_level < 1.0) {
             return Err("confidence_level が (0, 1) の外です".into());
@@ -673,5 +731,133 @@ mod tests {
         let (rep, _) = decide(&inp, &policies[0].1);
         let m = &rep["metrics"];
         assert_eq!((m["n_auto"].as_u64(), m["n_wrong_auto_vs_positive_gt"].as_u64(), m["n_wrong_auto_vs_none_gt"].as_u64(), m["n_auto_gt_unresolved"].as_u64(), m["precision_denominator"].as_u64()), (Some(47), Some(3), Some(2), Some(2), Some(45)));
+    }
+
+    // ═══ PF0C: 凍結した binding policy の値どおりに動く ═══════════════════════════════════════
+
+    const FROZEN_POLICY_JSON: &str = include_str!("../../../../../docs/pr4_final_policy.json");
+    /// canonical JSON（キーを辞書順・compact・UTF-8）の SHA-256。PF0C で固定した値
+    const FROZEN_POLICY_CANONICAL_SHA256: &str = "1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4";
+
+    fn frozen() -> PolicyConfig {
+        PolicyConfig::from_frozen_json(FROZEN_POLICY_JSON).expect("凍結した policy を読める")
+    }
+
+    /// n_units 件のうち、n_auto 件が AUTO（wrong 件が誤り）、残りは REVIEW
+    fn shaped(n_auto: usize, wrong: usize, n_units: usize) -> FinalInput {
+        input((0..n_units)
+            .map(|i| if i < n_auto { unit(i, auto(i as i64), if i < wrong { pos(900_000 + i as i64) } else { pos(i as i64) }) } else { unit(i, Machine::Review, pos(i as i64)) })
+            .collect())
+    }
+
+    #[test]
+    fn the_frozen_policy_has_exactly_the_agreed_values_and_a_pinned_hash() {
+        let p = frozen();
+        assert_eq!((p.minimum_auto_count, p.minimum_auto_coverage, p.confidence_level, p.minimum_precision_lower_bound), (299, 0.5, 0.95, 0.99));
+        assert!(p.maximum_wrong_auto.is_none() && p.unevaluable_auto == UnevaluableAuto::BlockEvaluation);
+        // provenance は canonical JSON の SHA-256（固定した値と一致。値が 1 つでも変われば変わる）
+        match &p.provenance {
+            PolicyProvenance::Frozen { policy_sha256 } => assert_eq!(policy_sha256, FROZEN_POLICY_CANONICAL_SHA256),
+            other => panic!("{other:?}"),
+        }
+        let v: Value = serde_json::from_str(FROZEN_POLICY_JSON).unwrap();
+        assert_eq!(v["sample_size"]["minimum_final_eligible"], 598);
+        assert_eq!(v["sample_size"]["minimum_h2_eligible"], 573);
+        assert_eq!(v["sample_size"]["h1_eligible"].as_u64().unwrap() + v["sample_size"]["minimum_h2_eligible"].as_u64().unwrap(), v["sample_size"]["minimum_final_eligible"].as_u64().unwrap());
+        assert_eq!(((299.0f64 / 0.5).ceil()) as u64, 598);
+        assert_eq!(v["sample_size"]["h1_membership_commitment_sha256"], "22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031");
+    }
+
+    #[test]
+    fn the_loader_rejects_any_deviation_from_the_frozen_shape() {
+        let base: Value = serde_json::from_str(FROZEN_POLICY_JSON).unwrap();
+        let mutate = |f: &dyn Fn(&mut Value)| -> String {
+            let mut v = base.clone();
+            f(&mut v);
+            v.to_string()
+        };
+        let bad: Vec<(&str, String)> = vec![
+            ("未知のキー", mutate(&|v| v["extra"] = json!(1))),
+            ("キーの不足", mutate(&|v| { v.as_object_mut().unwrap().remove("minimum_auto_count"); })),
+            ("独立した誤り AUTO の上限", mutate(&|v| v["maximum_wrong_auto"] = json!(0))),
+            ("abstention の閾値", mutate(&|v| v["abstention"]["threshold"] = json!(0.3))),
+            ("wrong AUTO の閾値", mutate(&|v| v["wrong_auto_count"]["threshold"] = json!(0))),
+            ("Exclude", mutate(&|v| v["unevaluable_auto"] = json!("Exclude"))),
+            ("CountAsWrong", mutate(&|v| v["unevaluable_auto"] = json!("CountAsWrong"))),
+            ("信頼区間の方式", mutate(&|v| v["confidence"]["method"] = json!("Wald"))),
+            ("事後の標本の追加を許す", mutate(&|v| v["post_hoc_sample_addition"] = json!("ALLOWED"))),
+            ("性能を見た後の変更を許す", mutate(&|v| v["change_after_seeing_holdout_performance"] = json!("ALLOWED"))),
+            ("AUTO 不足の結論", mutate(&|v| v["insufficient_auto"] = json!("NO_PROMOTION"))),
+            ("minimum_auto_count が 0", mutate(&|v| v["minimum_auto_count"] = json!(0))),
+            ("coverage が範囲外", mutate(&|v| v["minimum_auto_coverage"] = json!(1.5))),
+        ];
+        for (name, text) in &bad {
+            assert!(PolicyConfig::from_frozen_json(text).is_err(), "{name}");
+        }
+        assert!(PolicyConfig::from_frozen_json("not json").is_err() && PolicyConfig::from_frozen_json("[]").is_err());
+        // 数値を 1 つ変えると provenance の SHA-256 も変わる（凍結した値と比べれば検出できる）
+        let changed = PolicyConfig::from_frozen_json(&mutate(&|v| v["minimum_auto_coverage"] = json!(0.4))).unwrap();
+        assert!(matches!(&changed.provenance, PolicyProvenance::Frozen { policy_sha256 } if policy_sha256 != FROZEN_POLICY_CANONICAL_SHA256));
+    }
+
+    #[test]
+    fn the_frozen_policy_decides_exactly_as_the_contract_says() {
+        let p = frozen();
+        // 299 件の AUTO が全部正解・coverage 50%（598 件）→ PROMOTE。下限は 99% をわずかに超える
+        let (rep, d) = decide(&shaped(299, 0, 598), &p);
+        assert_eq!(d, Decision::Promote);
+        assert!(rep["metrics"]["auto_precision_lower_bound"].as_f64().unwrap() >= 0.99);
+        assert_eq!(rep["policy_provenance"]["class"], "FROZEN");
+        assert_eq!(rep["policy_provenance"]["binding"], true);
+        // 298 件では足りない（全正解でも 99% に届かない）→ INCONCLUSIVE（閾値は緩めない）
+        let (_, d) = decide(&shaped(298, 0, 598), &p);
+        assert!(matches!(&d, Decision::Inconclusive(r) if r.contains(&"minimum_auto_count".to_string())), "{d:?}");
+        // 299 件中 1 件が誤り → 下限が 99% を割る → NO PROMOTION（別の「0 件必須」ではなく、下限の条件が制約する）
+        let (rep, d) = decide(&shaped(299, 1, 598), &p);
+        assert!(matches!(&d, Decision::NoPromotion(r) if r == &vec!["minimum_precision_lower_bound".to_string()]), "{d:?}");
+        assert_eq!(rep["metrics"]["n_wrong_auto"], 1, "誤 AUTO の件数は必須併記");
+        // coverage が 50% 未満 → NO PROMOTION
+        let (rep, d) = decide(&shaped(299, 0, 700), &p);
+        assert!(matches!(&d, Decision::NoPromotion(r) if r == &vec!["minimum_auto_coverage".to_string()]), "{d:?}");
+        assert!(rep["metrics"]["auto_coverage"].as_f64().unwrap() < 0.5);
+        // coverage がちょうど 50%（境界）は満たす
+        assert_eq!(decide(&shaped(300, 0, 600), &p).1, Decision::Promote);
+        // AUTO の GT が未解決の単位が 1 件でもあれば INCONCLUSIVE
+        let mut unresolved = shaped(300, 0, 600);
+        unresolved.units[0].gt = Gt::Unresolved;
+        let (rep, d) = decide(&unresolved, &p);
+        assert!(matches!(&d, Decision::Inconclusive(r) if r == &vec!["auto_with_unresolved_gt".to_string()]), "{d:?}");
+        assert_eq!(rep["metrics"]["precision_binding"], false);
+        // 技術的な失敗は判定不可（指標を出さない）
+        let mut failed = shaped(300, 0, 600);
+        failed.run_failure = Some("x".into());
+        let (rep, d) = decide(&failed, &p);
+        assert!(matches!(d, Decision::TechnicalFailure(_)) && rep["metrics"].is_null());
+        // AUTO が 0 件 → INCONCLUSIVE・precision は null
+        let (rep, d) = decide(&shaped(0, 0, 598), &p);
+        assert!(matches!(d, Decision::Inconclusive(_)) && rep["metrics"]["auto_precision_point"].is_null());
+        // abstention は必ず併記される（閾値は無い）
+        assert!(rep["metrics"].get("abstention_rate").is_some());
+    }
+
+    #[test]
+    fn the_minimum_auto_count_for_a_given_number_of_errors_matches_the_contract_table() {
+        // 99% の下限（片側 95%）を満たすのに要る AUTO 件数の最小値（独立に scipy でも照合した値）
+        let min_n = |errors: u64| -> u64 {
+            let mut n = 299.max(errors + 1);
+            while clopper_pearson_lower(n - errors, n, 0.95).unwrap() < 0.99 {
+                n += 1;
+            }
+            n
+        };
+        assert_eq!([min_n(0), min_n(1), min_n(2), min_n(3), min_n(4), min_n(5)], [299, 473, 628, 773, 913, 1049]);
+        assert!(clopper_pearson_lower(299, 299, 0.95).unwrap() >= 0.99 && clopper_pearson_lower(298, 298, 0.95).unwrap() < 0.99);
+    }
+
+    #[test]
+    fn the_frozen_policy_file_has_no_secrets_or_unit_data() {
+        for banned in ["work:", "tmdb", "task_id", "title", "movie"] {
+            assert!(!FROZEN_POLICY_JSON.contains(banned), "{banned}");
+        }
     }
 }

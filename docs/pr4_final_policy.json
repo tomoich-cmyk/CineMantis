@@ -1,0 +1,34 @@
+{
+ "policy_version": "pr4-final-policy-1",
+ "status": "BINDING_FROZEN_BY_PF0C",
+ "confidence": {
+  "method": "one-sided exact Clopper-Pearson",
+  "level": 0.95
+ },
+ "precision_lower_bound_required": 0.99,
+ "minimum_auto_count": 299,
+ "minimum_auto_coverage": 0.5,
+ "maximum_wrong_auto": null,
+ "unevaluable_auto": "BlockEvaluation",
+ "abstention": {
+  "role": "mandatory_reporting_only",
+  "threshold": null
+ },
+ "wrong_auto_count": {
+  "role": "mandatory_reporting_only",
+  "threshold": null
+ },
+ "insufficient_auto": "INCONCLUSIVE",
+ "coverage_below_minimum": "NO_PROMOTION",
+ "lower_bound_below_required": "NO_PROMOTION",
+ "technical_failure": "TECHNICAL_FAILURE",
+ "post_hoc_sample_addition": "FORBIDDEN",
+ "change_after_seeing_holdout_performance": "FORBIDDEN",
+ "sample_size": {
+  "h1_eligible": 25,
+  "h1_membership_commitment_sha256": "22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031",
+  "minimum_final_eligible": 598,
+  "minimum_h2_eligible": 573,
+  "derivation": "ceil(minimum_auto_count / minimum_auto_coverage) = ceil(299 / 0.5) = 598; H2 = 598 - 25. A design lower bound for accumulation, not an evaluation condition (the evaluation conditions are the policy items above)."
+ }
+}

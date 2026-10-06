@@ -1,0 +1,13 @@
+PR4-PF0C freeze. SHA-256.
+acf2e8daed8947c45e5072e72f4c3cc190333e042877c7be06fe36451b83c850  apps/desktop/src-tauri/src/services/pr4_pf0b.rs
+8f38cdd21f28f196ff7bcd12e59e4495d8507ecb0c794ccb9e408f1d042b2170  docs/pr4_final_policy.json
+cbd40772d36cc3a7c50eb9c91c5229e6232ed24b7da7daa31b3c471432653e64  docs/PR4_PF0C_FINAL_POLICY_CONTRACT.md
+ed054f9a4633c660af0b511b6b72c2de1d2838b831d64665aa0a10be7e184df0  docs/PR4_PF0C_REPORT.md
+8cfa83a015292e9e5ef0cf45c7354c0496db9a3dfed1c12b19681e2cc3676999  docs/PR4_PF0B_REPORT.md
+
+policy_version: pr4-final-policy-1 ; canonical JSON SHA-256 (sorted keys, compact, UTF-8): 1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4
+binding values: one-sided exact Clopper-Pearson, confidence 95%, required lower bound 99%, minimum AUTO count 299, minimum AUTO coverage 50%, AUTO with unresolved GT -> INCONCLUSIVE (BlockEvaluation), abstention and wrong-AUTO count = mandatory reporting only, post-hoc sample addition and post-performance policy change forbidden.
+sample size: minimum final eligible 598 = ceil(299/0.5); H1 eligible 25 (commitment 22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031); minimum H2 eligible 573 (design lower bound, not an evaluation condition).
+tests: cargo test --lib pr4_pf0b = 25 passed / 0 failed; cargo test --lib = 532 passed / 0 failed / 10 ignored; cargo check --lib = ok
+base: HEAD 3d72255ccff22f034b137efac33097734119cfb9. Product code, migrations, DB, matcher/rules/Jev unchanged. holdout not opened; H1 not opened; FINAL NOT_RUN; policy freeze (whole) not done.
+(PR4_PF0C_FREEZE.txt itself is not hashed.)
