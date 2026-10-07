@@ -1,13 +1,25 @@
 {
- "rules_version": "pr4-h2-enrollment-rules-1",
+ "rules_version": "pr4-h2-enrollment-rules-2",
+ "supersedes_rules_version": "pr4-h2-enrollment-rules-1",
+ "supersedes_rule_sha256": "dfc847856fd55e5475e444e027b0995d1dc8bf76b82bfa6a090f190697577b8c",
+ "amendment_reason": "replace creation-time enrollment semantics with first-scheduled-observation semantics before T0 (pre-enrollment amendment; PF0D-time hash retained in history, this file is the binding enrollment rule)",
+ "amended_by": "PF0E pre-T0 audit; PF0D commit 2f537a2 holds the superseded version",
  "status": "FROZEN_BY_PF0D",
- "h1": {"units": 25, "membership_commitment_sha256": "22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031", "role": "legacy_sealed_diagnostic_tranche", "used_for_primary_promotion_metric": false, "stays_sealed_and_unopened": true, "source_count": 28, "excluded_by_ever_strong_predicate": 3},
+ "h1": {
+  "units": 25,
+  "membership_commitment_sha256": "22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031",
+  "role": "legacy_sealed_diagnostic_tranche",
+  "used_for_primary_promotion_metric": false,
+  "stays_sealed_and_unopened": true,
+  "source_count": 28,
+  "excluded_by_ever_strong_predicate": 3
+ },
  "h2": {
   "role": "primary_final_holdout",
   "prospective_only": true,
-  "t0": "UTC timestamp of the first enrollment run after PF0D contract and enrollment-tool freeze is committed and pushed; recorded as first_seen_at in the external ledger; no retroactive enrollment",
+  "t0": "UTC time of the init_baseline run, performed after the PF0E tool and this rules file are frozen, committed and pushed; no retroactive enrollment",
   "enrollment_time_source": "external ledger first_seen_at (works.created_at is not schema-protected and is not used as the enrollment time)",
-  "population": "live-cohort works first observed by the enrollment tool at or after T0",
+  "population": "works not in the baseline identity set (all work ids existing at T0) that are observed with evidence_class = live at a scheduled observation after T0",
   "strong_or_manual_labels_in_selection": "NEVER",
   "membership_immutable_after_enrollment": true,
   "removal_or_dropout": "FORBIDDEN (labels, manual correction, matched/locked, matcher output changes never remove a unit)",
@@ -20,7 +32,19 @@
   "operational_target_eligible": 946,
   "no_machine_output_or_performance_view_until_target": true,
   "gt_review": "blind review of the full H2 membership under one protocol, after machine output is frozen; machine state hidden from reviewers; reviewer capacity for 946 units is a feasibility requirement",
-  "slow_accumulation": "wait; monthly count-only census allowed (new entries, cumulative enrolled, remaining to target); never relax thresholds, target or population; no post-hoc additions"
+  "slow_accumulation": "wait; monthly count-only census allowed (new entries, cumulative enrolled, remaining to target); never relax thresholds, target or population; no post-hoc additions",
+  "enrollment_event": "the first scheduled observation after T0 at which a non-baseline work is observed in the target live population",
+  "cadence": {
+   "frequency": "DAILY",
+   "missed_scheduled_run": "recorded as a missed record; never backfilled",
+   "discretionary_extra_or_skipped_scans": "FORBIDDEN"
+  },
+  "same_run_overflow": "when one run has more candidates than remaining capacity, enrol by ascending work id up to 946 and close the tranche (deterministic, performance-independent)",
+  "baseline_identity": "works.id (INTEGER PRIMARY KEY AUTOINCREMENT, never reused); baseline fixes works_sequence; a non-baseline work with id <= baseline works_sequence, or a decreasing works_sequence, stops the run",
+  "checkpoint_chain": "independent of the ledger directory; per successful run: record_count, ledger_head_sha256, works_sequence, enrollment_rule_sha256, tool sha/head, previous checkpoint sha; the next run reads previous values from it; chain head is frozen in the audit freeze"
  },
- "pf0c_policy_unchanged": {"policy_sha256": "1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4", "note": "sample_size block in pr4_final_policy.json (H2=573, H1 included) is superseded for sizing by this file; statistical thresholds unchanged"}
+ "pf0c_policy_unchanged": {
+  "policy_sha256": "1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4",
+  "note": "sample_size block in pr4_final_policy.json (H2=573, H1 included) is superseded for sizing by this file; statistical thresholds unchanged"
+ }
 }

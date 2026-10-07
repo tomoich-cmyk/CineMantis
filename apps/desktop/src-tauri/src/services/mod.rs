@@ -31,6 +31,9 @@ pub mod pr4_pf0b;
 /// PR4-PF0D: H2 蓄積の feasibility census（count-only・手動専用）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0d;
+/// PR4-PF0E: H2 enrollment ledger（audit 側・append-only・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0e;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;

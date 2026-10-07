@@ -45,3 +45,6 @@ This does NOT amend:
 
 ## 4. 次の gate（未着手）
 enrollment ツール（ledger・input hash・tranche commitment）の実装と freeze → T0 → 蓄積 → machine output 凍結 → blind GT → FINAL。
+
+## Amendment（PF0E pre-T0 監査）
+§2 の 1「作成時に登録」と 4・5 の表現は、PF0E で次の意味に置き換わる: **enrollment event = T0 の後の最初の scheduled observation で、非 baseline の work が target live population にいると観測された時点**（`first_seen_at`）。母集団の境界は baseline の work id 集合で決め、cadence は DAILY。詳細は `PR4_PF0E_ENROLLMENT_LEDGER_CONTRACT.md` の Amendment と `pr4_h2_enrollment_rules.json`。PF0C の統計 policy・598 / 946 は不変。
