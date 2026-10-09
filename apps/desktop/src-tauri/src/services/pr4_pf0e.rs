@@ -596,8 +596,9 @@ pub fn assert_report_clean(v: &Value) -> Result<(), Stop> {
     Ok(())
 }
 
-/// 実行できなかった scheduled run の記録（遡及登録はしない）。`scheduled_at` はその run の予定時刻
-pub fn record_missed(dir: &Path, scheduled_at: &str, expected: Option<(usize, &str)>) -> Result<Report, Stop> {
+/// 実行できなかった scheduled run の記録（遡及登録はしない）。`scheduled_at` はその run の予定時刻。
+/// missed run は DB を観測しないので、`works_sequence` は直前 checkpoint の値を持ち越す（baseline の値に戻さない）
+pub fn record_missed(dir: &Path, scheduled_at: &str, expected: Option<(usize, &str)>, carried_works_sequence: i64) -> Result<Report, Stop> {
     check_time(scheduled_at)?;
     let st = verify_ledger(dir, expected)?;
     if st.closed || scheduled_at < st.last_observed.as_str() {
@@ -606,7 +607,7 @@ pub fn record_missed(dir: &Path, scheduled_at: &str, expected: Option<(usize, &s
     let rec = with_commitment(json!({"seq": st.records.len() + 1, "kind": "missed", "observed_at": scheduled_at, "prev_commitment": st.head}), &st.head)?;
     append_line(dir, &rec)?;
     let after = verify_ledger(dir, None)?;
-    Ok(Report { kind: "missed", enrolled_now: 0, skipped_not_live: 0, total_enrolled: after.enrolled.len(), closed: false, record_count: after.records.len(), ledger_head_sha256: after.head, works_sequence: after.baseline_sequence })
+    Ok(Report { kind: "missed", enrolled_now: 0, skipped_not_live: 0, total_enrolled: after.enrolled.len(), closed: false, record_count: after.records.len(), ledger_head_sha256: after.head, works_sequence: carried_works_sequence.max(after.baseline_sequence) })
 }
 
 // ─── ledger とは独立した checkpoint chain ────────────────────────────────────────────────────────
@@ -689,7 +690,7 @@ pub fn run(snap_cfg: &SnapConfig, action: &str, ledger_dir: &Path, checkpoint_di
         "enroll" | "missed" => {
             let (Some(p), Some(e)) = (prev.as_ref(), e) else { return stop("前回の checkpoint がありません（init_baseline が先です）") };
             let r = if action == "missed" {
-                record_missed(ledger_dir, observed_at, Some(e))?
+                record_missed(ledger_dir, observed_at, Some(e), p.works_sequence)?
             } else {
                 let conn = open_snapshot(&snap_cfg.snapshot_db).map_err(|e| Stop(e.0))?;
                 enroll(&conn, ledger_dir, observed_at, Some(e))?
@@ -1000,6 +1001,25 @@ mod tests {
         assert_eq!(st.records[2]["first_seen_at"], T2, "first_seen_at は観測した run の時刻（missed の時刻に遡らない）");
         assert_eq!(o["checkpoint_seq"], 3);
         assert!(run(&cfg2, "missed", &ledger, &cps, T1).is_err(), "時刻の逆戻り");
+    }
+
+    #[test]
+    fn a_missed_run_after_the_works_sequence_grew_past_the_baseline_still_gets_a_checkpoint() {
+        let conn = open_migrated();
+        live(&conn, 1);
+        let base = tmp("missed_grown");
+        let (ledger, cps) = (base.join("ledger"), base.join("checkpoints"));
+        let cfg = run_cfg(&conn, &base, "a");
+        let (_, o0) = run(&cfg, "init_baseline", &ledger, &cps, T0).unwrap();
+        for i in 2..=4 {
+            live(&conn, i);
+        }
+        let cfg2 = run_cfg(&conn, &base, "b");
+        let (_, o1) = run(&cfg2, "enroll", &ledger, &cps, T1).unwrap();
+        assert!(o1["works_sequence"].as_i64() > o0["works_sequence"].as_i64(), "works_sequence は baseline を超えている");
+        let (_, m) = run(&cfg2, "missed", &ledger, &cps, T2).expect("missed は checkpoint まで書けること");
+        assert_eq!((m["kind"].clone(), m["checkpoint_seq"].clone(), m["works_sequence"].clone()), (json!("missed"), json!(3), o1["works_sequence"].clone()), "直前 checkpoint の値を持ち越す");
+        assert_eq!(latest_checkpoint(&cps).unwrap().unwrap().record_count, verify_ledger(&ledger, None).unwrap().records.len());
     }
 
     #[test]
