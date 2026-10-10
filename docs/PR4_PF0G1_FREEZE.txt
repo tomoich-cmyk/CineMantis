@@ -1,0 +1,7 @@
+PR4-PF0G1 freeze (blind GT reviewer core; synthetic tests only; H2/H1/production untouched)
+base: 0aca746e2d0fee12ecfc660c5fc2e40d619158c6 (branch claude/pr4-pf0g-171907)
+tests: cargo test --lib => 581 passed, 0 failed (PF0G1: 31)
+pr4_blind_gt.rs sha256 (core tool_sha256 in ledger): 666182cb150d6a7c7605268f286cb726858e23e72eaa646fd3b3afd9f6d3e3cc
+pr4_pf0g0_blind_gt_schema.json sha256: 75b65606f0b9abd29906518c4e6955d721d21f85bdfc02c0e0b3b8bce31fd789
+PR4_PF0G0_BLIND_GT_CONTRACT.md sha256 (sections 15-17 bind): a697e54ea853d603441befd21402e749a4986e2f1f829af37d0139f2fa925bf4
+review seal SHA = event_commitment of the seal event

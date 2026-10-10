@@ -1,0 +1,55 @@
+{
+ "artifact": "pr4_pf0g0_blind_gt_schema",
+ "contract_doc": "docs/PR4_PF0G0_BLIND_GT_CONTRACT.md",
+ "status": "DRAFT_FOR_REVIEW (design only; not frozen; no data read)",
+ "canonicalization": "pr4-canonical-json-1 (reuse PF0E)",
+ "unit": {
+  "schema_version": "pr4-blind-review-unit-2",
+  "additionalProperties": false,
+  "required": ["schema_version", "review_unit_id", "position", "evidence", "candidates", "unit_sha256"],
+  "properties": {
+   "review_unit_id": "string ru_<26 base32>; derived from build_secret + unit key (work:<base10 integer>, no leading zero/sign/space); uncorrelated with work_id",
+   "position": "int >= 0; seeded permutation, not work-id order",
+   "unit_salt": "64 hex; per-unit salt (NOT build_secret); used only for overlap_digests",
+   "overlap_digests": "sorted unique 64-hex SHA256(unit_salt|overlap|media_type|tmdb_id), one per displayed candidate; no link to tokens; reviewer-side pick_other overlap check",
+   "evidence": {
+    "files": [{"part_no": "int", "original_file_name": "string", "original_rel_path": "string", "container_tags_json": "string (literal)", "source_media_kind": "string"}],
+    "display_title": "string | absent (see contract Q3; default ABSENT)"
+   },
+   "candidates": [{"candidate_token": "ct_<20 base32> = HMAC-SHA256(build_secret, domain+review_unit_id+media_type+tmdb_id), domain=pr4-pf0g-candidate-token-1; computed by the packager only; token->identity lives only in the sealed unblind map", "title": "string", "original_title": "string|null", "year": "string|null", "overview": "string|null", "poster_path": "string|null", "original_language": "string|null"}],
+   "unit_sha256": "sha256 of canonical(unit without this field)"
+  },
+  "forbidden_anywhere": ["decision", "verdict", "AUTO", "REVIEW", "UNRESOLVED", "score", "rank", "rules_*", "jev*", "matcher*", "source", "promotion", "precision", "coverage", "abstention", "work_id", "run_id", "evaluation_unit_key", "file_path", "first_seen_at", "enrollment_context", "candidate_count (in list/progress)"]
+ },
+ "manifest": {
+  "schema_version": "pr4-blind-review-manifest-1",
+  "required": ["build_id", "unit_count", "order_commitment_sha256", "artifact_sha256", "machine_freeze_commitment_sha256", "pf0e_ledger_head_sha256", "pf0e_record_count", "packager_sha256", "built_at_utc"],
+  "constraints": ["unit_count == PF0E close record count (946)", "machine_freeze_commitment is a hash value only; never shown in UI"]
+ },
+ "submission_input": {
+  "schema_version": "pr4-blind-review-submit-1",
+  "additionalProperties": false,
+  "common_required": ["review_unit_id", "submission_id (uuid)", "lease_id", "prev_event_sha", "decision"],
+  "decision_payloads": {
+   "confirm": {"candidate_token": "string; the ledger event records ONLY the token (no tmdb_id / media_type / index)"},
+   "pick_other": {"tmdb_id": "int 1..2^53", "media_type": "movie|tv", "note": "optional string"},
+   "none": {"search_log_required_min": 1, "note": "optional string"},
+   "defer": {"defer_reason": "insufficient_evidence|multiple_equally_valid_targets|candidate_ambiguity_tmdb|need_external_lookup|other_with_note", "note": "required when other_with_note"}
+  }
+ },
+ "ledger_event": {
+  "schema_version": "pr4-blind-review-event-1",
+  "event_types": ["session_start", "session_end", "lease", "lease_expired", "draft", "decision", "defer", "resume", "defer_final", "correction", "integrity_anomaly", "seal"],
+  "decision_event_required": ["seq", "review_unit_id", "submission_id", "reviewer_id", "session_id", "lease_id", "artifact_sha256", "unit_sha256", "tool_sha256", "ui_protocol_version", "review_protocol_version", "decision", "candidate_token|null (confirm only)", "tmdb_id|null (pick_other only)", "media_type|null (pick_other only)", "defer_reason|null", "note|null", "search_log[]", "tmdb_verification|null", "shown_at", "submitted_at", "active_ms", "prev_event_sha", "event_commitment"],
+  "tmdb_verification": {"requested_id": "int", "requested_media_type": "movie|tv", "http_status": "int", "response_id": "int", "response_media_type": "movie|tv", "response_body_sha256": "hex", "title": "string", "year": "string|null", "fetched_at": "utc", "verifier_impl": "string"},
+  "search_log_entry": {"query": "string", "media_type": "movie|tv|multi", "result_count": "int", "executed_at": "utc"},
+  "commitment": "SHA256(canonical(event without event_commitment) + \"\\n\" + prev_commitment); genesis prev = 64 x '0'",
+  "label_mapping_unchanged_from_c5c5": {
+   "confirm": {"label": "tmdb", "method": "review_confirm"},
+   "pick_other": {"label": "tmdb", "method": "review_pick_other", "tmdb_verified": true},
+   "none": {"label": "none", "method": "review_none", "tmdb_id": null, "media_type": null},
+   "defer": "no label; unit state = deferred"
+  }
+ },
+ "api_responses_allowlist": ["session", "queue_item(unit without position metadata beyond order)", "progress{done,remaining,deferred,session_elapsed}", "tmdb_search_result", "tmdb_target_preview", "submit_result{accepted|rejected, reason_code}"]
+}
