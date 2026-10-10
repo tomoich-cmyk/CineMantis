@@ -34,6 +34,15 @@ pub mod pr4_pf0d;
 /// PR4-PF0E: H2 enrollment ledger（audit 側・append-only・手動専用）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0e;
+/// PR4-PF0H: H2 close の成果物生成（読み取り専用・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0h_close;
+/// PR4-PF0H: H2 close 成果物の独立再検証（読み取り専用・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0h_verify;
+/// PR4-PF0H: close / verify の synthetic test
+#[cfg(test)]
+mod pr4_pf0h_tests;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;

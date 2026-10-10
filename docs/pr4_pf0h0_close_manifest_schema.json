@@ -1,0 +1,738 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "pr4-pf0h0-close-manifest-schema-1",
+ "description": "Design proposal (not frozen). Schemas for the PF0H close tool: pre-frozen params and its outputs. Scalars and hashes only; no unit keys, ids, payload content, judgments or performance.",
+ "$defs": {
+  "sha256": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{64}$"
+  },
+  "utc": {
+   "type": "string",
+   "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+  },
+  "count": {
+   "type": "integer",
+   "minimum": 0
+  },
+  "check": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "id",
+    "result"
+   ],
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^V(1[0-6]|[0-9])$"
+    },
+    "result": {
+     "enum": [
+      "PASS",
+      "WAIVED"
+     ]
+    },
+    "waiver_ref": {
+     "type": "string",
+     "description": "deviation_id; required iff result = WAIVED; only waivable (W) checks"
+    }
+   }
+  },
+  "deviation_pin": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "deviation_id",
+    "class",
+    "run_utc",
+    "declared_checkpoint_seq",
+    "declared_enrolled_in_run",
+    "deviation_file_name",
+    "deviation_file_sha256",
+    "auditor_disposition"
+   ],
+   "properties": {
+    "deviation_id": {
+     "type": "string",
+     "examples": [
+      "PR4_PF0E_DEVIATION_20261009_EXTRA_RUN"
+     ]
+    },
+    "class": {
+     "const": "extra_run",
+     "description": "PF0H1 waives extra_run (cadence) only; every other failure is a STOP"
+    },
+    "run_utc": {
+     "$ref": "#/$defs/utc"
+    },
+    "declared_checkpoint_seq": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "declared_enrolled_in_run": {
+     "$ref": "#/$defs/count"
+    },
+    "deviation_file_sha256": {
+     "$ref": "#/$defs/sha256"
+    },
+    "auditor_disposition": {
+     "enum": [
+      "accepted_non_material",
+      "blocking",
+      "unresolved"
+     ],
+     "description": "close is possible only if every pinned deviation is accepted_non_material"
+    },
+    "deviation_file_name": {
+     "type": "string",
+     "description": "file name inside the deviation dir; no path separators"
+    }
+   }
+  }
+ },
+ "params": {
+  "title": "H2_CLOSE_PARAMS.json (frozen BEFORE close; values transcribed from audit freeze records, never read from the live ledger)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "contract_version",
+   "expected_enrolled_count",
+   "enrollment_rule_version",
+   "enrollment_rule_sha256",
+   "t0_utc",
+   "baseline",
+   "cadence",
+   "auditor_anchors",
+   "deviations",
+   "known_tool_quirks",
+   "enrollment_tool_sha_timeline",
+   "tool_transition_provenance",
+   "cadence_exceptions"
+  ],
+  "properties": {
+   "contract_version": {
+    "const": "pr4-pf0h0-close-1"
+   },
+   "expected_enrolled_count": {
+    "const": 946
+   },
+   "enrollment_rule_version": {
+    "const": "pr4-h2-enrollment-rules-2"
+   },
+   "enrollment_rule_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "t0_utc": {
+    "const": "2026-10-07T22:23:21Z"
+   },
+   "baseline": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "baseline_count",
+     "baseline_membership_sha256",
+     "works_sequence",
+     "snapshot_sha256"
+    ],
+    "properties": {
+     "baseline_count": {
+      "$ref": "#/$defs/count"
+     },
+     "baseline_membership_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "works_sequence": {
+      "$ref": "#/$defs/count"
+     },
+     "snapshot_sha256": {
+      "$ref": "#/$defs/sha256"
+     }
+    }
+   },
+   "cadence": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "frequency",
+     "slot_local",
+     "slot_tz",
+     "day_boundary_tz"
+    ],
+    "properties": {
+     "frequency": {
+      "const": "DAILY"
+     },
+     "slot_local": {
+      "const": "07:30"
+     },
+     "slot_tz": {
+      "const": "Asia/Tokyo"
+     },
+     "day_boundary_tz": {
+      "const": "Asia/Tokyo"
+     }
+    }
+   },
+   "auditor_anchors": {
+    "type": "array",
+    "minItems": 1,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "checkpoint_seq",
+      "checkpoint_sha256"
+     ],
+     "properties": {
+      "checkpoint_seq": {
+       "type": "integer",
+       "minimum": 1
+      },
+      "checkpoint_sha256": {
+       "$ref": "#/$defs/sha256"
+      }
+     }
+    }
+   },
+   "deviations": {
+    "type": "array",
+    "items": {
+     "$ref": "#/$defs/deviation_pin"
+    }
+   },
+   "known_tool_quirks": {
+    "type": "array",
+    "items": {
+     "enum": [
+      "Q1_missed_works_sequence",
+      "Q5_shared_payload"
+     ]
+    }
+   },
+   "waivable_checks": {
+    "const": [
+     "V11.cadence.extra_run"
+    ],
+    "description": "Everything else is hard and cannot be waived."
+   },
+   "enrollment_tool_sha_timeline": {
+    "const": [
+     {
+      "checkpoint_seq_from": 1,
+      "checkpoint_seq_to": 3,
+      "sha256": "183e0c73c14c20afd9ed34da33586f9599f96d1fff95c5c9a79d0b78855e3213"
+     },
+     {
+      "checkpoint_seq_from": 4,
+      "checkpoint_seq_to": null,
+      "sha256": "36f869f6d197615a610a50e1a164f1492eae06dd1c0eaad778c5311890518d08"
+     }
+    ]
+   },
+   "tool_transition_provenance": {
+    "const": {
+     "pf0e3_main_commit": "69d150d633ad1097319e27545962d989a92aebd9",
+     "pf0e3_original_commit": "98e3917fa022d98dd8c3e9293a865f8b44b6a13b",
+     "daily_freeze_amendment_2_sha256": "f4a2eb6d92010aa35425dbe7cd882143ff026f4ba6dae755bfa5ebc6e42a0263"
+    }
+   },
+   "cadence_exceptions": {
+    "type": "array",
+    "maxItems": 1,
+    "items": {
+     "const": {
+      "jst_date": "2026-10-10",
+      "type": "missed_without_ledger_record",
+      "audit_note_sha256": "5f80972600dbb92395ccdf63ecacc3b49b0fda30fabd3c86f572149e26568b68",
+      "disposition": "accepted_non_material",
+      "membership_impact": "none",
+      "checkpoint_impact": "none",
+      "backfill": "forbidden"
+     }
+    }
+   }
+  }
+ },
+ "H2_CLOSE": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "protocol",
+   "status",
+   "generated_at",
+   "contract_version",
+   "close_tool_sha256",
+   "close_tool_head",
+   "params_sha256",
+   "inputs",
+   "counts",
+   "checks",
+   "provenance",
+   "deviation_exposure",
+   "limits"
+  ],
+  "properties": {
+   "protocol": {
+    "const": "pr4-pf0h0-h2-close-1"
+   },
+   "status": {
+    "const": "PASS"
+   },
+   "generated_at": {
+    "$ref": "#/$defs/utc",
+    "description": "the only non-deterministic value across the three artifacts"
+   },
+   "contract_version": {
+    "const": "pr4-pf0h0-close-1"
+   },
+   "close_tool_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "close_tool_head": {
+    "type": "string",
+    "pattern": "^[0-9a-f]{40}$"
+   },
+   "params_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "inputs": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "ledger_record_count",
+     "ledger_head_sha256",
+     "checkpoint_count",
+     "checkpoint_head_sha256",
+     "close_record_seq",
+     "close_observed_at",
+     "close_anchor_checkpoint_seq",
+     "close_anchor_checkpoint_sha256"
+    ],
+    "properties": {
+     "ledger_record_count": {
+      "$ref": "#/$defs/count"
+     },
+     "ledger_head_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "checkpoint_count": {
+      "$ref": "#/$defs/count"
+     },
+     "checkpoint_head_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "close_record_seq": {
+      "type": "integer",
+      "minimum": 2
+     },
+     "close_observed_at": {
+      "$ref": "#/$defs/utc"
+     },
+     "close_anchor_checkpoint_seq": {
+      "type": "integer",
+      "minimum": 1
+     },
+     "close_anchor_checkpoint_sha256": {
+      "$ref": "#/$defs/sha256"
+     }
+    }
+   },
+   "counts": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "baseline_count",
+     "enrolled_count",
+     "missed_count",
+     "payload_units_present",
+     "shared_payload_unit_count",
+     "duplicate_unit_count",
+     "cadence_gap_days"
+    ],
+    "properties": {
+     "baseline_count": {
+      "$ref": "#/$defs/count"
+     },
+     "enrolled_count": {
+      "const": 946
+     },
+     "missed_count": {
+      "$ref": "#/$defs/count"
+     },
+     "payload_units_present": {
+      "const": 946
+     },
+     "shared_payload_unit_count": {
+      "$ref": "#/$defs/count"
+     },
+     "duplicate_unit_count": {
+      "const": 0
+     },
+     "cadence_gap_days": {
+      "$ref": "#/$defs/count"
+     }
+    }
+   },
+   "checks": {
+    "type": "array",
+    "minItems": 17,
+    "maxItems": 17,
+    "items": {
+     "$ref": "#/$defs/check"
+    }
+   },
+   "provenance": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "rule_sha256_matches_all_checkpoints",
+     "tool_sha256_in_allowed_set_for_all_records",
+     "t0_matches",
+     "baseline_matches"
+    ],
+    "properties": {
+     "rule_sha256_matches_all_checkpoints": {
+      "const": true
+     },
+     "tool_sha256_in_allowed_set_for_all_records": {
+      "type": "boolean"
+     },
+     "t0_matches": {
+      "const": true
+     },
+     "baseline_matches": {
+      "const": true
+     }
+    }
+   },
+   "deviation_exposure": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "deviation_id",
+      "class",
+      "enrolled_in_run",
+      "share_of_final",
+      "disposition"
+     ],
+     "properties": {
+      "deviation_id": {
+       "type": "string"
+      },
+      "class": {
+       "type": "string"
+      },
+      "enrolled_in_run": {
+       "$ref": "#/$defs/count"
+      },
+      "share_of_final": {
+       "type": "string",
+       "pattern": "^[0-9]+/946$"
+      },
+      "disposition": {
+       "const": "accepted_non_material"
+      }
+     }
+    }
+   },
+   "limits": {
+    "const": "count-only; no unit keys, no payloads, no judgments, no machine output, no performance figures"
+   }
+  }
+ },
+ "FINAL_MEMBERSHIP_COMMITMENT": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "protocol",
+   "unit_count",
+   "ledger_head_sha256",
+   "close_record_commitment",
+   "baseline_membership_sha256",
+   "enrollment_rule_sha256",
+   "h1_membership_commitment_sha256",
+   "h1_role",
+   "deviation_subset_commitments",
+   "key_order",
+   "limits",
+   "membership_commitment_sha256",
+   "membership_commitment_definition",
+   "eligibility_rule_version",
+   "authoritative",
+   "auxiliary_audit_values"
+  ],
+  "properties": {
+   "protocol": {
+    "const": "pr4-pf0h0-final-membership-1"
+   },
+   "unit_count": {
+    "const": 946
+   },
+   "ledger_head_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "close_record_commitment": {
+    "$ref": "#/$defs/sha256"
+   },
+   "baseline_membership_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "enrollment_rule_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "h1_membership_commitment_sha256": {
+    "const": "22cc00a81f3bf58049c1aaf45668e4fdf7b678662cf9c99cf2b591a8f983e031"
+   },
+   "h1_role": {
+    "const": "legacy_sealed_diagnostic_tranche_not_primary"
+   },
+   "deviation_subset_commitments": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "deviation_id",
+      "unit_count",
+      "unit_set_sha256",
+      "audit_only",
+      "promotion_use"
+     ],
+     "properties": {
+      "deviation_id": {
+       "type": "string"
+      },
+      "unit_count": {
+       "$ref": "#/$defs/count"
+      },
+      "unit_set_sha256": {
+       "$ref": "#/$defs/sha256"
+      },
+      "audit_only": {
+       "const": true
+      },
+      "promotion_use": {
+       "const": "forbidden"
+      }
+     }
+    }
+   },
+   "key_order": {
+    "const": "byte-lexicographic of evaluation_unit_key (not numeric)"
+   },
+   "limits": {
+    "const": "commitment only; unit keys are not stored here (the ledger is the source of truth)"
+   },
+   "membership_commitment_sha256": {
+    "$ref": "#/$defs/sha256",
+    "description": "authoritative: pr4_pf0b::membership_commitment (domain pr4-pf0a-membership-1)"
+   },
+   "membership_commitment_definition": {
+    "type": "string"
+   },
+   "eligibility_rule_version": {
+    "type": "string"
+   },
+   "authoritative": {
+    "const": true
+   },
+   "auxiliary_audit_values": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "unit_set_sha256",
+     "unit_input_sha256",
+     "authoritative"
+    ],
+    "properties": {
+     "unit_set_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "unit_input_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "authoritative": {
+      "const": false
+     }
+    }
+   }
+  }
+ },
+ "H2_LEDGER_FINAL_FREEZE": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "protocol",
+   "frozen_state",
+   "ledger",
+   "baseline_ids_sha256",
+   "payload_tree",
+   "checkpoint_chain",
+   "reports_digest_sha256",
+   "tool_provenance",
+   "next_allowed_actions",
+   "still_forbidden"
+  ],
+  "properties": {
+   "protocol": {
+    "const": "pr4-pf0h0-h2-ledger-final-freeze-1"
+   },
+   "frozen_state": {
+    "const": "CLOSED"
+   },
+   "ledger": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "ledger_jsonl_sha256",
+     "byte_length",
+     "record_count",
+     "ledger_head_sha256"
+    ],
+    "properties": {
+     "ledger_jsonl_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "byte_length": {
+      "$ref": "#/$defs/count"
+     },
+     "record_count": {
+      "$ref": "#/$defs/count"
+     },
+     "ledger_head_sha256": {
+      "$ref": "#/$defs/sha256"
+     }
+    }
+   },
+   "baseline_ids_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "payload_tree": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "file_count",
+     "payload_tree_sha256"
+    ],
+    "properties": {
+     "file_count": {
+      "$ref": "#/$defs/count"
+     },
+     "payload_tree_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "SHA256 of sorted file names (= content hashes), each followed by newline"
+     }
+    }
+   },
+   "checkpoint_chain": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "count",
+     "head_sha256",
+     "files_digest_sha256"
+    ],
+    "properties": {
+     "count": {
+      "$ref": "#/$defs/count"
+     },
+     "head_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "files_digest_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "raw-byte digest; copy without newline conversion"
+     }
+    }
+   },
+   "reports_digest_sha256": {
+    "$ref": "#/$defs/sha256"
+   },
+   "tool_provenance": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "enrollment_tool_sha256_timeline",
+     "enrollment_rule_sha256",
+     "enrollment_tool_head"
+    ],
+    "properties": {
+     "enrollment_rule_sha256": {
+      "$ref": "#/$defs/sha256"
+     },
+     "enrollment_tool_head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+     },
+     "enrollment_tool_sha256_timeline": {
+      "type": "array"
+     }
+    }
+   },
+   "next_allowed_actions": {
+    "const": [
+     "machine_output_freeze"
+    ]
+   },
+   "still_forbidden": {
+    "const": [
+     "performance_view",
+     "membership_change",
+     "enroll_run",
+     "gt_review_before_machine_output_freeze"
+    ]
+   }
+  }
+ },
+ "H2_CLOSE_STOP": {
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+   "protocol",
+   "status",
+   "failed_checks",
+   "limits"
+  ],
+  "properties": {
+   "protocol": {
+    "const": "pr4-pf0h0-h2-close-1"
+   },
+   "status": {
+    "const": "STOP"
+   },
+   "failed_checks": {
+    "type": "array",
+    "minItems": 1,
+    "items": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "id",
+      "code"
+     ],
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "code": {
+       "type": "string",
+       "pattern": "^E_[A-Z0-9_]+$"
+      },
+      "observed_count": {
+       "$ref": "#/$defs/count"
+      },
+      "expected_count": {
+       "$ref": "#/$defs/count"
+      }
+     }
+    }
+   },
+   "limits": {
+    "const": "check ids, error codes and counts only; no keys, payloads or judgments; none of the three close artifacts exist"
+   }
+  }
+ }
+}
