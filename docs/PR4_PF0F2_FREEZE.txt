@@ -1,0 +1,34 @@
+PR4-PF0F2 FREEZE (TMDB transport / wire-parity gate) -- PASS / FREEZE CANDIDATE (audit: PASS WITH 1 HIGH CLARIFICATION, disclosed below)
+base_commit: 5a31b5fa513243f7cbe6b411d19b7ca5dd1beaaf (PF0F1)
+branch: claude/pr4-pf0f2-e199e0
+sha256 = file bytes with CRLF normalized to LF
+test: cargo test --lib => 591 passed / 0 failed / 13 ignored (PF0F1 572 + PF0F2 19); pr4_pf0f2 x3 stable
+production_change: tmdb_client.rs  fn urlencoding -> pub(crate) fn urlencoding  (visibility only)
+not_touched: H2 data, production DB, live TMDB, Jev, main H2 worktree, real API key
+live_smoke: not run
+8d86f54f8908d6c13667fc918f64a3d7798faeed0c95bda98f5c5c93d629bfe5  apps/desktop/src-tauri/src/services/pr4_pf0f2.rs
+6c42b64ca77cb800079f905479c38ae856ebe865385fc51dad2cbe600f5963e9  apps/desktop/src-tauri/src/services/tmdb_client.rs
+5051c6b46e16372ab1aee41cdc6eb8c03918c7aaaf831d397e335885bd182bea  apps/desktop/src-tauri/src/services/mod.rs
+412df38ccdca76304c9b34dfc7efaa42a476eb8901407cbf9c631ea41508bb2c  apps/desktop/src-tauri/Cargo.lock (unchanged)
+88e092698d8930cbb6ffa8533f8be4cbc6cbfce7566d1052017f36f237bad3a8  apps/desktop/src-tauri/Cargo.toml (unchanged)
+dabc33f4b30078c904c3655eba93ee47304d1af79173bb07df13b82fbd0fdb92  docs/PR4_PF0F2_REPORT.md
+pinned production fragments (normalized sha256):
+  const_base       8da986d9df202c671bf3cc317e01204091ce532f0cc7dd4e73388f546ae3e4a0
+  const_attempts   709134494f2f3a7bb91cd32aa82cceabadfad5ca7d95611613b9eb62cae86b26
+  client_new       b66dde983fd36086bf4f9e40a6ea65637510ed8e6c4494d106b59c7953b28e1a
+  search_movie     32b91cfc706682be7bbbc90ffe056cdf7747ad3246a6af9ea46e6d21639fcd3f
+  search_tv        e389a5b3716fd72207aa2ca5bad66a35f01cf5efba2845d8abcbdc67e5283266
+  fetch_json       aeff34b083cffda9f9b542de9724e4a76cd80ba493d83ede8fd95fd7722499c1
+  send_with_retry  346286d25e4f62bfb542dfaceaa38f9a8e7467a9fcf489adcbd0cc2a9273afde
+  urlencoding      82bd4f33031ebf4480948de0c69df5c1cc6d1bdab845352fcbb15fba4b659293
+note: source SHA match is a tripwire only, not semantic parity.
+audit_disclosures:
+  production_tmdb_client_executed_against_loopback = false
+  wire_parity_method = production format-template extraction + production urlencoding + loopback received request-target comparison
+  current_production_retry_policy_equal_to_final = false
+  final_transport_policy_is_binding_deployment_requirement = true
+  promotion_requires_deployed_transport_parity = true
+  FINAL_DEPLOYMENT_BINDING = rules-tags-shadow-2 + frozen PF0F query/candidate semantics + frozen PF0F transport_policy
+  timeout: 30-second wall-clock production timeout behavior itself was not exercised
+  scope: search movie/tv = binding; detail/credits/person/poster = OUT OF SCOPE
+  live_tmdb_smoke: NOT REQUIRED

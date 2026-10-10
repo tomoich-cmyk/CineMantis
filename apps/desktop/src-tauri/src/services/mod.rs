@@ -37,6 +37,9 @@ pub mod pr4_pf0e;
 /// PR4-PF0F1: FINAL machine-output の generator / replay / adapter 前段（synthetic・mock のみ）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0f;
+/// PR4-PF0F2: TMDB transport / wire-parity gate（loopback mock HTTP のみ・test ビルドだけ）
+#[cfg(test)]
+pub mod pr4_pf0f2;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;

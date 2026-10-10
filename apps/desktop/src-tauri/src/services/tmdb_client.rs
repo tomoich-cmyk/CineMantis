@@ -165,7 +165,7 @@ impl TmdbClient {
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
-fn urlencoding(s: &str) -> String {
+pub(crate) fn urlencoding(s: &str) -> String {
     // 簡易 percent-encoding（非ASCII・スペース対応）
     s.chars()
         .map(|c| match c {
