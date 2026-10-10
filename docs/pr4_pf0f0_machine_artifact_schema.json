@@ -1,0 +1,1435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pr4-pf0f0-machine-artifact-schema-2",
+  "title": "PR4-PF0F0 FINAL machine-output artifact schemas (DRAFT, design only)",
+  "description": "Draft. One definition per JSONL record / JSON file. All JSON is pr4-canonical-json-1 (integers only, no floats). No field may carry an API key or anything derived from it.",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "unit_key": {
+      "type": "string",
+      "pattern": "^work:[0-9]+$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "media_type",
+        "tmdb_id"
+      ],
+      "properties": {
+        "media_type": {
+          "enum": [
+            "movie",
+            "tv"
+          ]
+        },
+        "tmdb_id": {
+          "type": "integer"
+        }
+      }
+    },
+    "chain": {
+      "type": "object",
+      "required": [
+        "seq",
+        "prev_commitment",
+        "record_commitment"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prev_commitment": {
+          "$ref": "#/$defs/sha256"
+        },
+        "record_commitment": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "technical_status": {
+      "enum": [
+        "ok",
+        "skipped_no_title",
+        "call_failure",
+        "decode_error",
+        "input_mismatch",
+        "invalid_output",
+        "internal_error"
+      ]
+    },
+    "FINAL_MACHINE_RUN_MANIFEST": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "run_id",
+        "binding_matcher",
+        "reference_matcher",
+        "rules_1_in_final",
+        "code_commit",
+        "membership",
+        "recovery",
+        "tmdb_request_template",
+        "policy_ref",
+        "unit_order_sha256",
+        "transport_policy",
+        "resume_policy"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "pr4-pf0f0-contract-2"
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tmdb_request_template": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base",
+            "fixed_params",
+            "page",
+            "movie_year_param",
+            "tv_year_param",
+            "encoder",
+            "timeout_secs",
+            "max_http_attempts",
+            "backoff_ms",
+            "pacing_ms",
+            "raw_body_tier"
+          ],
+          "properties": {
+            "base": {
+              "const": "https://api.themoviedb.org/3"
+            },
+            "fixed_params": {
+              "type": "object",
+              "properties": {
+                "language": {
+                  "const": "ja-JP"
+                },
+                "include_adult": {
+                  "const": "false"
+                }
+              },
+              "required": [
+                "language",
+                "include_adult"
+              ],
+              "additionalProperties": false
+            },
+            "page": {
+              "const": 1
+            },
+            "movie_year_param": {
+              "const": "year"
+            },
+            "tv_year_param": {
+              "const": "first_air_date_year"
+            },
+            "encoder": {
+              "const": "tmdb_client::urlencoding"
+            },
+            "timeout_secs": {
+              "type": "integer"
+            },
+            "max_http_attempts": {
+              "type": "integer"
+            },
+            "backoff_ms": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "pacing_ms": {
+              "type": "integer"
+            },
+            "raw_body_tier": {
+              "enum": [
+                "none",
+                "sealed_gzip"
+              ]
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "api_key"
+                ]
+              }
+            ]
+          }
+        },
+        "policy_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "sha256"
+          ],
+          "properties": {
+            "file": {
+              "const": "docs/pr4_final_policy.json"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "generation_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not_before",
+            "not_after"
+          ],
+          "properties": {
+            "not_before": {
+              "$ref": "#/$defs/utc"
+            },
+            "not_after": {
+              "$ref": "#/$defs/utc"
+            }
+          }
+        },
+        "binding_matcher": {
+          "const": "rules-tags-shadow-2"
+        },
+        "reference_matcher": {
+          "const": "rules-safe-2"
+        },
+        "rules_1_in_final": {
+          "const": false
+        },
+        "code_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "membership": {
+          "type": "object",
+          "required": [
+            "commitment",
+            "eligibility_rule_version",
+            "pf0h_final_artifact_sha256"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "commitment": {
+              "$ref": "#/$defs/sha256"
+            },
+            "eligibility_rule_version": {
+              "type": "string"
+            },
+            "pf0h_final_artifact_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "pf0h_unit_set_sha256_aux": {
+              "$ref": "#/$defs/sha256"
+            },
+            "payload_set_sha256_aux": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "$comment": "authority = pr4_pf0b::membership_commitment only; *_aux are auxiliary audit values"
+        },
+        "recovery": {
+          "type": "object",
+          "required": [
+            "mode",
+            "max_attempts"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "none",
+                "retryable_failed_units_once"
+              ]
+            },
+            "max_attempts": {
+              "enum": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "unit_order_sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "sha256 of canonical JSON array of unit keys in processing order"
+        },
+        "resume_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_primary_resumes",
+            "recovery_resume"
+          ],
+          "properties": {
+            "max_primary_resumes": {
+              "const": 1
+            },
+            "recovery_resume": {
+              "const": "forbidden"
+            }
+          }
+        },
+        "transport_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "max_attempts",
+            "backoff_ms",
+            "retry_statuses",
+            "retry_after",
+            "retry_after_cap_ms",
+            "concurrency",
+            "timeout_secs",
+            "pacing_ms",
+            "policy_sha256"
+          ],
+          "properties": {
+            "version": {
+              "type": "string"
+            },
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "backoff_ms": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "retry_statuses": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "retry_after": {
+              "enum": [
+                "ignore",
+                "honor_capped"
+              ]
+            },
+            "retry_after_cap_ms": {
+              "type": "integer"
+            },
+            "concurrency": {
+              "const": 1
+            },
+            "timeout_secs": {
+              "type": "integer"
+            },
+            "pacing_ms": {
+              "type": "integer"
+            },
+            "policy_sha256": {
+              "$ref": "#/$defs/sha256",
+              "description": "sha256 of canonical JSON of this object without policy_sha256"
+            }
+          }
+        }
+      }
+    },
+    "SEARCH_INPUT": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_index",
+        "source",
+        "title",
+        "year"
+      ],
+      "properties": {
+        "input_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "enum": [
+            "legacy",
+            "embedded"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "QUERY_PLAN": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_index",
+        "source",
+        "query",
+        "year",
+        "search_movie",
+        "search_tv",
+        "retry_without_year"
+      ],
+      "properties": {
+        "input_index": {
+          "type": "integer"
+        },
+        "source": {
+          "enum": [
+            "legacy",
+            "embedded"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "search_movie": {
+          "type": "boolean"
+        },
+        "search_tv": {
+          "type": "boolean"
+        },
+        "retry_without_year": {
+          "type": "boolean"
+        }
+      }
+    },
+    "UNIT_INPUT": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chain"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "evaluation_unit_key",
+        "matcher_input_sha256",
+        "payload_recomputed_sha256",
+        "payload_match",
+        "ledger_seq",
+        "evidence_class_at_enrollment",
+        "evidence_hashes",
+        "derived",
+        "query_plans",
+        "planned_logical_calls"
+      ],
+      "properties": {
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "matcher_input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "payload_recomputed_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "payload_match": {
+          "type": "boolean"
+        },
+        "ledger_seq": {
+          "type": "integer"
+        },
+        "evidence_class_at_enrollment": {
+          "const": "live"
+        },
+        "evidence_hashes": {
+          "type": "object",
+          "required": [
+            "local",
+            "embedded",
+            "decision",
+            "match_ledger"
+          ],
+          "properties": {
+            "local": {
+              "$ref": "#/$defs/sha256"
+            },
+            "embedded": {
+              "$ref": "#/$defs/sha256"
+            },
+            "decision": {
+              "$ref": "#/$defs/sha256"
+            },
+            "match_ledger": {
+              "type": "boolean"
+            }
+          }
+        },
+        "derived": {
+          "type": "object",
+          "required": [
+            "media_kind",
+            "filename_year",
+            "embedded_year",
+            "skips_tmdb",
+            "search_inputs"
+          ],
+          "properties": {
+            "media_kind": {
+              "enum": [
+                "movie",
+                "tv",
+                "unknown"
+              ]
+            },
+            "filename_year": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "embedded_year": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "skips_tmdb": {
+              "type": "boolean"
+            },
+            "search_inputs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SEARCH_INPUT"
+              }
+            }
+          }
+        },
+        "query_plans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QUERY_PLAN"
+          }
+        },
+        "planned_logical_calls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "TMDB_REQUEST": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chain"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "request_id",
+        "evaluation_unit_key",
+        "input_index",
+        "source",
+        "kind",
+        "variant",
+        "sequence",
+        "canonical_request",
+        "canonical_request_sha256",
+        "attempts",
+        "final_status"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "input_index": {
+          "type": "integer"
+        },
+        "source": {
+          "enum": [
+            "legacy",
+            "embedded"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "movie",
+            "tv"
+          ]
+        },
+        "variant": {
+          "enum": [
+            "primary",
+            "retry_without_year"
+          ]
+        },
+        "sequence": {
+          "type": "integer"
+        },
+        "canonical_request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "path",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "path": {
+              "enum": [
+                "/3/search/movie",
+                "/3/search/tv"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "propertyNames": {
+                "enum": [
+                  "include_adult",
+                  "language",
+                  "query",
+                  "year",
+                  "first_air_date_year"
+                ]
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "canonical_request_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "wire_query_sha256_without_key": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attempts": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "n",
+              "started_at_utc",
+              "outcome",
+              "duration_ms"
+            ],
+            "properties": {
+              "n": {
+                "type": "integer"
+              },
+              "started_at_utc": {
+                "$ref": "#/$defs/utc"
+              },
+              "outcome": {
+                "enum": [
+                  "response",
+                  "timeout",
+                  "connect",
+                  "interrupted",
+                  "other"
+                ]
+              },
+              "http_status": {
+                "type": "integer"
+              },
+              "duration_ms": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "final_status": {
+          "enum": [
+            "ok",
+            "http_error",
+            "network_error",
+            "decode_error",
+            "not_attempted"
+          ]
+        },
+        "attempt": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "raw_body_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "http_status": {
+              "type": "integer"
+            },
+            "body_bytes": {
+              "type": "integer"
+            },
+            "body_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "TMDB_RESPONSE_CAPTURE": {
+      "$comment": "r2: success = raw body at raw/<sha256>.bin (content-addressed), referenced by TMDB_REQUEST.raw_body_sha256. Failures keep only {http_status, body_bytes, body_sha256}. No projection file."
+    },
+    "CANDIDATE": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ord",
+        "media_type",
+        "tmdb_id",
+        "source_request_id",
+        "rank_in_response",
+        "query_source",
+        "title",
+        "original_title",
+        "year",
+        "original_language",
+        "confidence",
+        "reasons"
+      ],
+      "properties": {
+        "ord": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "media_type": {
+          "enum": [
+            "movie",
+            "tv"
+          ]
+        },
+        "tmdb_id": {
+          "type": "integer"
+        },
+        "source_request_id": {
+          "type": "string"
+        },
+        "rank_in_response": {
+          "type": "integer"
+        },
+        "query_source": {
+          "enum": [
+            "legacy",
+            "embedded",
+            "both"
+          ]
+        },
+        "merged_from": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "original_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "original_language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CANDIDATE_LIST": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all",
+        "ranked",
+        "candidate_list_sha256"
+      ],
+      "properties": {
+        "all": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CANDIDATE"
+          }
+        },
+        "ranked": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "final_rank",
+              "ord"
+            ],
+            "properties": {
+              "final_rank": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "ord": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "candidate_list_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "CANDIDATE_SET": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chain"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "evaluation_unit_key",
+        "ordering_rule",
+        "threshold",
+        "cap",
+        "legacy",
+        "combined",
+        "request_ids"
+      ],
+      "properties": {
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "ordering_rule": {
+          "const": "STABLE_SORT_CONFIDENCE_DESC_THEN_INSERTION_ORDER"
+        },
+        "threshold": {
+          "type": "integer"
+        },
+        "cap": {
+          "type": "integer"
+        },
+        "legacy": {
+          "$ref": "#/$defs/CANDIDATE_LIST"
+        },
+        "combined": {
+          "$ref": "#/$defs/CANDIDATE_LIST"
+        },
+        "request_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "execution order"
+        }
+      }
+    },
+    "MATCHER_RESULT": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "top",
+        "top_confidence",
+        "reasons",
+        "input_candidate_set",
+        "input_candidate_list_sha256"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "AUTO",
+            "REVIEW",
+            "UNRESOLVED"
+          ]
+        },
+        "top": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top_confidence": {
+          "type": "integer"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input_candidate_set": {
+          "enum": [
+            "legacy",
+            "combined"
+          ]
+        },
+        "input_candidate_list_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "PF0B_MACHINE": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "AUTO",
+            "AUTO_INVALID",
+            "REVIEW",
+            "UNRESOLVED",
+            "MISSING"
+          ]
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "AUTO"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "identity"
+        ]
+      }
+    },
+    "MATCHER_OUTPUT": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chain"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "evaluation_unit_key",
+        "embedded_evidence",
+        "parsed_year_hint",
+        "rules_safe",
+        "rules_tags_shadow",
+        "final_matcher",
+        "pf0b_machine",
+        "technical_status"
+      ],
+      "properties": {
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "embedded_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "embedded_year",
+            "filename_year",
+            "audio_languages",
+            "cut_editions",
+            "episode_id_marks_movie"
+          ],
+          "properties": {
+            "embedded_year": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "filename_year": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "audio_languages": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cut_editions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "episode_id_marks_movie": {
+              "type": "boolean"
+            }
+          }
+        },
+        "parsed_year_hint": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rules_safe": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/MATCHER_RESULT"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rules_tags_shadow": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/MATCHER_RESULT"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final_matcher": {
+          "enum": [
+            "rules_safe",
+            "rules_tags_shadow"
+          ]
+        },
+        "pf0b_machine": {
+          "$ref": "#/$defs/PF0B_MACHINE"
+        },
+        "technical_status": {
+          "$ref": "#/$defs/technical_status"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "attempt": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    "EVALUATION_UNIT": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evaluation_unit_key",
+        "machine",
+        "technical_status"
+      ],
+      "properties": {
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "machine": {
+          "$ref": "#/$defs/PF0B_MACHINE"
+        },
+        "technical_status": {
+          "$ref": "#/$defs/technical_status"
+        }
+      },
+      "$comment": "No GT / label / verdict fields allowed here."
+    },
+    "RUN_LOG_EVENT": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chain"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "at_utc",
+        "event"
+      ],
+      "properties": {
+        "at_utc": {
+          "$ref": "#/$defs/utc"
+        },
+        "event": {
+          "enum": [
+            "run_start",
+            "unit_start",
+            "unit_done",
+            "unit_failed",
+            "recovery_set_committed",
+            "resume_start",
+            "resume_primary",
+            "run_end"
+          ]
+        },
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "failure_kind": {
+          "enum": [
+            "timeout",
+            "connect",
+            "interrupted",
+            "other",
+            "http_error",
+            "decode_error",
+            "input_mismatch",
+            "invalid_output",
+            "internal_error",
+            "secret_scan_hit"
+          ]
+        }
+      },
+      "$comment": "failure_kind only; never URL, body fragment or error text containing URL."
+    },
+    "RUN_PROVENANCE": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "attempt",
+        "started_at_utc",
+        "finished_at_utc",
+        "manifest_sha256",
+        "code_commit",
+        "binary_sha256",
+        "cargo_lock_sha256",
+        "rustc_version",
+        "target_triple",
+        "os",
+        "locale",
+        "timezone",
+        "env_allowlist",
+        "counts",
+        "artifact_index_sha256"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at_utc": {
+          "$ref": "#/$defs/utc"
+        },
+        "finished_at_utc": {
+          "$ref": "#/$defs/utc"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "code_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cargo_lock_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rustc_version": {
+          "type": "string"
+        },
+        "target_triple": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "env_allowlist": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "allowlisted keys only; keys matching KEY|TOKEN|SECRET are never recorded"
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "units",
+            "logical_calls",
+            "failed_calls",
+            "units_by_status"
+          ],
+          "properties": {
+            "units": {
+              "type": "integer"
+            },
+            "logical_calls": {
+              "type": "integer"
+            },
+            "failed_calls": {
+              "type": "integer"
+            },
+            "units_by_status": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "artifact_index_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "primary_resumes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ARTIFACT_INDEX": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "files",
+        "chain_heads",
+        "sealed_at_utc"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "sha256",
+              "records"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "records": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "chain_heads": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/sha256"
+          }
+        },
+        "sealed_at_utc": {
+          "$ref": "#/$defs/utc"
+        }
+      }
+    },
+    "REVIEWER_PROJECTION": {
+      "type": "object",
+      "required": [
+        "evaluation_unit_key",
+        "candidates",
+        "shown_set_sha256"
+      ],
+      "properties": {
+        "evaluation_unit_key": {
+          "$ref": "#/$defs/unit_key"
+        },
+        "attempt": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "candidates": {
+          "type": "array",
+          "description": "sorted by (media_type, tmdb_id); no rank/score/source/decision",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tmdb_id",
+              "media_type",
+              "title",
+              "original_title",
+              "year",
+              "release_date",
+              "overview",
+              "poster_path",
+              "release_year_from_date",
+              "year_consistent_with_release_date"
+            ],
+            "properties": {
+              "tmdb_id": {
+                "type": "integer"
+              },
+              "media_type": {
+                "enum": [
+                  "movie",
+                  "tv"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "original_title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "year": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "release_date": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "verbatim from the frozen raw response that produced the candidate"
+              },
+              "overview": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "poster_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "release_year_from_date": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "year_consistent_with_release_date": {
+                "type": "boolean",
+                "description": "audit only; never excludes a unit"
+              }
+            }
+          }
+        },
+        "shown_set_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "RECOVERY_SET": {
+      "type": "object",
+      "required": [
+        "set",
+        "set_commitment"
+      ],
+      "properties": {
+        "set": {
+          "type": "object",
+          "required": [
+            "manifest_sha256",
+            "primary_chain_heads",
+            "unit_keys",
+            "max_attempts"
+          ],
+          "properties": {
+            "manifest_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "primary_chain_heads": {
+              "type": "object"
+            },
+            "unit_keys": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/unit_key"
+              }
+            },
+            "max_attempts": {
+              "const": 2
+            }
+          }
+        },
+        "set_commitment": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "CONTINUITY_FAILURE": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      },
+      "$comment": "presence => run cannot be sealed, verified or converted; interruption in recovery phase (resume forbidden) or a 2nd primary interruption => TECHNICAL_FAILURE; never written into a sealed run"
+    }
+  }
+}

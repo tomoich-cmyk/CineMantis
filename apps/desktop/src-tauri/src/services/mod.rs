@@ -34,6 +34,9 @@ pub mod pr4_pf0d;
 /// PR4-PF0E: H2 enrollment ledger（audit 側・append-only・手動専用）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0e;
+/// PR4-PF0F1: FINAL machine-output の generator / replay / adapter 前段（synthetic・mock のみ）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0f;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;

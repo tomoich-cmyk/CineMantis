@@ -1,0 +1,52 @@
+{
+  "freeze": "PR4_PF0F1",
+  "status": "CLOSED_CANDIDATE (PF0F0 PASS / PF0F1 PASS WITH 2 FINAL CONDITIONS, both applied)",
+  "base_commit": "0aca746e2d0fee12ecfc660c5fc2e40d619158c6",
+  "branch": "claude/pr4-pf0f-d74932",
+  "sha256_note": "sha256 of file bytes with CRLF normalized to LF",
+  "files": {
+    "pr4_pf0f.rs": {
+      "path": "apps/desktop/src-tauri/src/services/pr4_pf0f.rs",
+      "sha256": "4fb5cf33cc0c496731e0b15ba64fd5fc18cc3f571e82d25c18faaafbb67cfcd3"
+    },
+    "contract": {
+      "path": "docs/PR4_PF0F0_FINAL_MACHINE_ARTIFACT_CONTRACT.md",
+      "sha256": "ba8752595e14babc0f4b5585fdb6e8435411e3af7f3d065db158bb933fcf867a"
+    },
+    "schema": {
+      "path": "docs/pr4_pf0f0_machine_artifact_schema.json",
+      "sha256": "3721abf9d8fdf799465df847665633b98304bd871a63fc7b8f70d97583fd3000"
+    },
+    "tmdb.rs": {
+      "path": "apps/desktop/src-tauri/src/commands/tmdb.rs",
+      "sha256": "14777589a60e78c6138654afec6ddc59e32be83994b6da6f5f96ff8e9ec8c2ff"
+    },
+    "mod.rs": {
+      "path": "apps/desktop/src-tauri/src/services/mod.rs",
+      "sha256": "275af2caf6792ca2966aa5539e77677cc99008182c14a5117fe1411185ad993f"
+    },
+    "Cargo.lock": {
+      "path": "apps/desktop/src-tauri/Cargo.lock",
+      "sha256": "43fa9c7505a4da334f83b0d5666662054b2b9b166c8444896d837bdf1db94e71"
+    }
+  },
+  "test_result": "572 passed / 0 failed / 12 ignored (cargo test --lib; PF0F1 = 22 tests; 571 at the previous gate + 1 final-condition test)",
+  "binding_matcher": "rules-tags-shadow-2",
+  "reference_matcher": "rules-safe-2",
+  "rules_1_in_final": false,
+  "resume_policy": {
+    "max_primary_resumes": 1,
+    "recovery_resume": "forbidden"
+  },
+  "production_change": "commands/tmdb.rs: visibility only (fn merge_candidate_sets -> pub(crate) fn)",
+  "q11b": "deferred to PF0F2 (TMDB transport / wire-parity gate, loopback/mock HTTP only)",
+  "source_sha_pin": "tripwire only; SHA match != semantic parity",
+  "merge_target": "NOT merged into main H2 worktree (feat/awards-festivals); kept as independent branch",
+  "not_touched": [
+    "H2 data",
+    "production DB",
+    "Jev",
+    "live TMDB",
+    "main checkout"
+  ]
+}

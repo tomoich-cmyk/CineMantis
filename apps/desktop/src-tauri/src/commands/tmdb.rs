@@ -407,7 +407,7 @@ pub(crate) fn query_plan_for(input: &SearchInput, media_kind: &str) -> QueryPlan
 
 /// 同じ作品の候補を1つにまとめる（スコアは高い方を採る）。
 /// これは旧経路とは別の matcher（rules-tags-shadow）の入力になる。
-fn merge_candidate_sets(
+pub(crate) fn merge_candidate_sets(
     legacy: &[TmdbCandidate],
     embedded: &[TmdbCandidate],
 ) -> (Vec<TmdbCandidate>, Vec<CandidateSource>) {
