@@ -1,0 +1,233 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "$id": "pr4-pf0i0-gt-adapter-1",
+ "title": "PR4-PF0I0 frozen blind H2 GT -> FINAL evaluator adapter (r2, freeze candidate)",
+ "description": "adapter が読む最小の項目(read allowlist)と、adapter が出す DTO / report / 失敗 envelope。ledger の実形式は PF0G1(pr4_blind_gt.rs eeeb573, events.jsonl)、authoritative docs は PF0G 1a6266d9869d7dc3bf8556850312c85676ebe7d3。work id / tmdb id / 題名の実値は書かない。",
+ "status": "R2_FREEZE_CANDIDATE",
+ "adapter_version": "pr4-pf0i0-gt-adapter-1",
+ "trusted_gt_source": "frozen_blind_h2_gt",
+ "alignment": {
+  "pf0g_authoritative_docs_commit": "1a6266d9869d7dc3bf8556850312c85676ebe7d3",
+  "pf0g1_implementation_freeze_commit": "eeeb57353b0e610e0827ce4882900c4bd156a22e",
+  "pr4_blind_gt_rs_sha256": "666182cb150d6a7c7605268f286cb726858e23e72eaa646fd3b3afd9f6d3e3cc"
+ },
+ "canonicalization": "pr4-canonical-json-1(pr4_blind_gt::canon と同一)。adapter は canon / hex_sha / derive_review_unit_id / derive_candidate_token / validate_unit_key を呼び、再実装しない。ledger の各行は canon(行) と一致しなければならない",
+ "ledger_commitment_formula": "event_commitment = SHA256( canon(event without event_commitment) + \"\\n\" + prev_commitment )。event は schema_version / seq / prev_commitment を含む。先頭の prev は 64 個の 0",
+ "definitions": {
+  "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+  "review_unit_id": { "type": "string", "pattern": "^ru_[a-z2-7]{26}$" },
+  "work_key": { "type": "string", "pattern": "^work:[1-9][0-9]{0,17}$", "description": "canonical = work:<base10 integer>。先頭ゼロ・符号・空白・全角数字は禁止(validate_unit_key)。reviewer には見せない" },
+  "media_type": { "enum": ["movie", "tv"] },
+  "candidate_token": { "type": "string", "pattern": "^ct_[a-z2-7]{20}$", "description": "HMAC-SHA256(build_secret, 'pr4-pf0g-candidate-token-1' \\n review_unit_id \\n media_type \\n tmdb_id) の先頭から作る。adapter は bundle の全 candidate で再導出して一致を要求する" },
+
+  "pins": {
+   "description": "init event と seal event の双方に `pins` object として在る 8 項目(PF0G1 の Pins)。キー集合は厳密に 8 個・値は hex64・init と seal で完全一致",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["protocol_sha256", "ui_package_sha256", "shuffle_seed_commitment", "attestation_policy_sha256", "unblind_map_sha256", "build_secret_commitment", "a8_leak_scan_report_sha256", "machine_freeze_anchor_commitment"],
+   "properties": {
+    "protocol_sha256": { "$ref": "#/definitions/sha256" },
+    "ui_package_sha256": { "$ref": "#/definitions/sha256" },
+    "shuffle_seed_commitment": { "$ref": "#/definitions/sha256", "description": "init==seal の完全一致のみ検査(PF0G は値の定義を持たない。adapter は導出しない)" },
+    "attestation_policy_sha256": { "$ref": "#/definitions/sha256" },
+    "unblind_map_sha256": { "$ref": "#/definitions/sha256", "description": "= SHA256(unblind bundle の実 bytes)。parse の前に照合" },
+    "build_secret_commitment": { "$ref": "#/definitions/sha256", "description": "= SHA256(build_secret_hex の ASCII bytes)。PF0G は値の定義を持たないため PF0I が固定(contract §4)。PF0G2 packager が従う" },
+    "a8_leak_scan_report_sha256": { "$ref": "#/definitions/sha256" },
+    "machine_freeze_anchor_commitment": { "$ref": "#/definitions/sha256", "description": "外部 anchor の値と完全一致" }
+   }
+  },
+
+  "ledger_event_read_allowlist": {
+   "description": "adapter が ledger の event から読む項目。note / query / reviewer_id / title / year / verifier_impl / defer_reason 等の自由記述は読まない・複製しない。",
+   "type": "object",
+   "required": ["schema_version", "type", "seq", "prev_commitment", "event_commitment"],
+   "properties": {
+    "schema_version": { "const": "pr4-blind-review-event-1" },
+    "type": { "enum": ["init", "session_start", "session_end", "qc_plan", "lease", "lease_expired", "lease_release", "search", "decision", "correction", "qc_decision", "defer", "defer_final", "integrity_anomaly", "seal"] },
+    "seq": { "type": "integer", "minimum": 0, "description": "0 起点・欠番なし" },
+    "prev_commitment": { "$ref": "#/definitions/sha256" },
+    "event_commitment": { "$ref": "#/definitions/sha256" },
+    "unit": { "$ref": "#/definitions/review_unit_id", "description": "outcome event(decision/correction/qc_decision/defer/defer_final)で必須" },
+    "submission_id": { "type": "string", "description": "outcome event 間で一意" },
+    "decision": { "enum": ["confirm", "pick_other", "none"], "description": "decision / correction / qc_decision で必須。defer / defer_final は type が表す" },
+    "candidate_token": { "type": ["string", "null"], "description": "confirm で必須(bundle の unit の candidate 集合に属する)。pick_other / none は null" },
+    "tmdb_id": { "type": ["integer", "null"], "description": "pick_other だけ必須。confirm では存在しないのが正(PF0G1 は confirm の identity を STOP)。none は null" },
+    "media_type": { "type": ["string", "null"] },
+    "tmdb_verification": { "type": "object", "description": "pick_other で必須。adapter は http_status=200・requested/response の id と media_type が picked と一致・response_body_sha256 が hex64 であることだけ再確認" },
+    "correction_reason": { "enum": ["mis_click", "misread_evidence", "new_evidence_in_tmdb", "other_with_note"], "description": "type=correction で必須" },
+    "pins": { "$ref": "#/definitions/pins", "description": "init / seal" },
+    "ledger_head_before": { "$ref": "#/definitions/sha256", "description": "seal: 直前 event の event_commitment と一致" },
+    "audit_report_sha256": { "$ref": "#/definitions/sha256", "description": "seal: 存在(hex64)のみ確認。audit は再実行しない" },
+    "unit_count": { "type": "integer", "description": "init / seal: bundle の unit 数と一致" }
+   },
+   "x-semantic-rules": [
+    "outcome の有効列(unit ごと): [decision | defer→(decision | defer_final)] の後に 0 回以上の correction。qc_decision は GT に使わない(終端状態の unit にしか現れない)",
+    "有効 GT = 列の最後の {decision, correction, defer_final}。最後が defer(1 巡目のみ)なら non_terminal_state_in_sealed_ledger。outcome が無い member は gt_missing_for_member",
+    "decision が 2 つ以上 → 同一内容なら duplicate_record_identical、違えば gt_conflict。decision の後の defer、defer_final の後の decision、defer の連続 → gt_conflict",
+    "decision=confirm: candidate_token が bundle の unit の候補集合に属する。tmdb_id / media_type / candidate_ref / tmdb_verification が在れば inline_identity_present",
+    "decision=pick_other: identity 有効・検証 OK・(media_type,tmdb_id) が bundle の unit の候補集合に含まれない。candidate_token は null",
+    "decision=none: tmdb_id/media_type/candidate_token すべて null(search ≥1 の証跡は PF0G audit A5 の責務で adapter は再検査しない)",
+    "ledger の構造化項目(キー名と文字列値。自由記述と `pins` を除く)に機械状態・work key を持てない。禁止キーは pr4_blind_gt::scan_forbidden の KEYS から ledger の正規フィールド decision / tmdbid を除いたもの。文字列値は 'work:' 始まり・AUTO・UNRESOLVED を禁止('review' は lease の purpose なので許す)"
+   ]
+  },
+
+  "unblind_bundle": {
+   "description": "audit-only の sealed 側。reviewer 側へは渡さない(review 開始前に渡るのは build_secret_commitment と unblind_map_sha256 だけ)。review seal 後にだけ adapter が受け取る。実 bytes の SHA-256 = pins.unblind_map_sha256。自己 hash 項目は持たない。",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["bundle_version", "build_secret_hex", "units"],
+   "properties": {
+    "bundle_version": { "const": "pr4-pf0i-unblind-bundle-1" },
+    "build_secret_hex": { "$ref": "#/definitions/sha256", "description": "SHA256(これの ASCII bytes) = pins.build_secret_commitment。全 unit の review_unit_id と全 candidate_token を再導出して検証する" },
+    "units": {
+     "type": "array",
+     "minItems": 1,
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_unit_id", "work_key", "candidates"],
+      "properties": {
+       "review_unit_id": { "$ref": "#/definitions/review_unit_id" },
+       "work_key": { "$ref": "#/definitions/work_key" },
+       "candidates": {
+        "type": "array",
+        "description": "その unit で reviewer に提示した候補の全件(truncate なし)。0 件も可。順序は意味を持たない。token と identity は unit 内で一意",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": ["candidate_token", "media_type", "tmdb_id"],
+         "properties": {
+          "candidate_token": { "$ref": "#/definitions/candidate_token" },
+          "media_type": { "$ref": "#/definitions/media_type" },
+          "tmdb_id": { "type": "integer", "minimum": 1, "maximum": 9007199254740992 }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "x-pf0g2-required": "PF0G2 の packager はこの形で bundle を出す(PF0G1 は unblind map の形を定義していない)。build_secret_commitment の定義も PF0G2 が従う"
+  },
+
+  "adapter_expected_anchors": {
+   "description": "呼び出し側(FINAL runner)が adapter に渡す外部の期待値。ledger / seal の自己申告だけを信じないための anchors。PF0H に対する exact-match は membership と final manifest SHA だけ(PF0H 内部の version や補助 hash は解釈しない)。",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["expected_membership_commitment", "expected_pf0h_final_manifest_sha256", "review_seal_sha256", "machine_freeze_anchor_commitment", "eligibility_rule_version_opaque"],
+   "properties": {
+    "expected_membership_commitment": { "$ref": "#/definitions/sha256", "description": "PF0H の authoritative_membership_commitment(audit anchor 側の期待値)" },
+    "expected_pf0h_final_manifest_sha256": { "$ref": "#/definitions/sha256" },
+    "review_seal_sha256": { "$ref": "#/definitions/sha256", "description": "seal event の event_commitment を別経路(audit anchor chain)で記録した値" },
+    "machine_freeze_anchor_commitment": { "$ref": "#/definitions/sha256", "description": "pins.machine_freeze_anchor_commitment と完全一致" },
+    "eligibility_rule_version_opaque": { "type": "string", "minLength": 1, "description": "membership_commitment の第 2 引数にそのまま渡す。adapter は解釈・分解・比較しない" }
+   }
+  },
+
+  "pf0h_loaded": {
+   "description": "PF0H の(唯一の)正式 loader が返す 2 値。loader は PF0H schema 確定後に別 gate で 1 つだけ実装する(本 gate では未実装)。adapter は bundle から再計算した membership が authoritative_membership_commitment と anchor の両方に一致、final_manifest_sha256 が anchor と一致することだけを要求する",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["authoritative_membership_commitment", "final_manifest_sha256"],
+   "properties": {
+    "authoritative_membership_commitment": { "$ref": "#/definitions/sha256" },
+    "final_manifest_sha256": { "$ref": "#/definitions/sha256" }
+   }
+  },
+
+  "canonical_gt_entry": {
+   "description": "adapter の唯一の出力単位(evaluator への最小 DTO の要素)。reviewer・時刻・理由・提示候補・token・review_unit_id を持たない。Rust では TrustedGtSet(private field・構築は adapt だけ)。",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["key", "gt"],
+   "properties": {
+    "key": { "$ref": "#/definitions/work_key" },
+    "gt": {
+     "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["semantic", "media_type", "tmdb_id"],
+        "properties": { "semantic": { "const": "POSITIVE" }, "media_type": { "$ref": "#/definitions/media_type" }, "tmdb_id": { "type": "integer", "minimum": 1 } } },
+      { "type": "object", "additionalProperties": false, "required": ["semantic"], "properties": { "semantic": { "const": "NONE" } } },
+      { "type": "object", "additionalProperties": false, "required": ["semantic"], "properties": { "semantic": { "const": "UNRESOLVED" } } }
+     ]
+    }
+   }
+  },
+
+  "evaluator_gt_input": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["adapter_version", "trusted_gt_source", "membership_commitment_sha256", "entries"],
+   "properties": {
+    "adapter_version": { "const": "pr4-pf0i0-gt-adapter-1" },
+    "trusted_gt_source": { "const": "frozen_blind_h2_gt" },
+    "membership_commitment_sha256": { "$ref": "#/definitions/sha256" },
+    "entries": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/canonical_gt_entry" } }
+   }
+  },
+
+  "adapter_report": {
+   "description": "count-only。key / identity / token / review_unit_id / 自由記述を含めない。REFUSED のとき counts は全て 0。",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["adapter_version", "trusted_gt_source", "status", "anchor_checks", "counts", "refusal_codes"],
+   "properties": {
+    "adapter_version": { "const": "pr4-pf0i0-gt-adapter-1" },
+    "trusted_gt_source": { "const": "frozen_blind_h2_gt" },
+    "status": { "enum": ["READY", "REFUSED"] },
+    "anchor_checks": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": ["policy_pinned", "ledger_chain", "review_seal_sha256", "seal_pins_equal_init_pins", "unblind_bundle_sha256", "build_secret_commitment", "membership_commitment", "pf0h_final_manifest_sha256", "machine_freeze_anchor_commitment"],
+     "patternProperties": { "^.+$": { "enum": ["match", "mismatch", "not_checked"] } }
+    },
+    "counts": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": ["n_members", "n_events", "n_corrections_applied", "n_confirm", "n_pick_other", "n_none", "n_defer_final"],
+     "patternProperties": { "^n_[a-z_]+$": { "type": "integer", "minimum": 0 } }
+    },
+    "refusal_codes": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "anchor_missing", "policy_not_pinned_frozen",
+       "ledger_chain_broken", "ledger_seq_gap", "unknown_event_type", "init_missing_or_not_first", "seal_missing_or_duplicated", "events_after_seal",
+       "review_seal_sha_mismatch", "ledger_head_before_mismatch", "seal_pins_missing", "seal_pins_differ_from_init", "integrity_anomaly_present",
+       "machine_freeze_commitment_mismatch", "ledger_contains_machine_state", "ledger_contains_work_key",
+       "unblind_bundle_sha_mismatch", "unblind_bundle_not_bijective", "build_secret_commitment_mismatch", "review_unit_id_not_derivable", "candidate_token_not_derivable",
+       "candidate_token_duplicate_in_unit", "identity_invalid", "unit_count_mismatch",
+       "membership_commitment_mismatch", "pf0h_final_manifest_mismatch",
+       "review_unit_without_map_entry", "gt_missing_for_member", "non_terminal_state_in_sealed_ledger",
+       "duplicate_record_identical", "gt_conflict", "correction_chain_invalid", "correction_reason_invalid",
+       "decision_shape_invalid", "token_not_in_presented_set", "inline_identity_present", "pick_other_in_presented_set", "pick_other_not_verified"
+      ]
+     }
+    }
+   }
+  },
+
+  "technical_failure_envelope": {
+   "description": "adapter が REFUSED のとき adapter 自身が返す(PF0B を呼ばない・PF0B の report に似せない)。report_version / decision / metrics / policy_provenance / decision_reasons を持たない。assembler 失敗(machine_output_for_non_member)も同じ形。",
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["stage", "status", "adapter_version", "reason_code", "reason_codes"],
+   "properties": {
+    "stage": { "const": "gt_adapter" },
+    "status": { "const": "TECHNICAL_FAILURE" },
+    "adapter_version": { "const": "pr4-pf0i0-gt-adapter-1" },
+    "reason_code": { "type": "string", "description": "refusal_codes の先頭" },
+    "reason_codes": { "type": "array", "items": { "type": "string" } }
+   }
+  }
+ },
+ "decision_to_pf0b_gt": {
+  "confirm": "Gt::Positive(media_type, tmdb_id)  -- identity = bundle[unit].candidates[candidate_token]",
+  "pick_other": "Gt::Positive(media_type, tmdb_id)  -- identity = event の tmdb_id/media_type(検証済み・提示集合の外)",
+  "none": "Gt::NoMatch",
+  "defer_final": "Gt::Unresolved",
+  "defer(1 巡目のまま)": "REFUSE non_terminal_state_in_sealed_ledger",
+  "qc_decision": "GT に使わない(無視)",
+  "member に outcome 無し": "REFUSE gt_missing_for_member (Unresolved に丸めない)",
+  "bundle に無い unit の outcome": "REFUSE review_unit_without_map_entry"
+ }
+}

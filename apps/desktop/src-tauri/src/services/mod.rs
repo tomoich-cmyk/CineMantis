@@ -35,6 +35,9 @@ pub mod pr4_pf0d;
 /// PR4-PF0E: H2 enrollment ledger（audit 側・append-only・手動専用）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0e;
+/// PR4-PF0I1: sealed blind GT → FINAL evaluator adapter（synthetic のみ・test ビルドだけ）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0i_adapter;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;
