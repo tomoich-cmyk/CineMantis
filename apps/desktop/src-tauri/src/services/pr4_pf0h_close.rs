@@ -88,6 +88,14 @@ pub fn canon(v: &Value) -> R<String> {
     })
 }
 
+/// PF0H final manifest SHA（凍結規則 `pr4-pf0h1-final-manifest-sha-1`）。
+/// = SHA-256( canon(parse(FINAL_MEMBERSHIP_COMMITMENT.json)) の UTF-8 bytes )。canon = キー昇順・空白なし・整数のみ・文字列は serde_json 形式。
+/// ファイルの空白・改行・キー順・BOM 無し UTF-8 以外の差には依存しない（raw byte SHA ではない）。`H2_CLOSE.json` の raw SHA は補助証拠で binding anchor ではない。
+pub fn final_manifest_sha256(file_bytes: &[u8]) -> R<String> {
+    let v: Value = serde_json::from_slice(file_bytes).or_else(|_| fail("V16", "E_OUTPUT_NOT_CLEAN"))?;
+    sha_of(&v)
+}
+
 fn sha_of(v: &Value) -> R<String> {
     Ok(hex_sha(canon(v)?.as_bytes()).to_string())
 }
@@ -191,8 +199,7 @@ pub fn parse_params(bytes: &[u8]) -> R<Params> {
             && s(e, "disposition") == "accepted_non_material"
             && s(e, "membership_impact") == "none"
             && s(e, "checkpoint_impact") == "none"
-            && s(e, "backfill") == "forbidden"
-            && s(e, "audit_note_sha256") == EXCEPTION_AUDIT_NOTE_SHA256 =>
+            && s(e, "backfill") == "forbidden" =>
         {
             Some(EXCEPTION_AUDIT_NOTE_SHA256.to_string())
         }

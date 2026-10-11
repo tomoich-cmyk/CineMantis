@@ -901,3 +901,29 @@ fn the_authoritative_membership_commitment_is_byte_identical_to_the_pf0b_definit
     // (5) 版名が違えば commitment も違う（version は provenance だが再計算の入力には入る）
     assert_ne!(pf0b(&keys, &version), pf0b(&keys, "other-version"));
 }
+
+/// PF0H final manifest SHA の凍結規則: canonical SHA256(FINAL_MEMBERSHIP_COMMITMENT.json)。raw byte の体裁に依存しない
+#[test]
+fn the_final_manifest_sha_is_the_canonical_sha_and_ignores_formatting() {
+    // golden: canon = {"a":1,"b":["x",null,true]} （キー昇順・空白なし）
+    let g = close::final_manifest_sha256(br#"{ "b": ["x", null, true], "a": 1 }"#).unwrap();
+    assert_eq!(g, hex_sha(br#"{"a":1,"b":["x",null,true]}"#));
+    assert_eq!(g, "f3b8a4ec6b2ad1666747731d5601847491e0ae81f0585f2b1edb8aa823e8f3ff");
+    let fx = good();
+    let out = go(&fx, "fm").unwrap();
+    let raw = std::fs::read(&out[1]).unwrap();
+    let sha = close::final_manifest_sha256(&raw).unwrap();
+    let v: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(sha, hex_sha(canon(&v).unwrap().as_bytes()));
+    // 体裁（pretty / compact / CRLF）が違っても同じ
+    assert_eq!(sha, close::final_manifest_sha256(serde_json::to_string(&v).unwrap().as_bytes()).unwrap());
+    assert_eq!(sha, close::final_manifest_sha256(serde_json::to_string_pretty(&v).unwrap().replace('\n', "\r\n").as_bytes()).unwrap());
+    // 内容が違えば変わる。H2_CLOSE.json の raw SHA とは別物
+    let mut w = v.clone();
+    w["unit_count"] = json!(945);
+    assert_ne!(sha, close::final_manifest_sha256(w.to_string().as_bytes()).unwrap());
+    assert_ne!(sha, hex_sha(&std::fs::read(&out[0]).unwrap()));
+    // 2 回の close で FINAL_MEMBERSHIP_COMMITMENT は完全一致 → SHA も一致
+    let out2 = go_with_gen(&fx, "fm2", "2027-01-01T00:00:00Z");
+    assert_eq!(sha, close::final_manifest_sha256(&std::fs::read(&out2[1]).unwrap()).unwrap());
+}

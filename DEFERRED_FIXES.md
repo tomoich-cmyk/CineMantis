@@ -1,0 +1,1 @@
+- （クローズ）PF0H final manifest SHA の対象は canonical SHA256(FINAL_MEMBERSHIP_COMMITMENT.json) で確定。
