@@ -35,3 +35,7 @@
 - **M1**: 契約 §3.2 の seeded shuffle と実装の候補提示順（token 昇順）の不一致を解消する（実装を契約に合わせるか、契約を実装に合わせて改訂する）。
 - **M2**: `build_secret_commitment` は PF0I で `SHA256(ASCII(lowercase_hex(build_secret_bytes)))` と意味まで固定された。packager は現状 64 桁 lowercase hex の形式検査と同式での生成だけなので、PF0I の再導出検証（bundle → 全 unit / token の再計算）と同じ検査を packager 側にも入れて突合する。
 - （クローズ）PF0H final manifest SHA の対象は canonical SHA256(FINAL_MEMBERSHIP_COMMITMENT.json) で確定。
+
+- （統合 D8 結果）`pr4_pf0i_e2e_tests.rs` は private fixture を使うため、mod.rs の sibling 登録ではコンパイルしない。`pr4_pf0g2_tests.rs` 末尾の `#[path]` child module として登録（679 passed / 0 failed / 13 ignored）。
+- （統合 D5 検証）PF0H1 側に machine freeze 系の値は存在しない。pin `machine_freeze_anchor_commitment`（外部 audit anchor）と PF0G manifest の `machine_freeze_commitment_sha256` は別概念のまま・同一性の記述なし。運用側の確認は OPEN。
+- （M1/M2）PF0G2 の FINAL FREEZE 前必須 M1（seeded shuffle 文言）・M2（packager 側の build_secret_commitment 再導出検証）は未クローズ。

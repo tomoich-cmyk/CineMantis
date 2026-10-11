@@ -1286,3 +1286,7 @@ fn reviewer_side_sources_do_not_touch_machine_types_the_production_db_or_value_p
     // PF0G1 のコアを変更する経路（unsafe / include で上書き）が無い
     assert!(!server.contains("unsafe {") && !packager.contains("unsafe {") && !server.contains("unsafe fn"));
 }
+
+// D8: PF0G2 → PF0H1 → PF0I の synthetic E2E。private な fixture を使うので、この test module の child として登録する（統合 branch 専用）
+#[path = "pr4_pf0i_e2e_tests.rs"]
+mod pf0i_e2e;
