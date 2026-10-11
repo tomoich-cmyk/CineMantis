@@ -196,7 +196,7 @@
        "machine_freeze_commitment_mismatch", "ledger_contains_machine_state", "ledger_contains_work_key",
        "unblind_bundle_sha_mismatch", "unblind_bundle_not_bijective", "build_secret_commitment_mismatch", "review_unit_id_not_derivable", "candidate_token_not_derivable",
        "candidate_token_duplicate_in_unit", "identity_invalid", "unit_count_mismatch",
-       "membership_commitment_mismatch", "pf0h_final_manifest_mismatch",
+       "membership_commitment_mismatch", "pf0h_final_manifest_mismatch", "pf0h_final_manifest_invalid",
        "review_unit_without_map_entry", "gt_missing_for_member", "non_terminal_state_in_sealed_ledger",
        "duplicate_record_identical", "gt_conflict", "correction_chain_invalid", "correction_reason_invalid",
        "decision_shape_invalid", "token_not_in_presented_set", "inline_identity_present", "pick_other_in_presented_set", "pick_other_not_verified"

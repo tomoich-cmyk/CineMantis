@@ -11,7 +11,8 @@
 | PF0G1 実装 freeze | `eeeb57353b0e610e0827ce4882900c4bd156a22e`（source diff は 1a6266d まで 0） |
 | `pr4_blind_gt.rs` SHA-256 | `666182cb150d6a7c7605268f286cb726858e23e72eaa646fd3b3afd9f6d3e3cc`（schema の alignment と test t34 で固定） |
 | PF0C policy canonical SHA | `1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4` |
-| PF0H | `claude/pr4-pf0h1-e60774` は freeze candidate・未 commit。**PF0H の正式 loader は PF0H schema 確定後に 1 つだけ**実装する（本 gate では未実装。adapter は loader の 2 値を受けるだけ。§7） |
+| PF0H1 | `81e637210f7324686f72b7f6be850950c2d9e04e`（`claude/pr4-pf0h1-e60774`）。**正式 loader は 1 つだけ** = `load_pf0h_final_membership`（実装済み・規則 `pr4-pf0h1-final-manifest-sha-1`: JSON parse → canonical JSON → UTF-8 → SHA-256。`authoritative_membership_commitment` = 同ファイルの `membership_commitment_sha256`（`authoritative:true` 必須）。`H2_CLOSE.json` の raw SHA は supplemental） |
+| PF0G2 | `9fbd64faae611ba57411d0ca2ea4b22d2697024c`（`claude/pr4-pf0g2-210938`）。packager が `pr4-pf0i-unblind-bundle-1` と `build_secret_commitment` を出す。実 `Store` との E2E は統合 worktree で確認済み（`docs/PR4_PF0I_FINAL_FREEZE_CANDIDATE.md`） |
 
 r1 → r2 で PF0G の実形式に合わせた主な変更: pins は init/seal の `pins` object（8 項目）/ confirm event は candidate_token のみ（identity inline は STOP）/ candidate_token = `ct_`+20 文字の HMAC / unblind bundle の形を PF0I が定義 / 失敗は独自 envelope / PF0B は変更しない。
 
@@ -126,9 +127,9 @@ adapter は規則を**実装しない**。(1) `defer_final` を `Gt::Unresolved`
 | 1 | **`build_secret_commitment = SHA256(ASCII(lowercase_hex(build_secret_bytes)))`**（`0x` なし・空白なし。32 byte の secret なら 64 文字 hex）。PF0G2 packager が従う | 承認済み |
 | 2 | **unblind bundle format = `pr4-pf0i-unblind-bundle-1`** を正式な handoff format とする。PF0G2 が生成し、PF0I が strict validation | 承認済み |
 | 3 | **promotion-impacting errata の確認は FINAL runner の責務**（adapter に重複実装しない）。**adapter の評価結果だけでは promotion 不可。** FINAL runner が promotion-impacting errata なし（evaluation ≠ INVALIDATED）を確認して初めて authoritative evaluation になる | 承認済み |
-| 4 | **PF0H final manifest SHA = `FINAL_MEMBERSHIP_COMMITMENT.json` の canonical SHA-256**。binding anchors は (1) authoritative membership commitment (2) その canonical SHA (3) review seal SHA。`H2_CLOSE.json` の SHA は supplemental evidence であって binding anchor ではない | 確定（D4 クローズ）。loader の本実装は PF0H1 の commit SHA 確定後 |
+| 4 | **PF0H final manifest SHA = `FINAL_MEMBERSHIP_COMMITMENT.json` の canonical SHA-256**（loader 実装済み）。binding anchors は (1) authoritative membership commitment (2) その canonical SHA (3) review seal SHA。`H2_CLOSE.json` の SHA は supplemental evidence であって binding anchor ではない | 確定（D4 クローズ・loader 実装済み） |
 | 5 | `machine_freeze_anchor_commitment`（PF0G pin）と manifest の `machine_freeze_commitment_sha256` の関係 | LOW・DEFERRED（PF0G2） |
-| 6 | 実 `Store` ledger との E2E（fixture は PF0G1 のコードから転記した合成） | DEFERRED（実データ読込は Hard Gate） |
+| 6 | 実 `Store` ledger との E2E | **完了**（統合 worktree・synthetic。PF0G2 の packager と実 Store が出した ledger/bundle を adapter が受理・各改ざんを拒否） |
 
 状態は「PF0I implementation PASS（candidate）」で、PF0I FINAL FREEZE は PF0H1 の formalization 待ち。
 
@@ -136,7 +137,7 @@ adapter は規則を**実装しない**。(1) `defer_final` を `Gt::Unresolved`
 
 production label/DB へ書かない・開発用 GT / H1 GT を混ぜない・adapter で precision/coverage/判定を計算しない・seal 後の GT 修正や record 追加をしない・複数 reviewer の不一致を adapter で解決しない・H2 実データをこの gate で開かない。
 
-## 12. 試験（PF0I1・33 件・全て合成・DB/FS/network なし）
+## 12. 試験（PF0I1・36 件・全て合成・DB/FS/network なし。t35–t37 は PF0H loader）
 
-A 写像（t01–t04）/ B join・membership（t05–t10）/ C SHA・seal・順序・改ざん（t11–t15）/ D 複製・衝突・訂正（t16–t18）/ E 評価結合（t20–t26: frozen policy で PROMOTE・AUTO×defer_final で INCONCLUSIVE・none/pick_other で誤り・NoMatch への格下げ mutation で差が出る・非凍結 policy 拒否・独自 envelope・machine 欠落は PF0B の TECHNICAL_FAILURE）/ F leakage・静的性質（t27–t33）/ schema と実装の整合（t34）。
+（PF0I 単体 36 件。統合 E2E 4 件は別途）A 写像（t01–t04）/ B join・membership（t05–t10）/ C SHA・seal・順序・改ざん（t11–t15）/ D 複製・衝突・訂正（t16–t18）/ E 評価結合（t20–t26: frozen policy で PROMOTE・AUTO×defer_final で INCONCLUSIVE・none/pick_other で誤り・NoMatch への格下げ mutation で差が出る・非凍結 policy 拒否・独自 envelope・machine 欠落は PF0B の TECHNICAL_FAILURE）/ F leakage・静的性質（t27–t33）/ schema と実装の整合（t34）。
 受け入れ: `cargo test --lib` 全 green（本 gate: 613 passed / 0 failed）・PF0B/PF0G1 の既存試験 green・H2 実データ未使用・main checkout 無変更。

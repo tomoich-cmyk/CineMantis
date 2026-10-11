@@ -203,6 +203,36 @@ pub struct AdapterOutcome {
     pub gt: Option<TrustedGtSet>,
 }
 
+// ─── PF0H loader（唯一）──────────────────────────────────────────────────────────────────
+
+/// PF0H1 の凍結 commit（loader の規則の出所。anchor）。`git show` で読み取り専用に参照した
+pub const PF0H1_COMMIT: &str = "81e637210f7324686f72b7f6be850950c2d9e04e";
+/// `FINAL_MEMBERSHIP_COMMITMENT.json` の binding 規則: JSON を parse → canonical JSON → UTF-8 → SHA-256（体裁に依存しない）
+pub const PF0H1_FINAL_MANIFEST_RULE: &str = "pr4-pf0h1-final-manifest-sha-1";
+const PF0H_FINAL_MEMBERSHIP_PROTOCOL: &str = "pr4-pf0h0-final-membership-1";
+
+/// PF0H の正式 loader（1 つだけ）。`FINAL_MEMBERSHIP_COMMITMENT.json` の bytes から 2 値を取り出す。
+/// - `final_manifest_sha256` = 規則 `pr4-pf0h1-final-manifest-sha-1`（`H2_CLOSE.json` の raw SHA は使わない）
+/// - `authoritative_membership_commitment` = 同ファイルの `membership_commitment_sha256`（`authoritative: true` が必須）
+/// 補助値（`auxiliary_audit_values`）・`eligibility_rule_version` は読まない・解釈しない
+pub fn load_pf0h_final_membership(file_bytes: &[u8]) -> Res<Pf0hLoaded> {
+    let v: Value = serde_json::from_slice(file_bytes).map_err(|_| vec!["pf0h_final_manifest_invalid"])?;
+    let canonical = canon(&v).map_err(|_| vec!["pf0h_final_manifest_invalid"])?;
+    let commitment = v.get("membership_commitment_sha256").and_then(Value::as_str).unwrap_or("");
+    if v.get("protocol").and_then(Value::as_str) != Some(PF0H_FINAL_MEMBERSHIP_PROTOCOL) || v.get("authoritative") != Some(&json!(true)) || !is_hex64(commitment) {
+        return refuse("pf0h_final_manifest_invalid");
+    }
+    Ok(Pf0hLoaded { authoritative_membership_commitment: commitment.to_string(), final_manifest_sha256: hex_sha(canonical.as_bytes()) })
+}
+
+/// PF0H1 の commit anchor を明示して loader を呼ぶ入口。anchor が凍結 commit と違えば拒否（`pf0h_final_manifest_invalid`）
+pub fn load_pf0h_final_membership_anchored(file_bytes: &[u8], pf0h1_commit_anchor: &str) -> Res<Pf0hLoaded> {
+    if pf0h1_commit_anchor != PF0H1_COMMIT {
+        return refuse("pf0h_final_manifest_invalid");
+    }
+    load_pf0h_final_membership(file_bytes)
+}
+
 // ─── unblind bundle ──────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

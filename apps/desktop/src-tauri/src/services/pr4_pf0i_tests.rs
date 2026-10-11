@@ -931,3 +931,108 @@ fn t34_schema_refusal_codes_match_implementation() {
     assert_eq!(schema["alignment"]["pf0g_authoritative_docs_commit"], "1a6266d9869d7dc3bf8556850312c85676ebe7d3");
     assert_eq!(hex_sha(include_str!("pr4_blind_gt.rs").as_bytes()), schema["alignment"]["pr4_blind_gt_rs_sha256"]);
 }
+
+// ── PF0H loader ──
+
+fn final_membership_json(commitment: &str) -> Value {
+    json!({"protocol": "pr4-pf0h0-final-membership-1", "unit_count": 946, "membership_commitment_sha256": commitment, "authoritative": true,
+        "eligibility_rule_version": "opaque", "auxiliary_audit_values": {"unit_set_sha256": h("aux"), "authoritative": false}})
+}
+
+#[test]
+fn t35_loader_follows_pf0h1_rule_and_ignores_formatting() {
+    // PF0H1(81e6372) の golden: canon({"a":1,"b":["x",null,true]}) の SHA-256。PF0H1 の canon と同一であることの固定
+    let g = hex_sha(canon(&json!({"b": ["x", null, true], "a": 1})).unwrap().as_bytes());
+    assert_eq!(g, "f3b8a4ec6b2ad1666747731d5601847491e0ae81f0585f2b1edb8aa823e8f3ff");
+    let v = final_membership_json(&h("m"));
+    let compact = serde_json::to_vec(&v).unwrap();
+    let pretty = serde_json::to_vec_pretty(&v).unwrap();
+    let crlf = String::from_utf8(pretty.clone()).unwrap().replace('\n', "\r\n").into_bytes();
+    let (a, b, c) = (load_pf0h_final_membership(&compact).unwrap(), load_pf0h_final_membership(&pretty).unwrap(), load_pf0h_final_membership(&crlf).unwrap());
+    assert_eq!(a.final_manifest_sha256, b.final_manifest_sha256);
+    assert_eq!(a.final_manifest_sha256, c.final_manifest_sha256);
+    assert_eq!(a.authoritative_membership_commitment, h("m"));
+    assert_ne!(a.final_manifest_sha256, hex_sha(&pretty), "raw byte SHA ではない");
+    // 内容が変われば SHA も変わる
+    let mut v2 = v.clone();
+    v2["unit_count"] = json!(947);
+    assert_ne!(load_pf0h_final_membership(&serde_json::to_vec(&v2).unwrap()).unwrap().final_manifest_sha256, a.final_manifest_sha256);
+    assert_eq!(PF0H1_COMMIT.len(), 40);
+    assert_eq!(PF0H1_FINAL_MANIFEST_RULE, "pr4-pf0h1-final-manifest-sha-1");
+}
+
+#[test]
+fn t36_loader_is_fail_closed() {
+    let bad = |v: Value| load_pf0h_final_membership(&serde_json::to_vec(&v).unwrap()).unwrap_err();
+    let mut v = final_membership_json(&h("m"));
+    v["authoritative"] = json!(false);
+    assert_eq!(bad(v), vec!["pf0h_final_manifest_invalid"]);
+    let mut v = final_membership_json(&h("m"));
+    v["protocol"] = json!("other");
+    assert_eq!(bad(v), vec!["pf0h_final_manifest_invalid"]);
+    assert_eq!(bad(final_membership_json("short")), vec!["pf0h_final_manifest_invalid"]);
+    // 補助値を commitment に使えない
+    let mut v = final_membership_json(&h("m"));
+    v.as_object_mut().unwrap().remove("membership_commitment_sha256");
+    assert_eq!(bad(v), vec!["pf0h_final_manifest_invalid"]);
+    // 浮動小数・壊れた JSON
+    let mut v = final_membership_json(&h("m"));
+    v["x"] = json!(1.5);
+    assert_eq!(bad(v), vec!["pf0h_final_manifest_invalid"]);
+    assert!(load_pf0h_final_membership(b"{ nope").is_err());
+}
+
+#[test]
+fn t37_loader_output_feeds_adapter_end_to_end() {
+    let mut fx = Fx::new(5, &[]);
+    // PF0H の成果物（synthetic）から 2 値を作り、anchor は別経路（canonical SHA を audit anchor に記録した値）
+    let file = serde_json::to_vec_pretty(&final_membership_json(&fx.anchors.expected_membership_commitment)).unwrap();
+    let loaded = load_pf0h_final_membership(&file).unwrap();
+    fx.pf0h = loaded.clone();
+    fx.anchors.expected_pf0h_final_manifest_sha256 = loaded.final_manifest_sha256.clone();
+    ok(&mut fx);
+    // H2_CLOSE.json 等の raw SHA を anchor にしても通らない
+    let mut fx2 = Fx::new(5, &[]);
+    fx2.pf0h = loaded.clone();
+    fx2.anchors.expected_pf0h_final_manifest_sha256 = hex_sha(&file);
+    refused_fx(fx2, "pf0h_final_manifest_mismatch");
+}
+
+#[test]
+fn t38_required_fail_closed_matrix() {
+    // wrong PF0H commit anchor
+    let file = serde_json::to_vec(&final_membership_json(&h("m"))).unwrap();
+    assert!(load_pf0h_final_membership_anchored(&file, PF0H1_COMMIT).is_ok());
+    assert_eq!(load_pf0h_final_membership_anchored(&file, "0000000000000000000000000000000000000000").unwrap_err(), vec!["pf0h_final_manifest_invalid"]);
+    // malformed canonical JSON（浮動小数・非 JSON）
+    assert!(load_pf0h_final_membership_anchored(b"{\"a\":1.5}", PF0H1_COMMIT).is_err());
+    assert!(load_pf0h_final_membership_anchored(&[0xffu8, 0xfe], PF0H1_COMMIT).is_err());
+    // missing required anchor（各 anchor を空・非 hex にする）
+    for f in 0..5 {
+        let mut fx = Fx::new(4, &[]);
+        match f {
+            0 => fx.anchors.expected_membership_commitment = String::new(),
+            1 => fx.anchors.expected_pf0h_final_manifest_sha256 = "xyz".into(),
+            2 => fx.anchors.machine_freeze_anchor_commitment = String::new(),
+            3 => fx.anchors.eligibility_rule_version_opaque = String::new(),
+            _ => fx.pf0h.final_manifest_sha256 = String::new(),
+        }
+        refused_fx(fx, "anchor_missing");
+    }
+    let mut fx = Fx::new(4, &[]);
+    let mut r = fx.render();
+    r.anchors.review_seal_sha256 = String::new();
+    refused(&r, "anchor_missing");
+    // wrong build_secret_commitment（init/seal の双方で変える = 自己整合しても bundle の secret と合わない）
+    let mut fx = Fx::new(4, &[]);
+    fx.init_over = vec![("build_secret_commitment", h("w"))];
+    fx.seal_over = vec![("build_secret_commitment", h("w"))];
+    refused_fx(fx, "build_secret_commitment_mismatch");
+    // unexpected unblind bundle（未知キー・空 units・不正 secret 形式）
+    let mut fx = Fx::new(4, &[]);
+    fx.bundle["surprise"] = json!(1);
+    refused_fx(fx, "unblind_bundle_not_bijective");
+    let mut fx = Fx::new(4, &[]);
+    fx.bundle["units"] = json!([]);
+    refused_fx(fx, "unblind_bundle_not_bijective");
+}
