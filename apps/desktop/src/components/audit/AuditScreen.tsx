@@ -10,7 +10,6 @@ import {
 import type { DuplicateGroup, IntegrityIssue, IssueCode } from "@/api/audit";
 import { useLibraryStore } from "@/store/libraryStore";
 import { CandidateDialog } from "@/components/tmdb/CandidateDialog";
-import { GroundTruthReviewPanel } from "@/components/audit/GroundTruthReviewPanel";
 
 // ─── ラベルマップ ─────────────────────────────────────────────────────────────
 
@@ -28,7 +27,7 @@ const REASON_LABELS: Record<DuplicateGroup["reason"], { label: string; icon: str
 
 // ─── タブ型 ──────────────────────────────────────────────────────────────────
 
-type Tab = "duplicates" | "integrity" | "gtReview";
+type Tab = "duplicates" | "integrity";
 
 // ─── 重複グループカード ───────────────────────────────────────────────────────
 
@@ -237,11 +236,10 @@ export function AuditScreen() {
 
         {/* タブ */}
         <div className="flex gap-0 border-b border-subtle">
-          {(["duplicates", "integrity", "gtReview"] as const).map((t) => {
+          {(["duplicates", "integrity"] as const).map((t) => {
             const labels: Record<Tab, string> = {
               duplicates: `重複候補 ${dupLoading ? "" : `(${duplicates.length}グループ / ${totalDupWorks}件)`}`,
               integrity:  `整合性チェック ${intLoading ? "" : `(${report?.totalIssues ?? 0}項目)`}`,
-              gtReview:   "GTレビュー",
             };
             return (
               <button
@@ -357,9 +355,6 @@ export function AuditScreen() {
             )}
           </div>
         )}
-
-        {/* ── GT レビュータブ ── */}
-        {tab === "gtReview" && <GroundTruthReviewPanel />}
       </div>
 
       {/* ── 削除確認ダイアログ ── */}

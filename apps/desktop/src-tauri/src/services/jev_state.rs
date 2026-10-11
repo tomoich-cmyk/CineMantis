@@ -981,7 +981,7 @@ mod tests {
         for path in [
             "/home/tyama/movies/alien.mkv",
             "/Users/tyama/Movies/alien.mkv",
-            "//TYNAS/home/Movie/x.mp4",
+            "//nas-host/media/Movie/x.mp4",
         ] {
             let mut local = LocalEvidenceInput::default();
             local.derived_title = Some(path.to_string());

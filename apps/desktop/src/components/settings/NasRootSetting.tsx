@@ -3,8 +3,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getSetting, setSetting } from "@/api/settings";
 
 const KEY = "nas_movie_root";
-/** バックエンドの DEFAULT_NAS_ROOT と揃えること */
-const DEFAULT_ROOT = "\\\\TYNAS\\home\\Movie";
 
 export function NasRootSetting() {
   const qc = useQueryClient();
@@ -31,7 +29,7 @@ export function NasRootSetting() {
     },
   });
 
-  const effective = (saved ?? "").trim() || DEFAULT_ROOT;
+  const effective = (saved ?? "").trim();
 
   return (
     <section className="flex flex-col gap-2 border-t border-subtle pt-6">
@@ -48,7 +46,7 @@ export function NasRootSetting() {
             setValue(e.target.value);
             setTouched(true);
           }}
-          placeholder={DEFAULT_ROOT}
+          placeholder="\\server\share\Movie"
           spellCheck={false}
           className="h-8 flex-1 max-w-lg bg-[#101014] border border-[#24242a] px-2 font-mono text-xs text-gray-200 placeholder-gray-700 outline-none focus:border-mantis-500"
         />
@@ -61,8 +59,11 @@ export function NasRootSetting() {
         </button>
       </div>
       <p className="text-xs text-gray-700">
-        現在の適用値: <span className="font-mono">{effective}</span>
-        {!(saved ?? "").trim() && "（未設定のため既定値）"}
+        {effective ? (
+          <>現在の適用値: <span className="font-mono">{effective}</span></>
+        ) : (
+          <span className="text-yellow-500">保存先を設定してください（未設定のため振り分けは実行できません）</span>
+        )}
         {isSuccess && !touched && <span className="ml-2 text-mantis-400">保存しました</span>}
       </p>
     </section>

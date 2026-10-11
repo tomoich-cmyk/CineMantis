@@ -14,8 +14,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-/// 既定の NAS ルート。app_settings の `nas_movie_root` で上書きできる。
-const DEFAULT_NAS_ROOT: &str = r"\\TYNAS\home\Movie";
+/// NAS ルートは app_settings の `nas_movie_root` だけが持つ。既定値は無い（未設定なら振り分けは実行しない）。
 const SETTING_NAS_ROOT: &str = "nas_movie_root";
 
 const DIR_FOREIGN: &str = "【01】洋画";
@@ -114,16 +113,49 @@ fn build_file_name(title: &str, year: Option<i64>, extension: &str) -> String {
 
 // ─── 設定 ─────────────────────────────────────────────────────────────────────
 
-fn nas_root(conn: &rusqlite::Connection) -> String {
-    conn.query_row(
-        "SELECT value FROM app_settings WHERE key = ?1",
-        rusqlite::params![SETTING_NAS_ROOT],
-        |row| row.get::<_, String>(0),
-    )
-    .ok()
-    .map(|v| v.trim().to_string())
-    .filter(|v| !v.is_empty())
-    .unwrap_or_else(|| DEFAULT_NAS_ROOT.to_string())
+/// NAS ルートの設定値を検証する。空・空白のみ・相対パス・`..` を含むパスは拒否する
+/// （カレントディレクトリや相対パスとして解釈させない）。
+/// 受け付けるのは UNC（`\\server\share[\…]`）かドライブ絶対パス（`X:\…`）だけ。
+fn validate_nas_root(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("保存先が未設定です。設定画面で NAS の保存先を設定してください".to_string());
+    }
+    let invalid = || {
+        format!(
+            "保存先が絶対パスではありません。UNC（\\\\server\\share）またはドライブ指定（D:\\…）で設定してください: {trimmed}"
+        )
+    };
+    let norm = trimmed.replace('/', "\\");
+    let ok = match norm.strip_prefix("\\\\") {
+        Some(rest) => {
+            // server と share が必須。`\\?\` `\\.\` のデバイス名前空間は受け付けない
+            let mut it = rest.split('\\').filter(|p| !p.is_empty());
+            let server = it.next().unwrap_or("");
+            let share = it.next().unwrap_or("");
+            !server.is_empty() && !share.is_empty() && server != "?" && server != "."
+        }
+        None => {
+            let b = norm.as_bytes();
+            b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+        }
+    };
+    if !ok || norm.split('\\').any(|p| p == "..") {
+        return Err(invalid());
+    }
+    Ok(trimmed.trim_end_matches(['\\', '/']).to_string())
+}
+
+/// 保存済みの NAS ルートを読む。未設定・不正なら Err（呼び出し側はファイル操作へ進まない）。
+fn nas_root(conn: &rusqlite::Connection) -> Result<String, String> {
+    let raw = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            rusqlite::params![SETTING_NAS_ROOT],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+    validate_nas_root(&raw)
 }
 
 // ─── プラン作成 ───────────────────────────────────────────────────────────────
@@ -257,8 +289,8 @@ fn read_plan_rows(
     conn: &rusqlite::Connection,
     folder: &str,
     only_work_ids: Option<&[i64]>,
+    root: &str,
 ) -> Result<Vec<NasSortPlanRow>, String> {
-    let root = nas_root(conn);
     let mut stmt = conn.prepare(PLAN_SQL).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -288,7 +320,7 @@ fn read_plan_rows(
             Some(ids) => ids.contains(&r.work_id),
             None => true,
         })
-        .map(|r| build_plan_row(r, &root))
+        .map(|r| build_plan_row(r, root))
         .collect())
 }
 
@@ -297,8 +329,12 @@ pub struct NasSortPlan {
     pub rows: Vec<NasSortPlanRow>,
     /// 取り込み元フォルダを含む登録済みソースのルート。未登録なら None（先にソース登録とスキャンが必要）
     pub source_root: Option<String>,
-    /// 移動先の NAS ルート
+    /// 移動先の NAS ルート（未設定・不正なら空文字）
     pub nas_root: String,
+    /// NAS ルートが設定済みで有効な絶対パスか。false なら計画は空で、移動は実行しない
+    pub nas_configured: bool,
+    /// 未設定・不正のときの理由（UI 表示用）
+    pub nas_config_error: Option<String>,
     /// NAS に到達できるか。false なら移動は実行しない
     pub nas_available: bool,
 }
@@ -321,7 +357,20 @@ fn check_nas_reachable(root: &str) -> Result<(), String> {
 pub fn plan_nas_sort(state: State<'_, DbState>, folder: String) -> Result<NasSortPlan, String> {
     let folder = validate_folder(&folder)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let rows = read_plan_rows(&conn, &folder, None)?;
+    let root = match nas_root(&conn) {
+        Ok(root) => root,
+        Err(message) => {
+            return Ok(NasSortPlan {
+                rows: Vec::new(),
+                source_root: None,
+                nas_root: String::new(),
+                nas_configured: false,
+                nas_config_error: Some(message),
+                nas_available: false,
+            });
+        }
+    };
+    let rows = read_plan_rows(&conn, &folder, None, &root)?;
     let source_root = find_source_for_path(&conn, &folder).and_then(|id| {
         conn.query_row(
             "SELECT root_path FROM sources WHERE id = ?1",
@@ -330,15 +379,29 @@ pub fn plan_nas_sort(state: State<'_, DbState>, folder: String) -> Result<NasSor
         )
         .ok()
     });
-    let nas_root = nas_root(&conn);
-    let nas_available = check_nas_reachable(&nas_root).is_ok();
-    Ok(NasSortPlan { rows, source_root, nas_root, nas_available })
+    let nas_available = check_nas_reachable(&root).is_ok();
+    Ok(NasSortPlan {
+        rows,
+        source_root,
+        nas_root: root,
+        nas_configured: true,
+        nas_config_error: None,
+        nas_available,
+    })
 }
 
 // ─── 実行 ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+thread_local! {
+    /// テスト用: ファイル操作（rename / copy / remove_file）の唯一の入口 move_file の呼び出し回数
+    static MOVE_FILE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// 同一ボリューム内なら rename、跨ぐ場合は copy + delete でフォールバックする。
 fn move_file(src: &Path, dest: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    MOVE_FILE_CALLS.with(|c| c.set(c.get() + 1));
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("フォルダを作成できません: {} ({e})", parent.display()))?;
@@ -437,16 +500,26 @@ pub fn execute_nas_sort(
     folder: String,
     work_ids: Vec<i64>,
 ) -> Result<NasSortResult, String> {
+    execute_nas_sort_impl(&state.0, folder, work_ids)
+}
+
+fn execute_nas_sort_impl(
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    folder: String,
+    work_ids: Vec<i64>,
+) -> Result<NasSortResult, String> {
     if work_ids.is_empty() {
         return Ok(NasSortResult::default());
     }
     let folder = validate_folder(&folder)?;
 
     let plans = {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        // NAS ルート未設定・不正ならファイル操作へ進まない（最初のガード）
+        let root = nas_root(&conn)?;
         // NAS が落ちているまま1件ずつ移動を試すと、全件が同じエラーで失敗する
-        check_nas_reachable(&nas_root(&conn))?;
-        read_plan_rows(&conn, &folder, Some(&work_ids))?
+        check_nas_reachable(&root)?;
+        read_plan_rows(&conn, &folder, Some(&work_ids), &root)?
     };
 
     let mut result = NasSortResult::default();
@@ -476,7 +549,7 @@ pub fn execute_nas_sort(
 
         match move_file(Path::new(&plan.source_path), &dest_path) {
             Ok(()) => {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                let conn = db.lock().map_err(|e| e.to_string())?;
                 // 移動先を含むソースが無ければ、今のソースに残す
                 let current_source_id: i64 = conn
                     .query_row(
@@ -489,7 +562,10 @@ pub fn execute_nas_sort(
                 // （ライブラリから外れて次回スキャンで「実体なし」にならないように）
                 let new_source_id = match find_source_for_path(&conn, &dest) {
                     Some(id) => id,
-                    None => match ensure_bucket_source(&conn, &nas_root(&conn), &dest) {
+                    None => match nas_root(&conn)
+                        .ok()
+                        .and_then(|root| ensure_bucket_source(&conn, &root, &dest))
+                    {
                         Some((id, root)) => {
                             result.registered_sources.push(root);
                             id
@@ -548,21 +624,22 @@ fn record_moved_file(
 
 #[cfg(test)]
 mod tests {
+    const TEST_ROOT: &str = r"\\nas-host\media\Movie";
     use super::*;
 
     #[test]
     fn source_lookup_requires_a_path_boundary() {
         use crate::db::test_support::*;
         let conn = open_migrated();
-        let wa = insert_source(&conn, r"\\TYNAS\home\Movie\【01】洋画\【わ】");
-        let a = insert_source(&conn, r"\\TYNAS\home\Movie\【01】洋画\【あ-】");
+        let wa = insert_source(&conn, r"\\nas-host\media\Movie\【01】洋画\【わ】");
+        let a = insert_source(&conn, r"\\nas-host\media\Movie\【01】洋画\【あ-】");
         assert_eq!(
-            find_source_for_path(&conn, r"\\TYNAS\home\Movie\【01】洋画\【わ】\【わ】\x.mp4"),
+            find_source_for_path(&conn, r"\\nas-host\media\Movie\【01】洋画\【わ】\【わ】\x.mp4"),
             Some(wa)
         );
-        assert_eq!(find_source_for_path(&conn, r"\\tynas\HOME\Movie\【01】洋画\【あ-】"), Some(a));
+        assert_eq!(find_source_for_path(&conn, r"\\nas-host\MEDIA\Movie\【01】洋画\【あ-】"), Some(a));
         assert_eq!(
-            find_source_for_path(&conn, r"\\TYNAS\home\Movie\【01】洋画\【わ-】\【わ】\x.mp4"),
+            find_source_for_path(&conn, r"\\nas-host\media\Movie\【01】洋画\【わ-】\【わ】\x.mp4"),
             None
         );
     }
@@ -571,12 +648,12 @@ mod tests {
     fn moving_to_an_unregistered_bucket_registers_it_once() {
         use crate::db::test_support::*;
         let conn = open_migrated();
-        let root = r"\\TYNAS\home\Movie";
-        insert_source(&conn, r"\\TYNAS\home\Movie\【01】洋画\【さ-】");
-        let dest = r"\\TYNAS\home\Movie\【02】邦画\【さ-】\【さ】\THE FIRST SLAM DUNK (2022).mp4";
+        let root = r"\\nas-host\media\Movie";
+        insert_source(&conn, r"\\nas-host\media\Movie\【01】洋画\【さ-】");
+        let dest = r"\\nas-host\media\Movie\【02】邦画\【さ-】\【さ】\THE FIRST SLAM DUNK (2022).mp4";
 
         let (id, group_root) = ensure_bucket_source(&conn, root, dest).expect("registered");
-        assert_eq!(group_root, r"\\TYNAS\home\Movie\【02】邦画\【さ-】");
+        assert_eq!(group_root, r"\\nas-host\media\Movie\【02】邦画\【さ-】");
         assert_eq!(find_source_for_path(&conn, dest), Some(id));
         // 2回目は既存ソースと重なるので登録しない
         assert!(ensure_bucket_source(&conn, root, dest).is_none());
@@ -598,7 +675,7 @@ mod tests {
     #[test]
     fn folder_must_be_absolute() {
         assert_eq!(validate_folder(r"D:\Import\").unwrap(), r"D:\Import");
-        assert_eq!(validate_folder(r"\\TYNAS\home\Movie").unwrap(), r"\\TYNAS\home\Movie");
+        assert_eq!(validate_folder(r"\\nas-host\media\Movie").unwrap(), r"\\nas-host\media\Movie");
         assert!(validate_folder("").is_err());
         assert!(validate_folder(r"Import\sub").is_err());
     }
@@ -644,7 +721,7 @@ mod tests {
         let outside = add(r"D:\Import\保留\c.mkv", "c.mkv");
         let similar_name = add(r"D:\Import\新着2\d.mkv", "d.mkv");
 
-        let ids: Vec<i64> = read_plan_rows(&conn, r"d:\import\新着", None)
+        let ids: Vec<i64> = read_plan_rows(&conn, r"d:\import\新着", None, r"D:\NasRoot")
             .unwrap()
             .iter()
             .map(|r| r.work_id)
@@ -798,7 +875,7 @@ mod tests {
 
     #[test]
     fn missing_source_file_is_flagged_first() {
-        let row = build_plan_row(input("あ", Some("あい"), "foreign"), DEFAULT_NAS_ROOT);
+        let row = build_plan_row(input("あ", Some("あい"), "foreign"), TEST_ROOT);
         assert_eq!(row.status, "file_missing");
         assert!(row.dest_path.is_none());
     }
@@ -810,7 +887,7 @@ mod tests {
         i.source_path = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let row = build_plan_row(i, DEFAULT_NAS_ROOT);
+        let row = build_plan_row(i, TEST_ROOT);
         assert_eq!(row.status, "no_country");
     }
 
@@ -820,7 +897,7 @@ mod tests {
         i.source_path = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let row = build_plan_row(i, DEFAULT_NAS_ROOT);
+        let row = build_plan_row(i, TEST_ROOT);
         assert_eq!(row.status, "no_reading");
     }
 
@@ -849,5 +926,161 @@ mod tests {
             row.dest_display.as_deref(),
             Some(r"【02】邦画\【わ-】\【わ】\わたしの話 (2023).mp4")
         );
+    }
+
+    // ─── NAS ルート未設定の fail-closed ───────────────────────────────────────
+
+    #[test]
+    fn nas_root_rejects_empty_blank_and_relative() {
+        for bad in [
+            "",
+            "   ",
+            "\t\n",
+            ".",
+            "..",
+            "Movie",
+            r"Movie\sub",
+            r".\Movie",
+            r"..\Movie",
+            r"\Movie",
+            "/Movie",
+            "C:",
+            "C:Movie",
+            r"D:\a\..\b",
+            r"\\",
+            r"\\server",
+            r"\\server\",
+            r"\\?\C:\x",
+            r"\\.\pipe\x",
+            r"\\server\share\..\x",
+        ] {
+            assert!(validate_nas_root(bad).is_err(), "must reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn nas_root_accepts_unc_and_drive_absolute() {
+        assert_eq!(validate_nas_root(r"  \\srv\share\Movie\ ").unwrap(), r"\\srv\share\Movie");
+        assert_eq!(validate_nas_root(r"\\srv\share").unwrap(), r"\\srv\share");
+        assert_eq!(validate_nas_root(r"D:\Movie").unwrap(), r"D:\Movie");
+        assert_eq!(validate_nas_root("D:/Movie/").unwrap(), "D:/Movie");
+    }
+
+    fn set_nas_root(conn: &rusqlite::Connection, v: &str) {
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![SETTING_NAS_ROOT, v],
+        )
+        .unwrap();
+    }
+
+    /// Fresh install（設定行なし）は未設定。空白・相対パスの保存値も未設定扱い
+    #[test]
+    fn fresh_install_has_no_nas_root() {
+        use crate::db::test_support::*;
+        let conn = open_migrated();
+        assert!(nas_root(&conn).is_err());
+        set_nas_root(&conn, "   ");
+        assert!(nas_root(&conn).is_err());
+        set_nas_root(&conn, r"relative\dir");
+        assert!(nas_root(&conn).is_err());
+    }
+
+    /// 既存ユーザーが保存済みの NAS ルート（キー nas_movie_root）はそのまま読まれる
+    #[test]
+    fn saved_nas_root_is_preserved() {
+        use crate::db::test_support::*;
+        let conn = open_migrated();
+        set_nas_root(&conn, r"\\saved-host\share\Movie");
+        assert_eq!(nas_root(&conn).unwrap(), r"\\saved-host\share\Movie");
+        assert_eq!(SETTING_NAS_ROOT, "nas_movie_root");
+    }
+
+    /// 未設定・不正な NAS ルートでは execute はファイル操作を1回も呼ばず、元ファイルも不変
+    #[test]
+    fn execute_without_nas_root_never_touches_files() {
+        use crate::commands::scan::{insert_scanned_file, insert_scanned_work, ScannedFile};
+        use crate::db::test_support::*;
+
+        let tmp = std::env::temp_dir().join(format!("cm-r9-nas-{}", std::process::id()));
+        let import = tmp.join("import");
+        std::fs::create_dir_all(&import).unwrap();
+        let src = import.join("a.mkv");
+        std::fs::write(&src, b"payload").unwrap();
+        let import_s = import.to_string_lossy().to_string();
+        let src_s = src.to_string_lossy().to_string();
+
+        let conn = open_migrated();
+        let source_id = insert_source(&conn, &import_s);
+        let file_id = insert_scanned_file(
+            &conn,
+            &ScannedFile {
+                source_id,
+                root_path: &import_s,
+                file_path: &src_s,
+                file_name: "a.mkv",
+                extension: "mkv",
+                file_size: None,
+                mtime: None,
+                duration_sec: None,
+                width: None,
+                height: None,
+                video_codec: None,
+                audio_codec: None,
+                container: "mkv",
+            },
+        )
+        .unwrap();
+        let work_id = insert_scanned_work(&conn, "movie", "unknown", "a", "foreign").unwrap();
+        conn.execute(
+            "INSERT INTO work_parts (work_id, file_id) VALUES (?1, ?2)",
+            rusqlite::params![work_id, file_id],
+        )
+        .unwrap();
+        conn.execute("UPDATE works SET reading = 'あ' WHERE id = ?1", rusqlite::params![work_id])
+            .unwrap();
+
+        fn walk(d: &Path, out: &mut Vec<String>) {
+            for e in std::fs::read_dir(d).unwrap() {
+                let p = e.unwrap().path();
+                out.push(p.to_string_lossy().to_string());
+                if p.is_dir() {
+                    walk(&p, out);
+                }
+            }
+        }
+        let snapshot = |dir: &Path| -> Vec<String> {
+            let mut v = Vec::new();
+            walk(dir, &mut v);
+            v.sort();
+            v
+        };
+        let before = snapshot(&tmp);
+
+        let db = std::sync::Mutex::new(conn);
+        for value in [None, Some(""), Some("   "), Some("relative"), Some(r"..\x"), Some(".")] {
+            if let Some(v) = value {
+                set_nas_root(&db.lock().unwrap(), v);
+            }
+            MOVE_FILE_CALLS.with(|c| c.set(0));
+            let err = execute_nas_sort_impl(&db, import_s.clone(), vec![work_id]).unwrap_err();
+            assert!(err.contains("保存先"), "{err}");
+            assert_eq!(MOVE_FILE_CALLS.with(|c| c.get()), 0, "no file op for {value:?}");
+            assert_eq!(std::fs::read(&src).unwrap(), b"payload");
+            assert_eq!(snapshot(&tmp), before, "nothing created for {value:?}");
+        }
+
+        // 対照: 設定済みの NAS ルートなら move_file まで進む（カウンタが機能していることの証明）
+        let nas = tmp.join("nas");
+        std::fs::create_dir_all(&nas).unwrap();
+        set_nas_root(&db.lock().unwrap(), &nas.to_string_lossy());
+        MOVE_FILE_CALLS.with(|c| c.set(0));
+        let ok = execute_nas_sort_impl(&db, import_s.clone(), vec![work_id]).unwrap();
+        assert_eq!(ok.moved, 1, "{:?}", ok.errors);
+        assert_eq!(MOVE_FILE_CALLS.with(|c| c.get()), 1);
+        assert!(!src.exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

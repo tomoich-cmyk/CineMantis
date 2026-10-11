@@ -30,8 +30,10 @@ export interface NasSortPlan {
   rows: NasSortPlanRow[];
   /** 取り込み元フォルダを含む登録済みソースのルート。未登録なら null */
   source_root: string | null;
-  /** 移動先の NAS ルート */
+  /** 移動先の NAS ルート（未設定なら空文字） */
   nas_root: string;
+  /** NAS ルートが設定済みで有効な絶対パスか。false なら移動は実行できない */
+  nas_configured: boolean;
   /** NAS に到達できるか。false なら移動は実行できない */
   nas_available: boolean;
 }

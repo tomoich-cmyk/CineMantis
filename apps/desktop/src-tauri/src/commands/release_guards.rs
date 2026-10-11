@@ -105,3 +105,54 @@ fn nsis_uninstall_preserves_app_data() {
     }
     assert!(t.contains("section uninstall"));
 }
+
+fn walk_files(dir: &std::path::Path, exts: &[&str], out: &mut Vec<(std::path::PathBuf, String)>) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            walk_files(&p, exts, out);
+        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| exts.contains(&x)) {
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                out.push((p, s));
+            }
+        }
+    }
+}
+
+/// production UI の監査画面に「GTレビュー」タブがない（GT backend / command は残す）
+#[test]
+fn audit_screen_has_no_gt_review_tab() {
+    let s = include_str!("../../../src/components/audit/AuditScreen.tsx");
+    assert!(!s.contains("gtReview"));
+    assert!(!s.contains("GTレビュー"));
+    assert!(!s.contains("GroundTruthReviewPanel"));
+}
+
+/// GroundTruthReviewPanel はどの production UI ソースからも参照されない（定義ファイル自身を除く）
+#[test]
+fn ground_truth_review_panel_is_unreachable_from_ui() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
+    let mut files = Vec::new();
+    walk_files(&root, &["ts", "tsx"], &mut files);
+    assert!(!files.is_empty());
+    for (p, s) in files {
+        if p.file_name().is_some_and(|n| n == "GroundTruthReviewPanel.tsx") {
+            continue;
+        }
+        assert!(!s.contains("GroundTruthReviewPanel"), "{} references GroundTruthReviewPanel", p.display());
+    }
+}
+
+/// 作者環境の NAS 名を source に持ち込まない（既定値の復活防止）
+#[test]
+fn source_has_no_author_nas_name() {
+    let needle = ["TY", "NAS"].concat().to_lowercase();
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk_files(&manifest.join("src"), &["rs", "sql"], &mut files);
+    walk_files(&manifest.join("../src"), &["ts", "tsx"], &mut files);
+    assert!(files.len() > 50);
+    for (p, s) in files {
+        assert!(!s.to_lowercase().contains(&needle), "{} contains author NAS name", p.display());
+    }
+}
