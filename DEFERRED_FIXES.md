@@ -12,3 +12,4 @@
 | D6 | 実 `Store` が出した ledger との E2E 1 本（PF0G1 の test fixture は private） | PF0G2 完成後 |
 | D7 | `pr4_blind_gt` は PF0G1 で `pub mod`（製品ビルドに含まれる）。PF0I adapter は cfg(test) のみ。PF0G 側の判断 | PF0G |
 | D8 | PF0G2 packager が出す bundle / build_secret_commitment は統合 E2E で PF0I と一致を確認済み（D1・D2・D6 クローズ）。残: 統合 E2E ファイル `pr4_pf0i_e2e_tests.rs` は単体 branch でコンパイルしないので mod.rs 未登録。3 branch（PF0G2・PF0H1・PF0I）が main に入った後に登録する | main 統合時 |
+| D5 更新 | READ ONLY 確認済み: PF0G docs / PF0G2 に「pin machine_freeze_anchor_commitment = manifest machine_freeze_commitment_sha256」という記述は無い。別概念として扱う。同一性は運用側で確認（OPEN） | 運用 |

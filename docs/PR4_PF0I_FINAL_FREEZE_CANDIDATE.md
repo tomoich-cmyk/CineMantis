@@ -21,7 +21,7 @@ PF0I 単体 branch は PF0G2 / PF0H1 のコードを持たないので、`pr4_pf
 
 ## 試験結果
 - PF0I 単体 branch: `cargo test --lib` **618 passed / 0 failed / 12 ignored**（PF0I 37。t38 = 必須 fail-closed マトリクス: wrong PF0H commit anchor・malformed canonical JSON・missing anchor・wrong build_secret_commitment・unexpected bundle。wrong final manifest SHA / membership / pin mismatch / malformed bundle は t09・t14・t06・t15・e3 が既に網羅）。
-- 統合 worktree（PF0I + PF0H1 + PF0G2。t38 / `load_pf0h_final_membership_anchored` 追加前の adapter で実行。追加は既存関数を変えない純粋な追加で、統合の再実行はしていない）: `cargo test --lib` **678 passed / 0 failed / 13 ignored**。`pf0i` 絞り込み 41 passed（PF0I 36 + `pf0i_e2e` 4 + PF0G2 の handoff 1）。統合 worktree は検証後に削除済み（commit しない・push しない）。
+- 統合 worktree（PF0I + PF0H1 + PF0G2。t38 / `load_pf0h_final_membership_anchored` を含む最新状態で再実行）: `cargo test --lib` **679 passed / 0 failed / 13 ignored**。e1〜e4 と t38 は PASS。統合 worktree は検証後に削除済み（commit しない・push しない）。
 
 ## ファイル SHA-256（LF 正規化後 = commit される bytes）
 | ファイル | SHA-256 |
@@ -35,3 +35,7 @@ PF0I 単体 branch は PF0G2 / PF0H1 のコードを持たないので、`pr4_pf
 
 ## Hard Gate（変更なし）
 adapter の評価結果だけでは promotion 不可。FINAL runner が promotion-impacting errata なし（evaluation ≠ INVALIDATED）を確認して初めて authoritative evaluation になる。
+
+## 残件の確認（READ ONLY）
+- D5: PF0G の docs / PF0G2 実装を読んだ範囲では、manifest の `machine_freeze_commitment_sha256`（machine freeze の内容を持たない hash 値）と pin `machine_freeze_anchor_commitment`（audit anchor chain 側の commitment。`make_pins` が別引数で受ける）が同一値であるという記述は無い。別概念として扱い、adapter は pin と外部 anchor の完全一致だけを検査する。同一性の確認は運用側（コード変更不要・docs のみ）で OPEN のまま。
+- D8: 3 branch 統合後に e2e_tests を `mod.rs` に登録。
