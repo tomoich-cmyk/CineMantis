@@ -1,0 +1,20 @@
+:root{--bg:#fafafa;--fg:#1a1a1a;--mut:#666;--line:#d0d0d0;--acc:#1b5fb4;--warn:#9a3412}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--line:#444;--acc:#6aa9ff;--warn:#fdba74}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,"Yu Gothic UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 8px}
+.bar{display:flex;justify-content:space-between;color:var(--mut);margin-bottom:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.box{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px}
+.cand{border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0;cursor:pointer}
+.cand.sel{outline:2px solid var(--acc)}
+button{font:inherit;padding:6px 12px;margin:4px 4px 4px 0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg);cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible,.cand:focus-visible{outline:3px solid var(--acc)}
+.warn{color:var(--warn)}
+.mut{color:var(--mut)}
+pre{white-space:pre-wrap;word-break:break-all;margin:2px 0}
+input,select,textarea{font:inherit;padding:4px 6px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:4px}
+.badge{font-size:12px;border:1px solid var(--line);border-radius:10px;padding:0 6px;margin-left:6px}
+.h2s{font-size:15px}

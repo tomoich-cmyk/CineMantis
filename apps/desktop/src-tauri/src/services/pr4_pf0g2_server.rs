@@ -860,6 +860,9 @@ fn read_req(s: &mut TcpStream) -> Option<Req> {
     Some(Req { method, path, query, headers, body })
 }
 
+/// narrowest CSP: inline script/style なし（UI は同一 origin の app.js / app.css）、画像・font・frame・form・base なし、接続は同一 origin のみ
+pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
 fn respond(s: &mut TcpStream, status: u16, ctype: &str, body: &[u8]) {
     let reason = match status {
         200 => "OK",
@@ -869,7 +872,7 @@ fn respond(s: &mut TcpStream, status: u16, ctype: &str, body: &[u8]) {
         409 => "Conflict",
         _ => "Error",
     };
-    let head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'none'; connect-src 'self'\r\nConnection: close\r\n\r\n", body.len());
+    let head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: {CSP}\r\nConnection: close\r\n\r\n", body.len());
     let _ = s.write_all(head.as_bytes());
     let _ = s.write_all(body);
 }
@@ -888,6 +891,13 @@ fn serve_one(api: &mut Api, mut s: TcpStream, addr: &str, token: &str) {
         }
         let html = UI_FILES.iter().find(|(n, _)| *n == "index.html").map(|(_, b)| *b).unwrap_or("");
         return respond(&mut s, 200, "text/html; charset=utf-8", html.as_bytes());
+    }
+    // 静的 asset（pin 済み・secret を含まない）。token なしで配る（<script src> は header を付けられない）。Host / Origin 検査は上で済み
+    if req.method == "GET" && (req.path == "/app.css" || req.path == "/app.js") {
+        let name = &req.path[1..];
+        let ctype = if name.ends_with(".css") { "text/css; charset=utf-8" } else { "text/javascript; charset=utf-8" };
+        let body = UI_FILES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b).unwrap_or("");
+        return respond(&mut s, 200, ctype, body.as_bytes());
     }
     if req.headers.get("x-review-token").map(String::as_str) != Some(token) {
         return respond(&mut s, 403, "application/json", r#"{"reason_code":"forbidden","message":"許可されていません。"}"#.as_bytes());

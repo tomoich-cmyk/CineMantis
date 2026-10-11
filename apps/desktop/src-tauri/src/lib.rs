@@ -5,6 +5,9 @@ mod ffmpeg_path;
 mod models;
 mod services;
 
+/// PF0G3 の reviewer 実行ファイル（examples/pf0g3_reviewer.rs）用の公開口。製品の run() からは使わない
+pub use services::pr4_pf0g3_reviewer as pf0g3_reviewer;
+
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -21,6 +21,7 @@ pub mod prematch_inputs;
 pub mod pr4_blind_gt;
 pub mod pr4_pf0g2;
 pub mod pr4_pf0g2_server;
+pub mod pr4_pf0g3_reviewer;
 #[cfg(test)]
 mod pr4_pf0g2_tests;
 pub mod pr4_diagnostics;

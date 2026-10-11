@@ -42,3 +42,14 @@
 
 - （統合 CLOSED）D5: N/A。`machine_freeze_anchor_commitment`（PF0G freeze-domain pin）は PF0H の authoritative_membership_commitment / final manifest canonical SHA / review seal SHA とは別 commitment domain で、parity 関係は不要。PF0I の binding 正式 3 点は変えない。
 - （統合 CLOSED）M1: 候補提示順を seed = SHA256(review_unit_id‖build_secret) の決定論 shuffle に変更（token lexical 順を廃止）。M2: build 時に build_secret から build_secret_commitment を再導出し pin と exact-match、不一致は出力前に fail closed。
+
+## PF0G3（実ブラウザ・CSP・reviewer binary）の結果
+- （CLOSED）D1 CSP: `unsafe-inline` を除去（`index.html` / `app.css` / `app.js` に分割、`default-src 'none'` ベース）。実ブラウザで inline / data: / 外部がブロックされることを確認。
+- （CLOSED）D2 実ブラウザ E2E・a11y（keyboard・role=radio・aria・375px）: 85/85 PASS（`docs/pf0g3_evidence/`）。poster は仕様どおり表示しない（`img-src 'none'`）。
+- （CLOSED）D3 reviewer bin: `examples/pf0g3_reviewer.rs` + `pr4_pf0g3_reviewer.rs`。env のみ・fail closed・実 `SystemProcessLister` を Windows で確認。
+| # | 内容 | 重大度 | 送り先 |
+|---|---|---|---|
+| G3-1 | sealed 後の `/api/next` は 410 ではなく `200 {done:true, unit:null}`（lease も event も作らない。`events.jsonl` byte 同一を確認）。UI の挙動に影響なし | LOW | — |
+| G3-2 | built-in browser pane は Chromium 152（Electron）のみで確認。Firefox / Safari は未確認。a11y は DOM・keyboard・aria の自動検査まで（スクリーンリーダー実機は未実施） | LOW | PF0G4 運用確認 |
+| G3-3 | reviewer 起動の運用 runbook（env の設定手順・ledger の init 手順・token の受け渡し）は未文書化。binary は init 済み ledger（`Store::open`）を前提とし、init は operator 側 | LOW（docs） | PF0G4 |
+| G3-4 | `/app.js` `/app.css` は token なしで配る（`<script src>` は header を付けられないため）。pin 済み・secret なし・Host/Origin 検査あり・loopback のみ。本体 `cinemantis.exe` 稼働中は reviewer 自体が起動しない | LOW（受容） | — |

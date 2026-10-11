@@ -377,7 +377,11 @@ pub fn build(input: &PackagerInput, reviewer_dir: &Path, sealed_dir: &Path) -> R
 // ─── UI package の pin ─────────────────────────────────────────────────────────────────────
 
 /// reviewer UI（静的ファイル）。`ui_package_sha256` は名前順の `name:sha256\n` の SHA
-pub const UI_FILES: [(&str, &str); 1] = [("index.html", include_str!("pr4_pf0g2_ui/index.html"))];
+pub const UI_FILES: [(&str, &str); 3] = [
+    ("index.html", include_str!("pr4_pf0g2_ui/index.html")),
+    ("app.css", include_str!("pr4_pf0g2_ui/app.css")),
+    ("app.js", include_str!("pr4_pf0g2_ui/app.js")),
+];
 
 pub fn ui_package_sha256() -> String {
     let mut files: Vec<(&str, String)> = UI_FILES.iter().map(|(n, b)| (*n, hex_sha(b.as_bytes()))).collect();
@@ -469,6 +473,11 @@ pub const MAIN_APP_IMAGES: [&str; 2] = ["cinemantis.exe", "cinemantis"];
 pub struct ProcessProbe<L: ProcessLister> {
     pub lister: L,
 }
+impl<L: ProcessLister> ProcessProbe<L> {
+    pub fn main_app_running_checked(&self) -> bool {
+        MainAppProbe::main_app_running(self)
+    }
+}
 impl<L: ProcessLister> MainAppProbe for ProcessProbe<L> {
     fn main_app_running(&self) -> bool {
         match self.lister.image_names() {
@@ -479,11 +488,14 @@ impl<L: ProcessLister> MainAppProbe for ProcessProbe<L> {
 }
 
 /// OS の process 一覧（Windows: `tasklist`、それ以外: `ps -A -o comm=`）
+#[derive(Clone, Copy, Debug)]
 pub struct SystemProcessLister;
 impl ProcessLister for SystemProcessLister {
     fn image_names(&self) -> Result<Vec<String>, String> {
         let out = if cfg!(windows) {
-            std::process::Command::new("tasklist").args(["/FO", "CSV", "/NH"]).output()
+            // PATH 上の同名 exe に差し替えられないよう、System32 の絶対 path を使う
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+            std::process::Command::new(std::path::Path::new(&root).join("System32").join("tasklist.exe")).args(["/FO", "CSV", "/NH"]).output()
         } else {
             std::process::Command::new("ps").args(["-A", "-o", "comm="]).output()
         }

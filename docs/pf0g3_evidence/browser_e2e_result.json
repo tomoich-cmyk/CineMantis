@@ -1,0 +1,143 @@
+{
+  "fixture_identity": {
+    "build_id": "synthetic",
+    "unit_count": 6,
+    "manifest_sha256": "4a41e932b572bb36aa55a3f76ce654ec0de0653c2e04cabe970f977089cd3a10",
+    "ui_package_sha256": "82d4ef450cabbe4d367a192993b396d08f758bcab15b4a208a2a5f0b6b535f1c",
+    "ui_files": [
+      {
+        "name": "index.html",
+        "sha256": "18c1466fd183c11de75fdde3af967f35fbc553eb686ade13c45290bd59dfc78c"
+      },
+      {
+        "name": "app.css",
+        "sha256": "3c36fc7fcd21710b48beac4fb7b53c188f3e53785a92475f0d570fd0f82c63bd"
+      },
+      {
+        "name": "app.js",
+        "sha256": "1f68ae34857b38b290f4b21003871912327518d64b61f0cdc3db7b56660bb8e5"
+      }
+    ],
+    "csp": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "candidate_order_per_unit(package order = shown order)": {
+      "ru_66jqg5afwhjuxjnfto6apnrtzu": [
+        "ct_okqtgggexqmwysbxki5q",
+        "ct_h3x5vvsilp6457uhc2jy",
+        "ct_dqavk7356hd4b5szfz3i"
+      ],
+      "ru_hgj7pdrndsr6xzurrz3xign6ea": [
+        "ct_4kz5w7wjz5irnna6jdys",
+        "ct_6hgsp57shuqe7kcfxj3y",
+        "ct_m6luif3zjbndnvzqlszf",
+        "ct_ecf7jmuwu2xh64xp5pny"
+      ],
+      "ru_jiztsbsxiw4m65tl3o7a3ccmb4": [],
+      "ru_ldfm6gcjhlpmt64uu63bmgyjw4": [],
+      "ru_s3e5al7qia4aj4s74qv2ucovuy": [
+        "ct_tz26wruq6khqejpp6scw",
+        "ct_eqmbvj3x3jziqly4oeko"
+      ],
+      "ru_zlcd6rc6xjdthhqygk2f5qx6w4": [
+        "ct_m44dbiknvi3nkdolumz6",
+        "ct_h56wxoibbpcchoutchfs",
+        "ct_omsf4soswplo2x7t6ous"
+      ]
+    },
+    "note": "synthetic projection; the same 6 units / tokens / order were produced by 4 independent fixture builds (seeded shuffle is deterministic). per-launch token, URL and key literals are intentionally not recorded."
+  },
+  "phase1_unsealed_browser_e2e": {
+    "engine": "Chrome/152.0.7977.130 (Electron shell of the Claude desktop app 'Claude/2.31226.1', built-in browser pane), Windows 11 10.0.26200",
+    "driver": "docs/pf0g3_evidence/browser_e2e.js (DOM clicks + KeyboardEvent inside the page; fetch recorder)",
+    "viewport": "375x812 (mobile emulation), then reset to desktop",
+    "server": "cargo test --lib pf0g3::browser_fixture_server -- --ignored (CM_PF0G3_FIXTURE_STUB_PROBE=1: main cinemantis.exe was running on the dev machine, the real probe correctly refused, see reviewer_binary evidence)",
+    "total": 85,
+    "passed": 85,
+    "failed": [],
+    "csp_violation_events": 5,
+    "csp_violation_events_note": "exactly the 5 deliberate probes (inline script, data: script, inline style attr, image, cross-origin fetch)",
+    "js_errors": [],
+    "decisions_driven": [
+      "confirm(keyboard Space on role=radio)",
+      "none(after >=1 search)",
+      "pick_other(search->preview->confirm)",
+      "defer need_external_lookup",
+      "defer other_with_note",
+      "defer need_external_lookup",
+      "second_pass_confirm x3",
+      "second_pass_none"
+    ],
+    "http_calls": [
+      "/api/session/start 400 (deliberate: no attestation)",
+      "/api/session/start 200",
+      "/api/next",
+      "/api/submit",
+      "/api/search",
+      "/api/preview"
+    ],
+    "submit_bodies": [
+      {
+        "decision": "confirm",
+        "candidate_token": "<opaque>",
+        "tmdb_id": null,
+        "media_type": null
+      },
+      {
+        "decision": "none"
+      },
+      {
+        "decision": "pick_other",
+        "tmdb_id": 880011,
+        "media_type": "movie",
+        "candidate_token": null
+      },
+      {
+        "decision": "defer",
+        "defer_reason": "need_external_lookup"
+      },
+      {
+        "decision": "defer",
+        "defer_reason": "other_with_note"
+      }
+    ],
+    "resource_urls_seen": [
+      "/app.css",
+      "/app.js",
+      "/api/*",
+      "(blocked probes) data:text/javascript, 127.0.0.1:1/blocked.png"
+    ],
+    "network": "only the loopback reviewer origin; TMDB fake loopback received 4 requests, all /3/search|detail (api_key redacted)",
+    "checks": [
+      "csp inline script/data script/inline style/cross-origin fetch+image blocked",
+      "csp header without unsafe-*",
+      "stylesheet from /app.css applied",
+      "layout fits 375px (no horizontal scroll)",
+      "start refused without attestation; role=alert aria-live",
+      "order==package order for every unit (incl. repeats)",
+      "candidate key set == allowlist (candidate_token,title,original_title,year,overview,poster_path,original_language)",
+      "no forbidden key in /api/next (tmdb_id, media_type, c1, c2, work_id, rank, score, ...)",
+      "no build_secret/unblind/audit/canary/key literal in any response or rendered text",
+      "confirm emits candidate_token only",
+      "pick_other disabled until preview verified; carries tmdb_id+media_type, no token",
+      "none disabled until >=1 search",
+      "defer carries reason, no target",
+      "keyboard: candidate focusable, Space selects, aria-checked",
+      "no img/iframe/object/embed in DOM; poster never fetched",
+      "no JS error"
+    ]
+  },
+  "phase2_sealed_browser": {
+    "state": "sealed (operator sealed in-process after the browser phase; server relaunched on the sealed ledger)",
+    "results": {
+      "GET /api/progress": 200,
+      "POST /api/session/start": "410 sealed",
+      "POST /api/submit": "410 sealed",
+      "POST /api/search (stale lease)": "409 lease_invalid",
+      "POST /api/next": "200 {done:true, unit:null} (no lease, no event)",
+      "POST /api/seal|unblind|errata": "404",
+      "GET /unblind_map.json|/build_secret.json|/manifest.json": "404",
+      "bad token": "403",
+      "UI start": "message: レビューは封印済みです。 review section stays hidden"
+    },
+    "events_jsonl_byte_identical_before_after_phase2": true
+  }
+}

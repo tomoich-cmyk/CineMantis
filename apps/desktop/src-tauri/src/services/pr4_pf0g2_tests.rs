@@ -594,7 +594,7 @@ fn a8_leak_scan_is_deterministic_and_stops_on_any_leak() {
 
 #[test]
 fn ui_files_do_not_mention_machine_or_internal_terms() {
-    let ui = UI_FILES[0].1.to_lowercase();
+    let ui = UI_FILES.iter().map(|(_, b)| b.to_lowercase()).collect::<Vec<_>>().join(" ");
     for banned in ["display_title", "work_id", "candidate_count", "unit_salt", "overlap_digest", "build_secret", "unblind", "evaluation_unit_key", "confidence", "reasons", "rank", "score"] {
         assert!(!ui.contains(banned), "{banned}");
     }
@@ -1346,3 +1346,5 @@ fn reviewer_side_sources_do_not_touch_machine_types_the_production_db_or_value_p
 // D8: PF0G2 → PF0H1 → PF0I の synthetic E2E。private な fixture を使うので、この test module の child として登録する（統合 branch 専用）
 #[path = "pr4_pf0i_e2e_tests.rs"]
 mod pf0i_e2e;
+#[path = "pr4_pf0g3_tests.rs"]
+mod pf0g3;
