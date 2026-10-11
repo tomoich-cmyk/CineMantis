@@ -1,8 +1,8 @@
 {
   "document": "RELEASE_PROVENANCE_1.0.0_RC",
-  "generated_by": "REL-R5 (documents only; no code/build/commit performed)",
+  "generated_by": "REL-R5 / R9 provenance update (documents only; no code/build performed)",
   "generated_on": "2026-10-11",
-  "status": "RC candidate (not released; source committed locally as commit_sha below; not pushed/merged)",
+  "status": "RC candidate (not released; source committed locally; not pushed/merged)",
   "app": {
     "name": "CineMantis",
     "version": "1.0.0",
@@ -12,18 +12,41 @@
   "source": {
     "baseline_commit": "69d150d633ad1097319e27545962d989a92aebd9",
     "commit_state": "committed",
-    "commit_sha": "e4f173e956b17f73b7a011c03727a0a991ffe444",
-    "commit_note": "RC source commit (parent = baseline_commit; 21 files: 12 modified + 9 new). RC artifacts R4d were built from the identical uncommitted tree; post-commit cargo test --locked = 635 passed / 0 failed / 14 ignored, release_guards 8/8. Documentation commit SHA is intentionally not recorded here (self-reference).",
-    "source_of_truth_worktree": "rel-r4-version-fix (branch claude/rel-r4-version-fix)",
+    "commit_sha": "0cf98e23d786a75c7173e0aec9058496d8079558",
+    "commit_note": "RC source commits on baseline: e4f173e956b17f73b7a011c03727a0a991ffe444 (RC source, 21 files) -> ecbd04c1b395b23951e3b931bc6a80a559e4305a (RC docs) -> 0cf98e23d786a75c7173e0aec9058496d8079558 (REL-R9 hygiene fix: GT review tab removed from production UI, NAS default root removed / fail-closed; 8 files). commit_sha = the source commit the final R9 artifacts correspond to. Post-commit cargo test --locked on commit_sha = 643 passed / 0 failed / 14 ignored, release_guards 11/11. Documentation commit SHA is intentionally not recorded here (self-reference).",
+    "source_of_truth_worktree": "rel-r9-817874 (branch claude/rel-r9-817874)",
     "predecessor_worktree": "rel-r1abc-169c10 (READ ONLY; R1ABC integration, 17 of 21 files byte-identical to R4d)",
     "cargo_lock_sha256": "9567eb62ca99485b3fd96a322d77ca2022c4c33baa4f8da361f0ef1d5d108341",
     "cargo_lock_note": "identical in R1ABC / R2 / R2A / R4d worktrees (recomputed 2026-10-11)",
     "release_profile": "opt-level = 2 only (unchanged from 69d150d; no lto/strip/panic=abort)"
   },
   "tests": {
-    "rel_r1abc_final": { "passed": 631, "failed": 0, "ignored": 14, "command": "cargo test --locked", "note": "R1ABC report table lists 628 before Appendix A added I11/I12/I12b; 631 confirmed by R2A report" },
-    "r4d_final": { "passed": 635, "failed": 0, "ignored": 14, "command": "cargo test --locked", "release_guards_passed": 8, "source": "REL_R4_BLOCKERS_RESOLUTION_REPORT.md (R4d section); not re-run in R5" },
-    "progression": "R1ABC 631 -> R4a 632 -> R4c 634 -> R4d 635"
+    "rel_r1abc_final": {
+      "passed": 631,
+      "failed": 0,
+      "ignored": 14,
+      "command": "cargo test --locked",
+      "note": "R1ABC report table lists 628 before Appendix A added I11/I12/I12b; 631 confirmed by R2A report"
+    },
+    "r4d_final": {
+      "passed": 635,
+      "failed": 0,
+      "ignored": 14,
+      "command": "cargo test --locked",
+      "release_guards_passed": 8,
+      "source": "REL_R4_BLOCKERS_RESOLUTION_REPORT.md (R4d section); not re-run in R5",
+      "superseded_by": "r9_final"
+    },
+    "progression": "R1ABC 631 -> R4a 632 -> R4c 634 -> R4d 635 -> R9 643",
+    "r9_final": {
+      "passed": 643,
+      "failed": 0,
+      "ignored": 14,
+      "command": "cargo test --locked",
+      "release_guards_passed": 11,
+      "release_guards_total": 11,
+      "measured_on": "commit 0cf98e23d786a75c7173e0aec9058496d8079558 (post-commit run)"
+    }
   },
   "toolchain": {
     "tauri_cli": "2.10.1",
@@ -74,55 +97,57 @@
       "post_check": "scan exe/NSIS/MSI/extracted contents (ASCII + UTF-16LE, case-insensitive) for C:\\Users\\tyama\\, tyama, worktrees, .claude, rel-r4 = 0 hits; secret patterns = 0 hits (R4d report)"
     }
   },
-  "artifacts_final_R4d": {
-    "authority": "R4d is the only final artifact set. R4/R4b/R4c/R2A hashes below are superseded.",
-    "recomputed_2026_10_11": true,
-    "exe": {
-      "path": "rel-r4-version-fix/apps/desktop/src-tauri/target/release/cinemantis.exe",
-      "size_bytes": 21505024,
-      "sha256": "D6CFA99D1D545BA820166DCAFB587BD8AACCCCEAF6FE6F5CDFD5AAC7763FAAA3"
-    },
-    "nsis": {
-      "path": "rel-r4-version-fix/apps/desktop/src-tauri/target/release/bundle/nsis/CineMantis_1.0.0_x64-setup.exe",
-      "size_bytes": 5346337,
-      "sha256": "54A73176874B54977AE205A658051586A132AED5AD047A81C110C11AF367A76A"
-    },
-    "msi": {
-      "path": "rel-r4-version-fix/apps/desktop/src-tauri/target/release/bundle/msi/CineMantis_1.0.0_x64_en-US.msi",
-      "size_bytes": 7626752,
-      "sha256": "FB75B3B76B5895E461309E5CC84F54F1D691B282348325F367F93439BFFFAFFF"
-    },
-    "staging_copy": {
-      "path": "C:\\Users\\Public\\CineMantisRC-Staging\\CineMantis_1.0.0_R4d_x64-setup.exe",
-      "size_bytes": 5346337,
-      "sha256": "54A73176874B54977AE205A658051586A132AED5AD047A81C110C11AF367A76A",
-      "matches_nsis_build_output": true
-    },
-    "note": "NSIS/MSI embed a copy of the exe with 3 bytes patched by Tauri (bundle type); that embedded exe's hash differs from cinemantis.exe by design (not recomputed in R5)."
-  },
   "superseded_artifacts_do_not_ship": {
-    "R2A": { "nsis": "82BE3BA1C9D4E63FDA8AA422E988FBCF70108B3825052FEDBEE9373786AE93FD", "exe": "975EA877F4A0F5AE8F725570077B7CCBD35FA20434C3B9CE1F1DDB56B8249FEE", "why": "Settings screen showed 0.1.0" },
-    "R4": { "nsis": "34244BAE658028B6BE338A51FFE8EE08BFD0816E023ADF4E8B8E1D4E1C56821A", "why": "uninstall could delete APPDATA (standard checkbox); F12 not disabled" },
-    "R4b": { "nsis": "956ECC32C393BF26C965AB80CD8120E5107EB244A2EAAC20A1CE0D80E6782177", "why": "hook-based approach, replaced by custom template" },
-    "R4c": { "nsis": "2E4EA6DC0B2CFED28F8C3D434F3B4808844B12AAA9A3B387465755639ED2E568", "exe": "CBB1C9898D204AFE30747CCBAB37BCEEE1DC60D7C5F06099610ABE018EA51B6C", "why": "F12 opened the Edge DevTools prompt" },
+    "R2A": {
+      "nsis": "82BE3BA1C9D4E63FDA8AA422E988FBCF70108B3825052FEDBEE9373786AE93FD",
+      "exe": "975EA877F4A0F5AE8F725570077B7CCBD35FA20434C3B9CE1F1DDB56B8249FEE",
+      "why": "Settings screen showed 0.1.0"
+    },
+    "R4": {
+      "nsis": "34244BAE658028B6BE338A51FFE8EE08BFD0816E023ADF4E8B8E1D4E1C56821A",
+      "why": "uninstall could delete APPDATA (standard checkbox); F12 not disabled"
+    },
+    "R4b": {
+      "nsis": "956ECC32C393BF26C965AB80CD8120E5107EB244A2EAAC20A1CE0D80E6782177",
+      "why": "hook-based approach, replaced by custom template"
+    },
+    "R4c": {
+      "nsis": "2E4EA6DC0B2CFED28F8C3D434F3B4808844B12AAA9A3B387465755639ED2E568",
+      "exe": "CBB1C9898D204AFE30747CCBAB37BCEEE1DC60D7C5F06099610ABE018EA51B6C",
+      "why": "F12 opened the Edge DevTools prompt"
+    },
+    "R4d": {
+      "exe": "D6CFA99D1D545BA820166DCAFB587BD8AACCCCEAF6FE6F5CDFD5AAC7763FAAA3",
+      "nsis": "54A73176874B54977AE205A658051586A132AED5AD047A81C110C11AF367A76A",
+      "msi": "FB75B3B76B5895E461309E5CC84F54F1D691B282348325F367F93439BFFFAFFF",
+      "why": "superseded by R9 (GT review tab visible in production UI; NAS default root held an author-specific host name)"
+    },
     "location": "C:\\Users\\Public\\CineMantisRC-Staging\\ (old files remain; R4/R4b/R4c/R2A hashes recomputed and match the reports)"
   },
-  "signing": { "status": "unsigned", "note": "no certificate; SmartScreen warning possible. Publisher shown as 'cinemantis' (Cargo.toml authors empty)" },
+  "signing": {
+    "status": "unsigned",
+    "note": "no certificate; SmartScreen warning possible. Publisher shown as 'cinemantis' (Cargo.toml authors empty)"
+  },
   "gui_smoke": {
     "status": "PASS",
-    "build": "R4d",
-    "evidence": "Authoritative record: REL_R4D_GUI_SMOKE_RESULT.md (Human-observed manual smoke on the staged R4d installer, dedicated Windows user CineMantisRC; the Human's hands-on operation and screenshot report is adopted as the audit record; the R5 session did not observe the GUI directly). rel-r4-efae4c/REL_R4_RC_GUI_SMOKE_REPORT.md is an earlier HOLD and is superseded.",
+    "build": "R9",
+    "evidence": "Authoritative record: REL_R9_GUI_SMOKE_RESULT.md (Human-observed manual smoke on the staged R9 installer, dedicated Windows user CineMantisRC; the Human's hands-on operation and screenshot report is adopted as the audit record; no session observed the GUI directly). REL_R4D_GUI_SMOKE_RESULT.md is the earlier R4d record (historical). rel-r4-efae4c/REL_R4_RC_GUI_SMOKE_REPORT.md is an earlier HOLD and is superseded.",
     "items": {
+      "gt_review_tab_absent_two_tabs_only": "PASS",
+      "settings_nas_root_unconfigured_message": "PASS",
+      "nas_screen_warning_after_folder_selected": "PASS",
+      "nas_execute_button_disabled": "PASS",
       "about_version_1_0_0": "PASS",
       "settings_version_1_0_0": "PASS",
-      "major_screens": "PASS",
-      "invalid_tmdb_key": "PASS (401 shown, no crash)",
-      "delete_app_data_checkbox_absent": "PASS",
-      "uninstall_keeps_appdata": "PASS",
-      "reinstall_starts": "PASS",
       "f12_with_app_focused": "PASS (no action)"
     },
-    "not_covered": ["MSI install on a real machine (needs admin)", "startup MessageBox / startup.log on a real failure", "restore flow via UI"]
+    "not_covered": [
+      "MSI install on a real machine (needs admin)",
+      "startup MessageBox / startup.log on a real failure",
+      "restore flow via UI"
+    ],
+    "known_ux_low": "NAS-unconfigured warning appears only after a source folder is selected (execute is disabled regardless); post-1.0.0 improvement",
+    "r4d_items_not_rerun_on_r9": "uninstall keeps APPDATA / reinstall starts / major screens / invalid TMDb key were verified on R4d; the R9 NSIS uses the identical patched template (SHA 91792F3F...ACC8) but uninstall/reinstall was not re-run on R9"
   },
   "real_db_copy_migration": {
     "report": "REL_R3_REAL_DB_COPY_MIGRATION_DRYRUN_REPORT.md",
@@ -132,14 +157,52 @@
     "rows_changed": 0,
     "new_fk_violations": 0,
     "production_db_untouched": true,
-    "tested_on": "debug-build test harness against a byte copy (not the final R4d exe)"
+    "tested_on": "debug-build test harness against a byte copy (69d150d + 19-file integration state; not the final R9 exe)"
   },
-  "fk_audit": { "report": "REL_R3A_EXISTING_FK_INTEGRITY_AUDIT.md", "classification": "LOW", "violating_rows": 6, "caused_by_migration": false },
+  "fk_audit": {
+    "report": "REL_R3A_EXISTING_FK_INTEGRITY_AUDIT.md",
+    "classification": "LOW",
+    "violating_rows": 6,
+    "caused_by_migration": false
+  },
   "scope_guards": {
     "matcher_services_changed": false,
     "pr4_final": "NOT_RUN",
     "jev": "disabled",
     "migration_015": "unwired, not applied",
     "production_db_touched_by_R5": false
+  },
+  "artifacts_final_R9": {
+    "authority": "R9 is the only final artifact set. R4d/R4c/R4b/R4/R2A hashes are superseded.",
+    "source_commit": "0cf98e23d786a75c7173e0aec9058496d8079558",
+    "exe": {
+      "path": "rel-r9-817874/apps/desktop/src-tauri/target/release/cinemantis.exe",
+      "size_bytes": 21552640,
+      "sha256": "AC608EACA539DCC825C4B44119EB69CD350153919D1CBCCA92F8C1481F94DBCA"
+    },
+    "nsis": {
+      "path": "rel-r9-817874/apps/desktop/src-tauri/target/release/bundle/nsis/CineMantis_1.0.0_x64-setup.exe",
+      "size_bytes": 5337569,
+      "sha256": "6737768BE8F4644CCAB43FBBB0B59D4EF7FB2FF1F8EE00D81A991B1311015DB3"
+    },
+    "msi": {
+      "path": "rel-r9-817874/apps/desktop/src-tauri/target/release/bundle/msi/CineMantis_1.0.0_x64_en-US.msi",
+      "size_bytes": 7639040,
+      "sha256": "D3C4AC7C7D1145864F31AEA89D827965EDB2937A8CD91BEEC2B4AC4DC914414F"
+    },
+    "staging_copy": {
+      "path": "C:\\Users\\Public\\CineMantisRC-Staging\\CineMantis_1.0.0_R9_x64-setup.exe",
+      "size_bytes": 5337569,
+      "sha256": "6737768BE8F4644CCAB43FBBB0B59D4EF7FB2FF1F8EE00D81A991B1311015DB3",
+      "matches_nsis_build_output": true
+    },
+    "scan": "exe/NSIS/MSI raw + extracted: C:\\Users\\tyama\\, tyama, worktrees, .claude, rel-r9, rel-r4, TYNAS = 0 hits (external audit record; not part of this repository)",
+    "note": "Built from the R9 working tree before commit; the 8 changed files were committed unchanged as commit_sha. NSIS/MSI embed a copy of the exe patched by Tauri (bundle type); that embedded exe differs from cinemantis.exe by design."
+  },
+  "features": {
+    "jev": "code present / runtime disabled by default (requires CINEMANTIS_JEV_SHADOW, CINEMANTIS_JEV_MODEL and TYPESAFE_API_KEY; no UI path)",
+    "gt_review": "removed from production UI navigation; backend and 8 Tauri commands retained",
+    "nas_root": "no default; unconfigured / blank / relative = fail-closed before any file operation",
+    "migration_015": "unwired, not applied, deferred (separate Gate; foreign_keys=ON required when wired)"
   }
 }

@@ -21,7 +21,7 @@
 
 ## D. MSI は build 成功、管理者権限での実機 install は未実施
 - MSI は生成済み（SHA は provenance 参照）。内容は cab 展開で exe 1 本と確認したのみ。
-- 実機の install / uninstall は管理者権限が必要なため未実施。**推奨配布は NSIS（currentUser 導入、R4d 実機確認済み）。** MSI を配布する場合は別途検証。
+- 実機の install / uninstall は管理者権限が必要なため未実施。**推奨配布は NSIS（currentUser 導入、R4d / R9 の実機確認あり）。** MSI を配布する場合は別途検証。
 
 ## E. startup.log の日本語文字化け（**未検証**）
 - 事実（コードで確認）: `startup.log` はアプリが UTF-8（BOM なし）のバイト列で書く（`startup.rs` の `write_all(line.as_bytes())`）。
@@ -40,4 +40,12 @@
 - 実署名・MSI 実機に加え、**アプリ内 restore フローの GUI 経由での確認**と**起動失敗ダイアログの実機確認**は未実施。
 - identifier `dev.cinemantis.app` の末尾 `.app` が macOS 向けの警告を出す（Windows 配布に影響なし。変更はデータフォルダ移行を伴うため行わない）。
 - release profile は `opt-level = 2` のみ（LTO・strip なし）。exe は約 20.5 MiB。
-- 実データコピーによる更新テスト（R3）は debug ビルドのテストハーネスで実施した。最終 R4d の exe を本番相当データのコピーで起動する確認は行っていない（R4d の GUI 確認は別 Windows ユーザー `CineMantisRC` の新規プロファイル。`R4-SMOKE.txt` より）。
+- 実データコピーによる更新テスト（R3）は debug ビルドのテストハーネスで実施した。最終 R9 の exe を本番相当データのコピーで起動する確認は行っていない（R9 の GUI 確認は別 Windows ユーザー `CineMantisRC` の新規プロファイル）。
+
+## H. REL-R9 の変更に伴う注意
+- **NAS 振り分け先は既定値なし。** 設定画面で絶対パス（`\\server\share\Movie` 形式、またはドライブ絶対パス）を保存するまで、NAS 振り分けは実行できません（backend が fail-closed。実行ボタンも無効）。
+- **UX（LOW、1.0.0 後の改善）:** 「保存先を設定してください」の警告は、取り込み元フォルダを選択した後にのみ表示されます（フォルダ選択前は表示されません。実行は常に不可）。
+- 保存済みの NAS 振り分け先が相対パスなど不正な値だった場合は、アップグレード後に「未設定」扱いになります（意図的）。
+- 「GTレビュー」は production UI から除去（backend と Tauri command 8 個は保持）。未参照のデッドコード（`GroundTruthReviewPanel.tsx`）が残ります。
+- `plan_nas_sort` の fail-closed は、直接のユニットテストがありません（`execute_nas_sort_impl` 側の fail-closed はテストで証明済み）。
+- **uninstall / reinstall のデータ保持は R4d で実機確認。** R9 の NSIS は同一 template（SHA 一致）ですが、R9 での uninstall/reinstall の実機確認は行っていません。
