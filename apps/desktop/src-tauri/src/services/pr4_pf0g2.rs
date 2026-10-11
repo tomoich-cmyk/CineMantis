@@ -61,6 +61,8 @@ pub struct PackagerInput {
     /// PF0H から受け取る値（PF0I が exact-match する）。ここでは計算せず、sealed handoff に載せるだけ
     pub authoritative_membership_commitment: String,
     pub pf0h_final_manifest_sha256: String,
+    /// audit 側が pin した `build_secret_commitment`。build_secret から再導出した値と exact-match しなければ何も出力しない（M2）
+    pub pinned_build_secret_commitment: String,
 }
 
 impl std::fmt::Debug for PackagerInput {
@@ -242,6 +244,9 @@ pub fn build(input: &PackagerInput, reviewer_dir: &Path, sealed_dir: &Path) -> R
     if !is_hex64(secret) {
         return invalid("build_secret は 64 桁 hex");
     }
+    if !is_hex64(&input.pinned_build_secret_commitment) || build_secret_commitment(secret) != input.pinned_build_secret_commitment {
+        return stop("build_secret_commitment が pin と一致しません（出力前に fail closed）");
+    }
     for h in [&input.machine_freeze_commitment_sha256, &input.pf0e_ledger_head_sha256, &input.authoritative_membership_commitment, &input.pf0h_final_manifest_sha256] {
         if !is_hex64(h) {
             return invalid("入力の commitment が 64 桁 hex ではありません");
@@ -287,8 +292,10 @@ pub fn build(input: &PackagerInput, reviewer_dir: &Path, sealed_dir: &Path) -> R
             });
             entries.push(json!({"candidate_token": token, "media_type": c.media_type, "tmdb_id": c.tmdb_id}));
         }
-        // 提示順: (media_type, tmdb_id) 昇順の frozen 順をそのまま使うと tmdb_id の古さで偏るので、token の昇順（HMAC 由来で identity と無相関）に並べ替える
-        candidates.sort_by(|a, b| a.candidate_token.cmp(&b.candidate_token));
+        // 提示順（契約 §3.2）: seed = SHA256(review_unit_id ‖ build_secret) による決定論 shuffle。rank / score / source は入力に無い。
+        // 各 candidate の sort key = SHA256(seed ‖ "|cand|" ‖ token)。token の lexical 順ではない
+        let seed = hex_sha(format!("{unit_id}{secret}").as_bytes());
+        candidates.sort_by_cached_key(|c| (hex_sha(format!("{seed}|cand|{}", c.candidate_token).as_bytes()), c.candidate_token.clone()));
         digests.sort();
         let unit = ReviewUnit {
             schema_version: UNIT_SCHEMA.into(),

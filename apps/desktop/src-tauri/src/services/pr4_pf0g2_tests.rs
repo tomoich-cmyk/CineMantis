@@ -85,6 +85,7 @@ fn input(n: usize) -> PackagerInput {
         built_at_utc: t(1),
         authoritative_membership_commitment: h("authoritative-membership"),
         pf0h_final_manifest_sha256: h("pf0h-final-manifest"),
+        pinned_build_secret_commitment: build_secret_commitment(SECRET),
     }
 }
 
@@ -457,14 +458,69 @@ fn packaging_is_deterministic_independent_of_input_order_and_candidate_order_is_
         let p = e.unwrap().path();
         assert_eq!(std::fs::read(&p).unwrap(), std::fs::read(r2.join("units").join(p.file_name().unwrap())).unwrap());
     }
-    // candidate の並びは (media_type,tmdb_id) 昇順ではなく token 順（rank は入力に存在しない）
+    // candidate の並びは (media_type,tmdb_id) 昇順でも token の lexical 順でもない（seeded shuffle・M1）
     let art = Artifact::load(&r1).unwrap();
-    assert!(art.units.values().all(|u| u.candidates.windows(2).all(|w| w[0].candidate_token < w[1].candidate_token)));
+    assert!(art.units.values().any(|u| u.candidates.len() >= 3 && u.candidates.windows(2).any(|w| w[0].candidate_token > w[1].candidate_token)), "lexical sort ではない");
     assert!(art.units.values().any(|u| u.candidates.len() >= 3));
     // 提示順は work id 順ではない
     let mut by_pos: Vec<(i64, String)> = a.units.iter().map(|u| (art.units[&derive_review_unit_id(SECRET, &u.evaluation_unit_key).unwrap()].position, u.evaluation_unit_key.clone())).collect();
     by_pos.sort();
     assert_ne!(by_pos.iter().map(|x| x.1.clone()).collect::<Vec<_>>(), a.units.iter().map(|u| u.evaluation_unit_key.clone()).collect::<Vec<_>>());
+}
+
+fn order_of(rev: &std::path::Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    Artifact::load(rev).unwrap().units.iter().map(|(k, u)| (k.clone(), u.candidates.iter().map(|c| c.candidate_token.clone()).collect())).collect()
+}
+
+#[test]
+fn m1_candidate_order_is_a_seeded_deterministic_permutation() {
+    let env = Env::new("m1");
+    let a = input(40);
+    build(&a, &env.p("r1"), &env.p("s1")).unwrap();
+    build(&a, &env.p("r2"), &env.p("s2")).unwrap();
+    let (o1, o2) = (order_of(&env.p("r1")), order_of(&env.p("r2")));
+    assert_eq!(o1, o2, "同一 seed＋同一入力→同一順序");
+    // permutation completeness: 重複・欠落なく 1 回ずつ（token の集合は seed に依らず、順序だけが変わる）
+    let sorted: std::collections::BTreeMap<String, Vec<String>> = o1.iter().map(|(k, v)| (k.clone(), { let mut v = v.clone(); v.sort(); v })).collect();
+    for (k, v) in &o1 {
+        assert_eq!(v.iter().collect::<BTreeSet<_>>().len(), v.len(), "重複なし {k}");
+        assert_eq!(v.len(), sorted[k].len());
+    }
+    assert!(o1.values().any(|v| v.len() >= 3 && *v != { let mut s = v.clone(); s.sort(); s }), "lexical sort ではない");
+    // seed を変えると、同じ unit の候補数でも順序が変わる（token 自体も変わるので、unit 単位で順序の位置関係ではなく key 列を比較）
+    let mut b = a.clone();
+    let other = "11".repeat(32);
+    b.build_secret_hex = other.clone();
+    b.pinned_build_secret_commitment = build_secret_commitment(&other);
+    build(&b, &env.p("r3"), &env.p("s3")).unwrap();
+    let o3 = order_of(&env.p("r3"));
+    assert_ne!(o1.values().collect::<Vec<_>>(), o3.values().collect::<Vec<_>>(), "seed 変更で順序が変わる");
+    // 同じ token 集合に対し seed だけを変えた並びが変わること（packager の内部式）
+    let toks: Vec<String> = o1.values().find(|v| v.len() >= 4).unwrap().clone();
+    let key = |seed: &str, t: &str| hex_sha(format!("{seed}|cand|{t}").as_bytes());
+    let ord = |seed: &str| { let mut v = toks.clone(); v.sort_by_key(|t| key(seed, t)); v };
+    assert_ne!(ord(&h("seed-a")), ord(&h("seed-b")));
+}
+
+#[test]
+fn m2_wrong_build_secret_commitment_fails_closed_before_any_output() {
+    let env = Env::new("m2");
+    let mut bad = input(4);
+    bad.pinned_build_secret_commitment = h("wrong");
+    assert!(build(&bad, &env.p("r"), &env.p("s")).is_err());
+    assert!(!env.p("r").exists() && !env.p("s").exists(), "reviewer / sealed のどちらにも何も出さない");
+    // 0x 付き・大文字・secret そのもの などの別形式は不一致
+    for wrong in [format!("0x{}", build_secret_commitment(SECRET)), build_secret_commitment(SECRET).to_uppercase(), SECRET.to_string(), hex_sha(SECRET.as_bytes().iter().rev().cloned().collect::<Vec<_>>().as_slice())] {
+        let mut b = input(4);
+        b.pinned_build_secret_commitment = wrong;
+        assert!(build(&b, &env.p("r"), &env.p("s")).is_err());
+    }
+    assert_eq!(build_secret_commitment(SECRET), hex_sha(SECRET.as_bytes()), "SHA256(ASCII(lowercase_hex))");
+    // reviewer package に build_secret は入らない
+    build(&input(4), &env.p("r"), &env.p("s")).unwrap();
+    for e in std::fs::read_dir(env.p("r").join("units")).unwrap() {
+        assert!(!String::from_utf8_lossy(&std::fs::read(e.unwrap().path()).unwrap()).contains(SECRET));
+    }
 }
 
 #[test]

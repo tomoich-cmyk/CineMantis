@@ -39,3 +39,6 @@
 - （統合 D8 結果）`pr4_pf0i_e2e_tests.rs` は private fixture を使うため、mod.rs の sibling 登録ではコンパイルしない。`pr4_pf0g2_tests.rs` 末尾の `#[path]` child module として登録（679 passed / 0 failed / 13 ignored）。
 - （統合 D5 検証）PF0H1 側に machine freeze 系の値は存在しない。pin `machine_freeze_anchor_commitment`（外部 audit anchor）と PF0G manifest の `machine_freeze_commitment_sha256` は別概念のまま・同一性の記述なし。運用側の確認は OPEN。
 - （M1/M2）PF0G2 の FINAL FREEZE 前必須 M1（seeded shuffle 文言）・M2（packager 側の build_secret_commitment 再導出検証）は未クローズ。
+
+- （統合 CLOSED）D5: N/A。`machine_freeze_anchor_commitment`（PF0G freeze-domain pin）は PF0H の authoritative_membership_commitment / final manifest canonical SHA / review seal SHA とは別 commitment domain で、parity 関係は不要。PF0I の binding 正式 3 点は変えない。
+- （統合 CLOSED）M1: 候補提示順を seed = SHA256(review_unit_id‖build_secret) の決定論 shuffle に変更（token lexical 順を廃止）。M2: build 時に build_secret から build_secret_commitment を再導出し pin と exact-match、不一致は出力前に fail closed。
