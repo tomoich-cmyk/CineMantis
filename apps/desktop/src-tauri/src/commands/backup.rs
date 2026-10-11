@@ -99,17 +99,21 @@ pub fn restore_database(
     app: tauri::AppHandle,
     backup_path: String,
 ) -> Result<(), String> {
-    // バックアップファイルの存在確認
-    let src = PathBuf::from(&backup_path);
-    if !src.exists() {
-        return Err(format!("バックアップファイルが見つかりません: {backup_path}"));
-    }
-
     let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let pending = app_dir.join("cinemantis_restore_pending.db");
-    std::fs::copy(&src, &pending).map_err(|e| e.to_string())?;
+    // 一時ファイルにコピー → 検証（open / integrity_check / スキーマ）→ rename で pending 確定。
+    // 失敗しても既存の pending は変更されない。
+    crate::restore::stage_restore_request(&app_dir, &PathBuf::from(&backup_path))
+}
 
-    Ok(())
+/// 直近の起動時 restore 適用結果（JSON）。restore が行われていなければ None。
+#[tauri::command]
+pub fn get_last_restore_result(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let p = app_dir.join(crate::restore::RESULT_FILE);
+    if !p.exists() {
+        return Ok(None);
+    }
+    std::fs::read_to_string(&p).map(Some).map_err(|e| e.to_string())
 }
 
 // ─── delete_backup ────────────────────────────────────────────────────────────

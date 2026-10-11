@@ -59,7 +59,7 @@ const MIGRATION_JEV_RUN_LINKS: &str = include_str!("../../../../packages/db/migr
 
 /// 022 で CHECK 制約を広げるテーブル。SQLite は CHECK を後から変えられないので作り直す。
 /// 毎起動で作り直さないよう、CHECK に目印の値が無いときだけ実行する。
-const REVIEW_TASKS_MARKER: &str = "metadata_conflict";
+pub(crate) const REVIEW_TASKS_MARKER: &str = "metadata_conflict";
 const REVIEW_TASKS_NEW_SQL: &str = "
 CREATE TABLE metadata_review_tasks_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,7 +80,7 @@ const REVIEW_TASKS_COLUMNS: &str =
 const REVIEW_TASKS_INDEX: &str =
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_mrt_open ON metadata_review_tasks(work_id, reason) WHERE resolved_at IS NULL";
 
-const VERDICTS_MARKER: &str = "rules-tags-shadow";
+pub(crate) const VERDICTS_MARKER: &str = "rules-tags-shadow";
 const VERDICTS_NEW_SQL: &str = "
 CREATE TABLE metadata_match_verdicts_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,62 +114,86 @@ BEGIN
 END;
 ";
 
-/// マイグレーション適用（起動時に一度だけ呼ぶ）
-pub fn init(path: &Path) -> Result<()> {
-    let conn = Connection::open(path)?;
-    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-    apply_migrations(&conn)
+/// このビルドが期待するスキーマ版（`PRAGMA user_version` に刻む）。
+/// 最後に配線した migration ファイルの番号と揃える。migration を足したら必ず上げる。
+pub const LATEST_SCHEMA_VERSION: i64 = 25;
+
+/// migration 一式の1段。
+/// - `version`: 属する migration 番号。0 は「毎起動走る保守（冪等・WHERE で絞った後埋め）」。
+/// - `data_changing`: 既存行を書き換える（UPDATE / seed upsert / 後埋め）段か。legacy bootstrap の報告に使う。
+/// - `file`: packages/db/migrations 内のファイル名（コード由来の段は None）。
+#[derive(Clone, Copy)]
+pub(crate) struct Step {
+    pub name: &'static str,
+    pub file: Option<&'static str>,
+    pub version: i64,
+    pub data_changing: bool,
+    pub run: fn(&Connection) -> Result<()>,
 }
 
-/// 全マイグレーションを適用する。起動ごとに再実行されても安全であること。
-pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
-    apply_migrations_inner(conn, true)
+fn sql_step(version: i64, name: &'static str, file: &'static str, data_changing: bool, run: fn(&Connection) -> Result<()>) -> Step {
+    Step { name, file: Some(file), version, data_changing, run }
 }
 
-/// 023 までで止める。**テスト専用**（本物の 023 → 024 upgrade を再現するため）。
-#[cfg(test)]
-pub(crate) fn apply_migrations_through_023(conn: &Connection) -> Result<()> {
-    apply_migrations_inner(conn, false)
+fn code_step(version: i64, name: &'static str, data_changing: bool, run: fn(&Connection) -> Result<()>) -> Step {
+    Step { name, file: None, version, data_changing, run }
 }
 
-/// `include_024` が false のときだけ 024 を飛ばす。それ以外の順序と挙動は同じ。
-fn apply_migrations_inner(conn: &Connection, include_024: bool) -> Result<()> {
-    conn.execute_batch(MIGRATION_001)?;
-    // 002-005: ALTER TABLE / CREATE TABLE が既存の場合はエラーを無視
-    for migration in [MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005, MIGRATION_LIBRARY_FIELDS, MIGRATION_LEGACY_COMPAT] {
-        for stmt in migration.split(';') {
-            let trimmed = stmt.trim();
-            if !trimmed.is_empty() {
-                let _ = conn.execute_batch(trimmed);
-            }
-        }
-    }
-    conn.execute_batch(MIGRATION_AWARDS)?;
-    conn.execute_batch(MIGRATION_AWARD_CATEGORY_MASTER)?;
-    conn.execute_batch(MIGRATION_AWARD_SCHEDULE_ALERTS)?;
-    apply_lenient_migration(&conn, MIGRATION_AWARD_IMPORT_FOUNDATION)?;
-    conn.execute_batch(MIGRATION_AWARD_WIKIDATA_QID_CORRECTIONS)?;
-    conn.execute_batch(MIGRATION_AWARD_CANNES_QID_FIX)?;
-    conn.execute_batch(MIGRATION_AWARD_FESTIVAL_QID_FIXES)?;
-    conn.execute_batch(MIGRATION_AWARD_PERSON_CATEGORY_QIDS)?;
-    conn.execute_batch(MIGRATION_ACADEMY_CATEGORY_QIDS)?;
-    conn.execute_batch(MIGRATION_AWARD_CATEGORY_QID_EXPANSION)?;
-    conn.execute_batch(MIGRATION_SYNC_OUTBOX)?;
-    conn.execute_batch(MIGRATION_BACKFILL_COUNTRY_MEDIA)?;
-    apply_lenient_migration(&conn, MIGRATION_PREMATCH_INPUTS)?;
-    conn.execute_batch(PREMATCH_INPUTS_GUARD)?;
-    backfill_prematch_inputs(&conn)?;
-    apply_lenient_migration(&conn, MIGRATION_MATCH_HISTORY)?;
-    backfill_match_source(&conn)?;
-    apply_lenient_migration(&conn, MIGRATION_CONTAINER_TAGS)?;
-    rebuild_review_tasks_if_needed(&conn)?;
-    rebuild_verdicts_if_needed(&conn)?;
-    apply_lenient_migration(&conn, MIGRATION_JEV_SHADOW)?;
+/// migration を適用する段の一覧（実行順）。
+///
+/// `015_award_duplicate_cleanup.sql` は**意図的に入れていない**（REL-R1B で保留。
+/// 本番データを DELETE する内容のため、採否は別 Gate）。
+/// 配線漏れの再発防止として、`migration_files_are_all_wired_or_explicitly_unwired` テストが
+/// 未配線ファイルを `UNWIRED_MIGRATION_FILES` に明示させる。
+pub(crate) fn migration_steps(include_024: bool) -> Vec<Step> {
+    let mut steps = vec![
+        sql_step(1, "001_initial", "001_initial.sql", false, |c| apply_strict_migration(c, MIGRATION_001)),
+        sql_step(2, "002_tmdb_fields", "002_tmdb_fields.sql", false, |c| apply_migration_sql(c, "002_tmdb_fields.sql", MIGRATION_002)),
+        sql_step(3, "003_series", "003_series.sql", false, |c| apply_migration_sql(c, "003_series.sql", MIGRATION_003)),
+        sql_step(4, "004_persons", "004_persons.sql", false, |c| apply_migration_sql_with(c, "004_persons.sql", MIGRATION_004, &defer_004_index_if_column_missing)),
+        sql_step(5, "005_source_media_kind", "005_source_media_kind.sql", false, |c| apply_migration_sql(c, "005_source_media_kind.sql", MIGRATION_005)),
+        sql_step(5, "005_library_management_fields", "005_library_management_fields.sql", true, |c| apply_migration_sql(c, "005_library_management_fields.sql", MIGRATION_LIBRARY_FIELDS)),
+        sql_step(6, "006_legacy_schema_compat", "006_legacy_schema_compat.sql", true, |c| apply_migration_sql(c, "006_legacy_schema_compat.sql", MIGRATION_LEGACY_COMPAT)),
+        code_step(6, "006_deferred_004_indexes", false, create_deferred_004_indexes),
+        sql_step(7, "007_awards", "007_awards.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARDS)?)),
+        sql_step(8, "008_award_category_master", "008_award_category_master.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_CATEGORY_MASTER)?)),
+        sql_step(9, "009_award_schedule_alerts", "009_award_schedule_alerts.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_SCHEDULE_ALERTS)?)),
+        sql_step(10, "010_award_import_foundation", "010_award_import_foundation.sql", true, |c| apply_migration_sql(c, "010_award_import_foundation.sql", MIGRATION_AWARD_IMPORT_FOUNDATION)),
+        sql_step(11, "011_award_wikidata_qid_corrections", "011_award_wikidata_qid_corrections.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_WIKIDATA_QID_CORRECTIONS)?)),
+        sql_step(12, "012_award_cannes_qid_fix", "012_award_cannes_qid_fix.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_CANNES_QID_FIX)?)),
+        sql_step(13, "013_award_festival_qid_fixes", "013_award_festival_qid_fixes.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_FESTIVAL_QID_FIXES)?)),
+        sql_step(14, "014_award_person_category_qids", "014_award_person_category_qids.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_PERSON_CATEGORY_QIDS)?)),
+        sql_step(16, "016_academy_category_qids", "016_academy_category_qids.sql", true, |c| Ok(c.execute_batch(MIGRATION_ACADEMY_CATEGORY_QIDS)?)),
+        sql_step(17, "017_award_category_qid_expansion", "017_award_category_qid_expansion.sql", true, |c| Ok(c.execute_batch(MIGRATION_AWARD_CATEGORY_QID_EXPANSION)?)),
+        sql_step(18, "018_sync_outbox", "018_sync_outbox.sql", false, |c| Ok(c.execute_batch(MIGRATION_SYNC_OUTBOX)?)),
+        sql_step(19, "019_backfill_country_type_media_category", "019_backfill_country_type_media_category.sql", true, |c| Ok(c.execute_batch(MIGRATION_BACKFILL_COUNTRY_MEDIA)?)),
+        sql_step(20, "020_prematch_inputs", "020_prematch_inputs.sql", false, |c| apply_migration_sql(c, "020_prematch_inputs.sql", MIGRATION_PREMATCH_INPUTS)),
+        code_step(20, "020_prematch_inputs_guard", false, |c| Ok(c.execute_batch(PREMATCH_INPUTS_GUARD)?)),
+        code_step(20, "020_prematch_inputs_backfill", true, |c| backfill_prematch_inputs(c).map(|_| ())),
+        sql_step(21, "021_match_history", "021_match_history.sql", false, |c| apply_migration_sql(c, "021_match_history.sql", MIGRATION_MATCH_HISTORY)),
+        code_step(21, "021_match_source_backfill", true, |c| backfill_match_source(c).map(|_| ())),
+        sql_step(22, "022_container_tags", "022_container_tags.sql", false, |c| apply_migration_sql(c, "022_container_tags.sql", MIGRATION_CONTAINER_TAGS)),
+        code_step(22, "022_rebuild_review_tasks", false, |c| rebuild_review_tasks_if_needed(c).map(|_| ())),
+        code_step(22, "022_rebuild_verdicts", false, |c| rebuild_verdicts_if_needed(c).map(|_| ())),
+        sql_step(23, "023_jev_shadow", "023_jev_shadow.sql", false, |c| apply_migration_sql(c, "023_jev_shadow.sql", MIGRATION_JEV_SHADOW)),
+    ];
     if include_024 {
-        apply_lenient_migration(&conn, MIGRATION_JEV_EVAL_SESSIONS)?;
-        apply_lenient_migration(&conn, MIGRATION_JEV_RUN_LINKS)?;
+        steps.push(sql_step(24, "024_jev_eval_sessions", "024_jev_eval_sessions.sql", false, |c| apply_migration_sql(c, "024_jev_eval_sessions.sql", MIGRATION_JEV_EVAL_SESSIONS)));
+        steps.push(sql_step(25, "025_jev_run_links", "025_jev_run_links.sql", false, |c| apply_migration_sql(c, "025_jev_run_links.sql", MIGRATION_JEV_RUN_LINKS)));
     }
-    backfill_legacy_candidate_scores(&conn)?;
+    steps.push(code_step(23, "023_backfill_legacy_candidate_scores", true, |c| backfill_legacy_candidate_scores(c).map(|_| ())));
+    // version 0 = 毎起動走る保守。`WHERE reading IS NULL OR reading = ''` で絞った冪等な後埋め。
+    steps.push(code_step(0, "maintenance_backfill_reading", true, backfill_reading));
+    steps
+}
+
+/// packages/db/migrations にあるが、意図的に chain へ入れていないファイル。
+/// 015 は「配線漏れか意図的か」を未確定のまま保留している（採否は別 Gate）。
+#[cfg(test)]
+pub(crate) const UNWIRED_MIGRATION_FILES: &[&str] = &["015_award_duplicate_cleanup.sql"];
+
+/// 読み仮名が空の作品を埋める（起動ごとに走る idempotent な後埋め）
+fn backfill_reading(conn: &Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT id, title FROM works WHERE reading IS NULL OR reading = ''")?;
     let works = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
@@ -183,30 +207,291 @@ fn apply_migrations_inner(conn: &Connection, include_024: bool) -> Result<()> {
     Ok(())
 }
 
+/// マイグレーション適用（起動時に一度だけ呼ぶ）。
+/// 既存 DB の事前検査・backup・開始版の決定・atomic 適用は [`crate::migrate::migrate_database`] が担う。
+pub fn init(path: &Path) -> std::result::Result<crate::migrate::MigrationReport, crate::migrate::MigrationError> {
+    crate::migrate::migrate_database(path)
+}
+
+/// 全マイグレーションを atomic に適用し、成功したら `user_version` を最新に刻む。
+/// 開始版の判定はしない（**テスト用の全段実行**。冪等であることの確認に使う）。
+pub(crate) fn apply_migrations(conn: &Connection) -> Result<()> {
+    crate::migrate::run_steps_atomically(conn, &migration_steps(true), Some(LATEST_SCHEMA_VERSION))
+}
+
+/// 023 までで止める。**テスト専用**（本物の 023 → 024 upgrade を再現するため）。
+/// 途中版なので `user_version` は刻まない。
+#[cfg(test)]
+pub(crate) fn apply_migrations_through_023(conn: &Connection) -> Result<()> {
+    crate::migrate::run_steps_atomically(conn, &migration_steps(false), None)
+}
+
 /// 024 だけを適用する。**テスト専用**。
 #[cfg(test)]
 pub(crate) fn apply_migration_024(conn: &Connection) -> Result<()> {
-    apply_lenient_migration(conn, MIGRATION_JEV_EVAL_SESSIONS)
+    apply_migration_sql(conn, "024_jev_eval_sessions.sql", MIGRATION_JEV_EVAL_SESSIONS)
 }
 
-fn apply_lenient_migration(conn: &Connection, migration: &str) -> Result<()> {
-    for stmt in migration.split(';') {
-        let trimmed = stmt.trim();
-        if trimmed.is_empty() {
+// ─── SQL の文単位実行と、許容するエラーの厳密化 ────────────────────────────────
+
+/// SQL を `;` 区切りの文に分ける。切り出しは SQLite 自身（`sqlite3_complete`）に任せるので、
+/// コメント・文字列・トリガー本体の中の `;` では分割されない。
+pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
+    let complete = |text: &str| -> bool {
+        std::ffi::CString::new(text)
+            .map(|c| unsafe { rusqlite::ffi::sqlite3_complete(c.as_ptr()) != 0 })
+            .unwrap_or(false)
+    };
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (idx, ch) in sql.char_indices() {
+        if ch != ';' {
             continue;
         }
-        match conn.execute_batch(trimmed) {
-            Ok(_) => {}
-            Err(err) if is_expected_idempotent_error(&err.to_string()) => {}
-            Err(err) => return Err(err.into()),
+        let candidate = &sql[start..idx + 1];
+        if complete(candidate) {
+            out.push(candidate.trim().to_string());
+            start = idx + 1;
+        }
+    }
+    let rest = sql[start..].trim();
+    if !rest.is_empty() {
+        out.push(rest.to_string());
+    }
+    // コメントだけの塊は文ではない
+    out.retain(|stmt| stmt.lines().any(|l| !l.trim().is_empty() && !l.trim_start().starts_with("--")));
+    out
+}
+
+fn first_line(stmt: &str) -> String {
+    stmt.lines().find(|l| !l.trim().is_empty() && !l.trim_start().starts_with("--")).unwrap_or("").trim().to_string()
+}
+
+/// 全文を厳密に流す（どの文のエラーも返す）。ただし `PRAGMA` 文は流さない。
+/// journal_mode / foreign_keys は接続の設定で、transaction 内では効かない（WAL への切替はエラーになる）。
+/// 接続の設定は `migrate_database` / `DbState::new` が行う。
+pub(crate) fn apply_strict_migration(conn: &Connection, migration: &str) -> Result<()> {
+    for stmt in split_sql_statements(migration) {
+        if first_line(&stmt).to_uppercase().starts_with("PRAGMA") {
+            continue;
+        }
+        conn.execute_batch(&stmt).map_err(|err| anyhow::anyhow!("{err}: {}", first_line(&stmt)))?;
+    }
+    Ok(())
+}
+
+/// `ALTER TABLE .. ADD COLUMN` が「既に適用済み」で失敗してよい (migration, table, column, 型) の**全列挙**。
+/// migration ファイルから機械的に抜き出したもので、`known_add_columns_match_the_migration_files` テストが
+/// ファイルとの一致を検査する。ここに無い重複列エラーは失敗として扱う。
+pub(crate) const KNOWN_ADD_COLUMNS: &[(&str, &str, &str, &str)] = &[
+    ("002_tmdb_fields.sql", "works", "title_guess", "TEXT"),
+    ("002_tmdb_fields.sql", "works", "media_kind", "TEXT"),
+    ("002_tmdb_fields.sql", "works", "tmdb_media_type", "TEXT"),
+    ("002_tmdb_fields.sql", "works", "country_json", "TEXT"),
+    ("002_tmdb_fields.sql", "works", "metadata_updated_at", "TEXT"),
+    ("003_series.sql", "works", "tmdb_collection_id", "INTEGER"),
+    ("003_series.sql", "works", "season_no", "INTEGER"),
+    ("003_series.sql", "works", "episode_no", "INTEGER"),
+    ("005_library_management_fields.sql", "works", "date_added", "TEXT"),
+    ("005_library_management_fields.sql", "works", "country_type", "TEXT"),
+    ("005_library_management_fields.sql", "works", "reading", "TEXT"),
+    ("005_library_management_fields.sql", "works", "media_category", "TEXT"),
+    ("005_library_management_fields.sql", "works", "release_year", "INTEGER"),
+    ("005_library_management_fields.sql", "works", "genre_text", "TEXT"),
+    ("005_library_management_fields.sql", "user_stats", "last_watched_at", "TEXT"),
+    ("005_library_management_fields.sql", "user_stats", "watched_status", "TEXT"),
+    ("005_library_management_fields.sql", "user_stats", "my_rating", "INTEGER"),
+    ("005_source_media_kind.sql", "sources", "media_kind", "TEXT"),
+    ("006_legacy_schema_compat.sql", "series", "title", "TEXT"),
+    ("006_legacy_schema_compat.sql", "series", "name", "TEXT"),
+    ("006_legacy_schema_compat.sql", "series", "sort_title", "TEXT"),
+    ("006_legacy_schema_compat.sql", "series", "overview", "TEXT"),
+    ("006_legacy_schema_compat.sql", "series_items", "sort_order", "INTEGER"),
+    ("006_legacy_schema_compat.sql", "persons", "tmdb_id", "INTEGER"),
+    ("006_legacy_schema_compat.sql", "persons", "profile_path", "TEXT"),
+    ("006_legacy_schema_compat.sql", "persons", "tmdb_person_id", "INTEGER"),
+    ("006_legacy_schema_compat.sql", "persons", "thumb_path", "TEXT"),
+    ("006_legacy_schema_compat.sql", "work_persons", "role", "TEXT"),
+    ("006_legacy_schema_compat.sql", "work_persons", "display_order", "INTEGER"),
+    ("006_legacy_schema_compat.sql", "work_persons", "role_type", "TEXT"),
+    ("006_legacy_schema_compat.sql", "work_persons", "billing_order", "INTEGER"),
+    ("010_award_import_foundation.sql", "award_bodies", "wikidata_entity_id", "TEXT"),
+    ("010_award_import_foundation.sql", "award_categories", "wikidata_entity_id", "TEXT"),
+    ("020_prematch_inputs.sql", "files", "original_file_name", "TEXT"),
+    ("020_prematch_inputs.sql", "files", "original_rel_path", "TEXT"),
+    ("020_prematch_inputs.sql", "files", "original_captured", "INTEGER"),
+    ("021_match_history.sql", "works", "match_source", "TEXT"),
+    ("021_match_history.sql", "works", "last_match_run_id", "INTEGER"),
+    ("021_match_history.sql", "files", "renamed_by_app", "TEXT"),
+    ("022_container_tags.sql", "files", "container_tags_json", "TEXT"),
+    ("022_container_tags.sql", "files", "tags_captured", "INTEGER"),
+    ("022_container_tags.sql", "files", "tags_captured_at", "TEXT"),
+    ("022_container_tags.sql", "files", "tags_encoder", "TEXT"),
+    ("022_container_tags.sql", "files", "tags_provenance", "TEXT"),
+    ("022_container_tags.sql", "files", "tags_provider_hint", "TEXT"),
+    ("022_container_tags.sql", "files", "tags_truncated", "INTEGER"),
+    ("022_container_tags.sql", "metadata_match_candidates", "query_source", "TEXT"),
+    ("024_jev_eval_sessions.sql", "metadata_match_jev_calls", "request_id", "TEXT"),
+    ("024_jev_eval_sessions.sql", "metadata_match_jev_calls", "eval_session_id", "INTEGER"),
+];
+
+/// SQL を文単位で流す。許容するエラーは「KNOWN_ADD_COLUMNS に載った ADD COLUMN が、同じ型の既存列と
+/// 衝突した」場合だけ。それ以外（未知の重複列・型違い・CREATE INDEX の失敗・UNIQUE 違反・構文エラー等）は
+/// すべて Err を返し、呼び出し側が transaction ごと巻き戻す。
+pub(crate) fn apply_migration_sql(conn: &Connection, file: &str, migration: &str) -> Result<()> {
+    apply_migration_sql_with(conn, file, migration, &|_, _| false)
+}
+
+pub(crate) fn apply_migration_sql_with(
+    conn: &Connection,
+    file: &str,
+    migration: &str,
+    skip: &dyn Fn(&Connection, &str) -> bool,
+) -> Result<()> {
+    for stmt in split_sql_statements(migration) {
+        if skip(conn, &stmt) {
+            continue;
+        }
+        match conn.execute_batch(&stmt) {
+            Ok(()) => {}
+            Err(err) if is_known_idempotent_add_column(conn, file, &stmt, &err.to_string()) => {}
+            Err(err) => return Err(anyhow::anyhow!("{err}: {}", first_line(&stmt))),
         }
     }
     Ok(())
 }
 
-fn is_expected_idempotent_error(message: &str) -> bool {
-    message.contains("duplicate column name")
+fn is_known_idempotent_add_column(conn: &Connection, file: &str, stmt: &str, error: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)^\s*ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)\s+(\w+)").unwrap()
+    });
+    // 文の前に付いたコメント行は無視して照合する
+    let body: String = stmt.lines().filter(|l| !l.trim_start().starts_with("--")).collect::<Vec<_>>().join("
+");
+    let Some(caps) = re.captures(&body) else { return false };
+    let (table, column, declared) = (&caps[1], &caps[2], caps[3].to_uppercase());
+    if !error.contains(&format!("duplicate column name: {column}")) {
+        return false;
+    }
+    if !KNOWN_ADD_COLUMNS.iter().any(|(f, t, c, ty)| *f == file && *t == table && *c == column && *ty == declared) {
+        return false;
+    }
+    // 既存列の型が宣言と同じときだけ「適用済み」とみなす
+    conn.query_row(
+        "SELECT UPPER(type) FROM pragma_table_info(?1) WHERE name = ?2",
+        rusqlite::params![table, column],
+        |r| r.get::<_, String>(0),
+    )
+    .map(|existing| existing == declared)
+    .unwrap_or(false)
 }
+
+/// 004 の index のうち、対象列が**この時点でまだ無い**2 件だけを後回しにする（失敗を握りつぶすのではなく、
+/// 前提条件を見て飛ばす）。列は 006 が追加し、`create_deferred_004_indexes` が 006 の直後に厳密に作る。
+const DEFERRED_004_INDEXES: &[(&str, &str, &str, &str)] = &[
+    ("idx_persons_tmdb_id", "persons", "tmdb_id", "CREATE INDEX IF NOT EXISTS idx_persons_tmdb_id ON persons(tmdb_id)"),
+    ("idx_work_persons_role", "work_persons", "role", "CREATE INDEX IF NOT EXISTS idx_work_persons_role ON work_persons(role)"),
+];
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        rusqlite::params![table, column],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+pub(crate) fn defer_004_index_if_column_missing(conn: &Connection, stmt: &str) -> bool {
+    let line = first_line(stmt);
+    DEFERRED_004_INDEXES.iter().any(|(name, table, column, _)| {
+        line.contains(&format!("INDEX IF NOT EXISTS {name} ")) && !column_exists(conn, table, column)
+    })
+}
+
+fn create_deferred_004_indexes(conn: &Connection) -> Result<()> {
+    for (_, _, _, sql) in DEFERRED_004_INDEXES {
+        conn.execute_batch(sql)?;
+    }
+    Ok(())
+}
+
+// ─── legacy DB（user_version = 0 の既存 DB）の開始版判定 ──────────────────────
+
+fn has_table(conn: &Connection, name: &str) -> bool {
+    table_sql(conn, name).map(|s| s.is_some()).unwrap_or(false)
+}
+
+fn has_trigger(conn: &Connection, name: &str) -> bool {
+    conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = ?1", [name], |r| r.get::<_, i64>(0))
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
+/// migration 番号ごとの「適用済みの証拠」（その migration が作る表・列・トリガー）。
+/// 証拠の無い（データ補正だけの）番号は None。
+pub(crate) fn legacy_probe(conn: &Connection, version: i64) -> Option<bool> {
+    let c = |t: &str, col: &str| column_exists(conn, t, col);
+    let t = |name: &str| has_table(conn, name);
+    Some(match version {
+        1 => t("sources") && t("files") && t("works") && t("work_parts") && t("user_stats") && t("persons") && t("work_persons"),
+        2 => c("works", "title_guess") && c("works", "metadata_updated_at") && t("app_settings"),
+        3 => c("works", "tmdb_collection_id") && c("works", "season_no") && c("works", "episode_no"),
+        // 004 は 001 が作る表への index だけで、固有の証拠が無い。直前（003）の証拠に従属させ、
+        // 001 だけで常に真になって「後ろに証拠がある gap」と誤判定されるのを防ぐ。
+        4 => t("persons") && t("work_persons") && c("works", "tmdb_collection_id"),
+        5 => c("sources", "media_kind") && c("works", "date_added") && c("works", "reading") && c("user_stats", "my_rating"),
+        6 => c("series", "title") && c("series_items", "sort_order") && c("persons", "tmdb_id") && c("work_persons", "role"),
+        7 => t("award_bodies") && t("award_editions") && t("award_categories") && t("work_award_results"),
+        9 => t("award_body_schedule_rules") && t("award_edition_data_status"),
+        10 => t("award_import_jobs") && t("award_import_items") && c("award_bodies", "wikidata_entity_id") && c("award_categories", "wikidata_entity_id"),
+        18 => t("sync_outbox"),
+        20 => c("files", "original_file_name") && has_trigger(conn, "trg_files_original_immutable"),
+        21 => t("metadata_match_runs") && c("works", "match_source") && c("files", "renamed_by_app"),
+        22 => {
+            c("files", "container_tags_json")
+                && c("metadata_match_candidates", "query_source")
+                && table_sql(conn, "metadata_review_tasks").ok().flatten().map(|s| s.contains(REVIEW_TASKS_MARKER)).unwrap_or(false)
+                && table_sql(conn, "metadata_match_verdicts").ok().flatten().map(|s| s.contains(VERDICTS_MARKER)).unwrap_or(false)
+        }
+        23 => t("jev_contracts") && t("metadata_match_jev_calls") && t("metadata_match_candidate_scores"),
+        24 => t("jev_eval_sessions") && c("metadata_match_jev_calls", "eval_session_id"),
+        25 => t("metadata_match_jev_run_links"),
+        _ => return None,
+    })
+}
+
+/// legacy DB の開始版。証拠が**連続した prefix** として揃っている最後の番号 + 1（全部揃っていれば LATEST + 1）。
+/// 証拠のない補正だけの番号は、直前の証拠付き番号に続けて適用済みとみなす。
+/// 証拠が欠けた番号より後ろに証拠が 1 つでもある（非連続 = gap）なら、修復せず Err を返す。
+/// gap 以降の migration（データ補正を含む）を再実行すると、ユーザー編集値を上書きし得るため。
+pub(crate) fn legacy_start_version(conn: &Connection) -> std::result::Result<i64, String> {
+    let mut last_satisfied = 0;
+    let mut first_missing: Option<i64> = None;
+    let mut present_after_gap = Vec::new();
+    for version in 1..=LATEST_SCHEMA_VERSION {
+        match legacy_probe(conn, version) {
+            Some(true) => match first_missing {
+                None => last_satisfied = version,
+                Some(_) => present_after_gap.push(version),
+            },
+            Some(false) => {
+                first_missing.get_or_insert(version);
+            }
+            None => {}
+        }
+    }
+    match (first_missing, present_after_gap.is_empty()) {
+        (Some(missing), false) => Err(format!(
+            "INCONSISTENT_LEGACY_SCHEMA: migration {missing} の証拠が無いのに、後続の {present_after_gap:?} の証拠がある（非連続）"
+        )),
+        _ => Ok(last_satisfied + 1),
+    }
+}
+
 
 /// 020 以前から存在する files 行の original_* を現在値から後埋めする。
 /// original_file_name IS NULL の行だけが対象で、original_captured = 0 を付ける。
@@ -239,7 +524,7 @@ pub(crate) fn backfill_prematch_inputs(conn: &Connection) -> Result<usize> {
 }
 
 /// sqlite_master に記録された CREATE 文（テーブルが無ければ None）
-fn table_sql(conn: &Connection, table: &str) -> Result<Option<String>> {
+pub(crate) fn table_sql(conn: &Connection, table: &str) -> Result<Option<String>> {
     let sql = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -254,10 +539,12 @@ fn table_sql(conn: &Connection, table: &str) -> Result<Option<String>> {
 /// CHECK 制約を広げるためにテーブルを作り直す。
 ///
 /// 目印（`marker`）が既に CHECK に入っていれば何もしない（起動のたびに作り直さない）。
-/// 手順は次の順で行う。BEGIN より前に foreign_keys を切るのが要点。
-///   1. foreign_keys の現在値を読む → 2. OFF → 3. BEGIN → 4. 新テーブル作成 →
+/// 手順は次の順で行う。transaction を始める前に foreign_keys を切るのが要点。
+///   1. foreign_keys の現在値を読む → 2. OFF → 3. SAVEPOINT → 4. 新テーブル作成 →
 ///   5. コピー → 6. 旧テーブル DROP → 7. RENAME → 8. インデックス再作成 →
-///   9. COMMIT → 10. foreign_keys を元に戻す → 11. foreign_key_check
+///   9. RELEASE → 10. foreign_keys を元に戻す → 11. foreign_key_check
+/// SAVEPOINT なので、単独で呼べば自前の transaction、migration chain の中で呼べば chain と
+/// 一緒に確定 / 巻き戻しされる（`migrate::run_steps_atomically` が事前に foreign_keys を切る）。
 fn rebuild_table_for_check(
     conn: &Connection,
     table: &str,
@@ -278,7 +565,7 @@ fn rebuild_table_for_check(
     conn.execute_batch("PRAGMA foreign_keys=OFF")?;
 
     let rebuild = || -> Result<()> {
-        conn.execute_batch("BEGIN")?;
+        conn.execute_batch("SAVEPOINT cm_rebuild")?;
         conn.execute_batch(create_new_sql)?;
         conn.execute_batch(&format!(
             "INSERT INTO {table}_new ({columns}) SELECT {columns} FROM {table}"
@@ -288,14 +575,13 @@ fn rebuild_table_for_check(
         for index in indexes {
             conn.execute_batch(index)?;
         }
-        conn.execute_batch("COMMIT")?;
+        conn.execute_batch("RELEASE cm_rebuild")?;
         Ok(())
     };
 
     let result = rebuild();
     if result.is_err() {
-        let _ = conn.execute_batch("ROLLBACK");
-        let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS {table}_new"));
+        let _ = conn.execute_batch("ROLLBACK TO cm_rebuild; RELEASE cm_rebuild");
     }
     if foreign_keys_on {
         conn.execute_batch("PRAGMA foreign_keys=ON")?;
@@ -967,7 +1253,7 @@ mod tests {
                 }
             }
         }
-        apply_lenient_migration(&conn, MIGRATION_MATCH_HISTORY).unwrap();
+        apply_migration_sql(&conn, "021_match_history.sql", MIGRATION_MATCH_HISTORY).unwrap();
         conn
     }
 

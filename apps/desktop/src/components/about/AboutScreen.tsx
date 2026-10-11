@@ -3,8 +3,6 @@ import { getVersion, getName, getTauriVersion } from "@tauri-apps/api/app";
 import { appDataDir } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 
-// DB スキーマバージョン: マイグレーション追加時に手動でインクリメント
-const DB_SCHEMA_VERSION = "1";
 
 // ─── ユーティリティ ───────────────────────────────────────────────────────────
 
@@ -150,7 +148,6 @@ export function AboutScreen() {
             <span className="text-gray-700">·</span>
             <span>Tauri {tauriVersion}</span>
             <span className="text-gray-700">·</span>
-            <span>DB schema {DB_SCHEMA_VERSION}</span>
           </div>
         </div>
 

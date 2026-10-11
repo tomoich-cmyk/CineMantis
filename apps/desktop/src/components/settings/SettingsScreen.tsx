@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getVersion } from "@tauri-apps/api/app";
 import { setSetting, getTmdbApiKeyMasked } from "@/api/settings";
 import { autoMatchSource, testTmdbApi } from "@/api/tmdb";
 import { NasRootSetting } from "@/components/settings/NasRootSetting";
@@ -7,6 +8,11 @@ import { ContainerTagsSetting } from "@/components/settings/ContainerTagsSetting
 
 export function SettingsScreen() {
   const qc = useQueryClient();
+  const { data: appVersion = "?" } = useQuery({
+    queryKey: ["app", "version"],
+    queryFn: getVersion,
+    staleTime: Infinity,
+  });
 
   // ── TMDb APIキー ──────────────────────────────────────────────────────────
   const { data: maskedKey } = useQuery({
@@ -195,7 +201,7 @@ export function SettingsScreen() {
           <div className="text-xs text-gray-700 space-y-1">
             <div className="flex gap-4">
               <span className="w-24">バージョン</span>
-              <span>0.1.0</span>
+              <span>{appVersion}</span>
             </div>
             <div className="flex gap-4">
               <span className="w-24">スタック</span>

@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CineMantis",
-  "version": "1.0.0",
   "identifier": "dev.cinemantis.app",
   "build": {
     "beforeDevCommand": "corepack pnpm dev",
@@ -20,7 +19,8 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "devtools": false
       }
     ],
     "security": {
@@ -40,7 +40,8 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": { "nsis": { "template": "installer-template.nsi" } }
   },
   "plugins": {
     "shell": {
@@ -48,3 +49,4 @@
     }
   }
 }
+

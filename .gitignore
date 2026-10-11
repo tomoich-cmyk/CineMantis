@@ -8,7 +8,7 @@ dist/
 
 # Rust / Cargo
 target/
-Cargo.lock
+# Cargo.lock is tracked (application repo; reproducible builds)
 
 # Tauri
 apps/desktop/src-tauri/gen/

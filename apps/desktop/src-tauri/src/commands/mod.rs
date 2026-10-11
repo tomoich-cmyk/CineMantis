@@ -19,3 +19,5 @@ pub mod awards;
 pub mod award_import;
 pub mod sync;
 pub mod nas_sort;
+#[cfg(test)]
+mod release_guards;

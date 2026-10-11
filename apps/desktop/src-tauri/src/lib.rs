@@ -2,31 +2,113 @@ mod cache;
 mod commands;
 mod db;
 mod ffmpeg_path;
+#[cfg(test)]
+mod integration_tests;
+mod migrate;
 mod models;
+mod restore;
 mod services;
+mod startup;
 
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    startup::install_panic_hook();
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let app_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&app_dir)?;
+            let app_dir = match app.path().app_data_dir() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    return Err(report_fatal(
+                        &startup::app_dir_or_temp(),
+                        "app_data_dir を取得できません",
+                        &e.to_string(),
+                        "アプリのデータフォルダを取得できなかったため、起動できませんでした。",
+                    ));
+                }
+            };
+            if let Err(e) = std::fs::create_dir_all(&app_dir) {
+                return Err(report_fatal(
+                    &app_dir,
+                    "app_data_dir を作成できません",
+                    &e.to_string(),
+                    "アプリのデータフォルダを作成できなかったため、起動できませんでした。",
+                ));
+            }
+            startup::set_app_dir(&app_dir);
             let db_path = app_dir.join("cinemantis.db");
 
-            // pending restore があれば先にスワップ
-            let pending_restore = app_dir.join("cinemantis_restore_pending.db");
-            if pending_restore.exists() {
-                let _ = std::fs::copy(&pending_restore, &db_path);
-                let _ = std::fs::remove_file(&pending_restore);
+            // 1) pending restore があれば先に適用（R1A: 検証・退避・rollback 付き。失敗しても現在 DB で起動継続）。
+            //    migration より前、同一 DB に対して直列。結果は restore_last_result.json に記録。
+            let outcome = restore::apply_pending_restore(&app_dir);
+            restore::record_outcome(&app_dir, &outcome);
+            match &outcome {
+                restore::RestoreOutcome::NoPending => {}
+                restore::RestoreOutcome::Applied { .. } | restore::RestoreOutcome::RecoveredOnly { .. } => {
+                    startup::log_event(&app_dir, "INFO", &format!("復元処理: {outcome:?}"));
+                }
+                restore::RestoreOutcome::Failed { .. } => {
+                    startup::log_event(
+                        &app_dir,
+                        "ERROR",
+                        &format!("バックアップからの復元に失敗（現在の DB で起動を継続）: {outcome:?}"),
+                    );
+                    startup::fatal_box("CineMantis", &startup::user_message_for_restore_failure(&app_dir));
+                }
             }
 
-            db::init(&db_path)?;
-            app.manage(db::DbState::new(&db_path)?);
+            // 2) restore 後の DB に対して migration backup → migration → schema verification（R1B）
+            match db::init(&db_path) {
+                Ok(report) => {
+                    startup::log_event(
+                        &app_dir,
+                        "INFO",
+                        &format!(
+                            "DB 準備完了: schema v{} -> v{} / 新規={} / 適用前 backup={:?}",
+                            report.from_version, report.to_version, report.fresh, report.backup_path
+                        ),
+                    );
+                    startup::log_event(
+                        &app_dir,
+                        "INFO",
+                        &format!(
+                            "migration 開始版 v{}（根拠: {}）/ 実行した段: {:?} / うちデータ更新を伴う段: {:?}",
+                            report.start_version, report.start_basis, report.executed, report.data_steps_run
+                        ),
+                    );
+                }
+                Err(e) => {
+                    let latest = migrate::find_latest_valid_backup(&migrate::backups_dir_for(&db_path));
+                    startup::log_event(
+                        &app_dir,
+                        "ERROR",
+                        &format!(
+                            "migration 失敗: {} / step={:?} / backup={:?} / DB 未変更={}",
+                            e.detail, e.failed_step, e.backup_path, e.db_unchanged
+                        ),
+                    );
+                    let msg = startup::user_message_for_migration(&e, &app_dir, latest.as_deref());
+                    startup::fatal_box("CineMantis - 起動できません", &msg);
+                    return Err(Box::new(e));
+                }
+            }
+            match db::DbState::new(&db_path) {
+                Ok(state) => {
+                    app.manage(state);
+                }
+                Err(e) => {
+                    return Err(report_fatal(
+                        &app_dir,
+                        "DB 接続を開けません",
+                        &format!("{e:#}"),
+                        "データベースを開けなかったため、起動できませんでした。",
+                    ));
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -100,6 +182,7 @@ pub fn run() {
             commands::backup::backup_database,
             commands::backup::list_backups,
             commands::backup::restore_database,
+            commands::backup::get_last_restore_result,
             commands::backup::delete_backup,
             // Bulk
             commands::bulk::get_attention_stats,
@@ -150,6 +233,33 @@ pub fn run() {
             commands::award_import::bulk_approve_award_import_items,
             commands::award_import::bulk_reject_award_import_items,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running CineMantis");
+        .run(tauri::generate_context!());
+    if let Err(e) = run_result {
+        // setup 内の失敗は既に通知済み。ここに来るのは WebView2 不在など setup 前後の失敗。
+        let dir = startup::app_dir_or_temp();
+        startup::log_event(&dir, "ERROR", &format!("アプリの実行に失敗: {e}"));
+        startup::fatal_box(
+            "CineMantis - 起動できません",
+            &format!(
+                "CineMantis を起動できませんでした。
+詳細は次のログをご確認ください:
+{}",
+                startup::log_path(&dir).display()
+            ),
+        );
+        std::process::exit(1);
+    }
+}
+
+/// 致命的な起動失敗を log とダイアログに出し、setup から返すエラーを作る
+fn report_fatal(app_dir: &std::path::Path, what: &str, detail: &str, user_msg: &str) -> Box<dyn std::error::Error> {
+    startup::log_event(app_dir, "ERROR", &format!("{what}: {detail}"));
+    startup::fatal_box(
+        "CineMantis - 起動できません",
+        &format!("{user_msg}
+
+詳細は次のログをご確認ください:
+{}", startup::log_path(app_dir).display()),
+    );
+    format!("{what}: {detail}").into()
 }
