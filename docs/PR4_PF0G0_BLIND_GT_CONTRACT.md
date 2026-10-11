@@ -1,6 +1,6 @@
 # PR4-PF0G0: H2 FINAL 用 Blind Human GT Reviewer 契約（設計のみ・未実装）
 
-状態: **契約案（レビュー待ち）。実装なし。H2 の実データ・H1・machine output・Jev・production DB は一切読んでいない。** 根拠にした既存資産は `gt_review.rs` / `gt_operator.rs` / `pr4_gt_semantics.json` / PF0C・PF0D・PF0E の docs だけ。
+状態: **PF0G1 で凍結済み（実装 `pr4_blind_gt.rs` は synthetic のみ。§17 が §15・§16 の旧記述に優先する）。H2 の実データ・H1・machine output・Jev・production DB は一切読んでいない。** 根拠にした既存資産は `gt_review.rs` / `gt_operator.rs` / `pr4_gt_semantics.json` / PF0C・PF0D・PF0E の docs だけ。
 機械可読 schema 案: `docs/pr4_pf0g0_blind_gt_schema.json`（本書 §3 の元）。
 branch: `claude/pr4-pf0g-171907`（0aca746 起点）。main checkout は未接触。
 
@@ -52,7 +52,7 @@ rules-safe / rules-tags-shadow / rules-1 の **decision（AUTO・REVIEW・UNRESO
 
 | decision | 意味 | 送ってよい payload | 禁止 |
 |---|---|---|---|
-| `confirm` | **表示された candidate が正解** | `candidate_ref`（その unit の artifact 内の候補） | client から tmdb_id を受けて信じること |
+| `confirm` | **表示された candidate が正解** | `candidate_token`（その unit の artifact 内の候補。opaque） | client から tmdb_id を受けて信じること |
 | `pick_other` | 正しい TMDB work は存在するが、表示 candidate にない | `tmdb_id` + `media_type`（movie/tv）。**live 検証必須**（§8） | 表示 candidate の ID（`TargetIsCandidate`）、未検証 |
 | `none` | 対応する TMDB work が存在しない | 検索ログ（§4.5） | **candidate_count=0 や検索 0 件からの推論**。暗黙の none 禁止 |
 | `defer` | genuinely undecidable | `defer_reason`（列挙。§7） | none への変換、reason なし |
@@ -91,16 +91,16 @@ packager は **一方向**。入力は (a) 凍結済み machine output の「候
     "display_title": "..."                             // §12-Q3 で扱いを確認
   },
   "candidates": [                                      // 固定ランダム順。rank と無関係
-    { "candidate_ref": "c1", "tmdb_id": 603, "media_type": "movie",
+    { "candidate_token": "ct_<20 chars base32>",       // HMAC-SHA256(build_secret, domain + review_unit_id + media_type + tmdb_id)。§17 R4
       "title": "...", "original_title": "...", "year": "1999",
       "overview": "...", "poster_path": "/x.jpg", "original_language": "en" }
   ],
   "unit_sha256": "<canonical sha of this object without this field>"
 }
 ```
-- `candidates` は **frozen 候補集合の全件**（truncate 禁止。`TargetIsCandidate` 判定の母集合と一致させる）。matcher 間の重複は (media_type, tmdb_id) で dedupe。`candidate_ref` は unit 内連番で rank を含意しない（`c1` が 1 位ではない）。
+- `candidates` は **frozen 候補集合の全件**（truncate 禁止。`TargetIsCandidate` 判定の母集合と一致させる）。matcher 間の重複は (media_type, tmdb_id) で dedupe。`candidate_token` は opaque で、rank・identity・順序を含意しない（identity は seal 後の audit-only unblind map にだけ置く。§17 R4）。
 - 順序: `shuffle(seed = SHA256(review_unit_id ‖ build_secret))`。**rank・score・source は shuffle の入力にも使わない**（テストで固定）。
-- `deny_unknown_fields`。未知キー・型違い・重複 candidate・`candidate_ref` 重複・tmdb_id≤0・media_type が movie/tv 以外は packager が拒否（artifact を作らない）、reviewer 側も読込時に拒否。
+- `deny_unknown_fields`。未知キー・型違い・重複 candidate・`candidate_token` 重複・tmdb_id≤0・media_type が movie/tv 以外は packager が拒否（artifact を作らない）、reviewer 側も読込時に拒否。
 - 禁止キー/値は §10-L の canary で検証。
 - canonical JSON は PF0E の `pr4-canonical-json-1` を再利用。
 
@@ -205,7 +205,7 @@ resolved 後の訂正は `correction {unit, prev_event_sha, reason(列挙)}` + �
 ## 9. 設計 8・9: provenance と reviewer completion audit
 
 ### 9.1 provenance（decision event の必須フィールド）
-`{event_type, seq, review_unit_id, submission_id, reviewer_id, session_id, lease_id, artifact_sha256, unit_sha256, tool_sha256, ui_protocol_version, review_protocol_version("gt-review-1" と互換の意味), decision, candidate_ref|null, tmdb_id|null, media_type|null, defer_reason|null, note|null, search_log[], tmdb_verification|null, shown_at, submitted_at, active_ms, prev_event_sha, event_commitment}`
+`{event_type, seq, review_unit_id, submission_id, reviewer_id, session_id, lease_id, artifact_sha256, unit_sha256, tool_sha256, ui_protocol_version, review_protocol_version("gt-review-1" と互換の意味), decision, candidate_token|null（confirm のみ。event に tmdb_id / media_type / index は記録しない）, tmdb_id|null（pick_other のみ）, media_type|null（pick_other のみ）, defer_reason|null, note|null, search_log[], tmdb_verification|null, shown_at, submitted_at, active_ms, prev_event_sha, event_commitment}`
 - `tmdb_id/media_type` は confirm では **artifact から解決して記録**（client 値は使わない）。none では必ず null。
 - `session_start` に attestation: 「このセッションの前に、この review set に対する機械出力・本体アプリ上の match 結果・Jev を見ていない。review 中も本体アプリの library を開かない」。自己申告であり、残余リスクとして §12-Q6 に明示。
 
@@ -215,7 +215,7 @@ resolved 後の訂正は `correction {unit, prev_event_sha, reason(列挙)}` + �
 | A1 | ledger の hash chain 全体が検証できる。公表済み checkpoint と一致 | STOP |
 | A2 | manifest の `unit_count`（=946）と、terminal 状態の unit の数が一致。terminal = resolved の 3 種 or `defer_final` | seal 拒否 |
 | A3 | 各 unit に有効な decision がちょうど 1 つ（correction 後の最新）。未解決の leased/draft/unopened が 0 | seal 拒否 |
-| A4 | `confirm` の candidate_ref が当該 unit の artifact に実在。`none` は tmdb_id=null。`pick_other` は全件 `tmdb_verification` 付き・候補外 | seal 拒否 |
+| A4 | `confirm` の candidate_token が当該 unit の artifact に実在。`none` は tmdb_id=null。`pick_other` は全件 `tmdb_verification` 付き・候補外 | seal 拒否 |
 | A5 | `none` は全件 search_log ≥1 | seal 拒否 |
 | A6 | unit_sha256 / artifact_sha256 / tool_sha256 が全 session で一定 | seal 拒否 |
 | A7 | 提出の `submission_id` に重複なし。integrity_anomaly event が 0 | STOP |
@@ -259,7 +259,7 @@ H2・H1・実 machine output・production DB は使わない。fixture は synth
 
 ### M: malformed
 - **M-1 target**: tmdb_id = 0 / 負 / 小数 / 文字列 / 2^63 超 / null、media_type = "" / "person" / "TV" / 余計な空白 / 配列。
-- **M-2 参照**: 存在しない review_unit_id、他 unit の candidate_ref、`../` を含む unit id（パス traversal）、長大文字列、制御文字。
+- **M-2 参照**: 存在しない review_unit_id、他 unit の candidate_token、`../` を含む unit id（パス traversal）、長大文字列、制御文字。
 - **M-3 artifact**: schema_version 違い、unknown field、重複 candidate、unit_sha256 不一致、manifest の unit_count 不一致、欠けた unit ファイル→ **起動拒否**（既定値で救わない）。
 - **M-4 JSON**: 壊れた JSON、BOM、巨大 body、`submission_id` 欠落。
 
@@ -335,7 +335,7 @@ PF0G2（packager・UI・TMDB 検証の実通信）は PF0F1 schema freeze 後。
 
 ## 16. PF0G1 freeze 前の最終確認 4 点（監査 HOLD への対応）
 
-1. **candidate は opaque token。** reviewer package の candidate は `candidate_token = H(unit_salt | media_type | tmdb_id)`（`ct_` + 20 文字）と表示用 projection（title / year / overview / poster 等）だけ。`tmdb_id` / `media_type` / `c1` のような index / rank を持たない。confirm の ledger event は `candidate_token` **だけ**を記録し、identity は書かない（identity を持つ confirm event は replay で STOP）。token → identity の対応表は seal 後の audit-only unblind map にだけ置く。pick_other が候補と重なるかは、入力 `(media_type, tmdb_id)` から `unit_salt` で token を計算して照合する（identity の一覧を持たずに判定できる）。`unit_salt` は unit ごとの値で build_secret ではない。なお salt が既知でも token は候補の ID 空間を総当たりすれば逆算できるが、候補の ID は元々 reviewer に表示される内容であり、機械の情報は含まない。
+1. **candidate は opaque token。**（§17 R4 が現行の正本。ここにあった旧定義 `H(unit_salt | media_type | tmdb_id)` と、「`unit_salt` から token を計算して pick_other の重複を照合する」旧方式は **obsolete**。）reviewer package の candidate は `candidate_token`（`ct_` + 20 文字。定義は §17 R4 の HMAC）と表示用 projection（title / year / overview / poster 等）だけ。`tmdb_id` / `media_type` / index / rank を持たない。confirm の ledger event は `candidate_token` **だけ**を記録し、identity は書かない（identity を持つ confirm event は replay で STOP）。token → identity の対応表は seal 後の audit-only unblind map にだけ置く。pick_other が表示候補と重なるかは、unit の `overlap_digests`（§17 R4）で照合する。
 2. **reviewer package の hard check。** package に置けるのは `manifest.json` と `units/<id>.json` だけ。それ以外のファイル・ディレクトリ、および中身に `build_secret` / `unblind` / `work_id` / `"work:` / `evaluation_unit_key` / `candidate_mapping` / `identity_map` / `token_map` / `"tmdb_id"` があれば `Artifact::load` が STOP する（PF0G2 のサーバも同じ関数を起動時に呼ぶ）。`review_unit_id` を secret から導出すること自体は問題ない（secret は package に入らない）。
 3. **init と seal の pin。** 次の 8 個を init event に記録し、seal では引数と init の **全項目の完全一致**を要求する（不一致は `PinMismatch` で pin 名を返す。replay でも検査するので、後から差し替えた seal は open できない）: `protocol_sha256` / `ui_package_sha256` / `shuffle_seed_commitment` / `attestation_policy_sha256` / `unblind_map_sha256` / `build_secret_commitment` / `a8_leak_scan_report_sha256` / `machine_freeze_anchor_commitment`。`a8_leak_scan_report_sha256` は **review 開始前に取った package / UI の leak scan report**として pin する（review 中の実行時 scan は PF0G2 の範囲）。`Store::seal` は `(AuditReport, review_seal_sha256)` を返し、`review_seal_sha256` は seal event の `event_commitment` である。これを外部 audit anchor に固定する（外部への書き込みは operator の gate）。
 4. **post-seal errata。** sealed GT は immutable。seal 後に明白な GT の誤りが判明した場合、GT は書き換えない（seal 後の correction / lease / session は全て `Sealed` で拒否）。`Store::record_post_seal_errata` は `errata.jsonl`（`review_seal_sha256` に結び付いた別の hash chain）に記録するだけで、`events.jsonl` には書かない。`promotion_impacting = true` の errata が 1 件でもあれば `evaluation_validity()` は `Invalidated` になり、**新しい evaluation cycle が必要**。結果を見て GT を直す余地は無い。

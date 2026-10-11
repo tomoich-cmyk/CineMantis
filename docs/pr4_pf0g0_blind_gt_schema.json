@@ -1,7 +1,7 @@
 {
  "artifact": "pr4_pf0g0_blind_gt_schema",
  "contract_doc": "docs/PR4_PF0G0_BLIND_GT_CONTRACT.md",
- "status": "DRAFT_FOR_REVIEW (design only; not frozen; no data read)",
+ "status": "FROZEN at PF0G1 (see docs/PR4_PF0G1_FREEZE.txt; implemented by services/pr4_blind_gt.rs; synthetic tests only; no data read). contract_doc sections 17 (amendments D7/R1-R4/U3) takes precedence over sections 15-16.",
  "canonicalization": "pr4-canonical-json-1 (reuse PF0E)",
  "unit": {
   "schema_version": "pr4-blind-review-unit-2",
