@@ -1,0 +1,24 @@
+PR4-PF0G2 FREEZE CANDIDATE (reviewer packager / typed API / loopback server / UI; synthetic + loopback only; H2/H1/holdout/production DB/live TMDB untouched)
+base: 1a6266d9869d7dc3bf8556850312c85676ebe7d3 (branch claude/pr4-pf0g2-210938; not committed)
+schema anchor: 1a6266d (docs/PR4_PF0G0_BLIND_GT_CONTRACT.md s17 + docs/pr4_pf0g0_blind_gt_schema.json + docs/PR4_PF0G1_DOCS_ALIGNMENT_ADDENDUM.md)
+PF0G1 implementation freeze: eeeb57353b0e610e0827ce4882900c4bd156a22e (pr4_blind_gt.rs / pr4_blind_gt_tests.rs byte-identical)
+tests: cargo test --lib => 611 passed, 0 failed, 12 ignored (PF0G1 baseline 581 + PF0G2 30). pr4_pf0g2 x3 stable.
+sha256 = file bytes with CRLF normalized to LF
+3e2d5b7a2ddc07ca8d41ae611dc6433871252d926300177612a00a49834929cf  apps/desktop/src-tauri/src/services/pr4_pf0g2.rs (packager_sha256 in manifest = sha of raw file)
+70ef823b0514593d013c2edfc22ae71f640468b5367d0c72f3aa1fd431d7b9c2  apps/desktop/src-tauri/src/services/pr4_pf0g2_server.rs
+c590bb0c6ac82e181211a44fd7df87a66c8a50c3f605f949af3cadb6a854e91e  apps/desktop/src-tauri/src/services/pr4_pf0g2_tests.rs
+0bc03d05e04d69d597baaad9e66178749a5087c63aad0878dfa7be57eaa6ede3  apps/desktop/src-tauri/src/services/pr4_pf0g2_ui/index.html (ui_package_sha256 = sha of "index.html:<sha>\n")
+4d5aedcb19ab3797192f421bbb442737a4094d341aba42e7baded3e7f095dad7  apps/desktop/src-tauri/src/services/mod.rs (+4 lines: 2 pub mod, 1 cfg(test) mod)
+666182cb150d6a7c7605268f286cb726858e23e72eaa646fd3b3afd9f6d3e3cc  apps/desktop/src-tauri/src/services/pr4_blind_gt.rs (UNCHANGED = PF0G1 freeze)
+09af4326f804b7fee35ecf27cbc038f3290e0acc662e57d38498cc6a2b1f266c  apps/desktop/src-tauri/src/services/pr4_blind_gt_tests.rs (UNCHANGED)
+3b51f7f3656810948fe6904c52b5005876904ca01dc455b9aba6d53de47c9f85  apps/desktop/src-tauri/Cargo.lock (UNCHANGED)
+88e092698d8930cbb6ffa8533f8be4cbc6cbfce7566d1052017f36f237bad3a8  apps/desktop/src-tauri/Cargo.toml (UNCHANGED; no new dependency)
+authoritative docs (LF sha, pinned by test):
+3b0debef45f4014a98deafb2d0a06f45b5df3ef5bb931c3e6c6aa28829e94e17  docs/pr4_pf0g0_blind_gt_schema.json
+c02caf44eab714e63af8a48500fbe5f6741c63434d11cac156b862f2726ba543  docs/PR4_PF0G0_BLIND_GT_CONTRACT.md
+f1e017a85ac1300c8e1ea08dfb347ad0bcc3019b0eb5c628acc977566ec399b9  docs/PR4_PF0G1_DOCS_ALIGNMENT_ADDENDUM.md
+production_change: none (mod.rs registration only)
+not_touched: H2 ledger/payload/runner, primary checkout, main / feat/awards-festivals, sealed holdout, production DB, live TMDB, real API key
+PF0I handoff: pf0i_handoff(store, ledger_dir, sealed_dir) -> {authoritative_membership_commitment, pf0h_final_manifest_sha256, review_seal_sha256}; refused before seal.
+
+PF0I contract alignment (pr4-pf0i-653127): unblind_map.json = bundle {bundle_version: pr4-pf0i-unblind-bundle-1, build_secret_hex, units[{review_unit_id, work_key, candidates[{candidate_token, media_type, tmdb_id}]}]}; unblind_map_sha256 = sha256 of its exact bytes; build_secret_commitment = SHA256(ASCII(lowercase hex of build_secret)) (no 0x/space/domain). build_secret.json removed (secret lives only in the sealed bundle).

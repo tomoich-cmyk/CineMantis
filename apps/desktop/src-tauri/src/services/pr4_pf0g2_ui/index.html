@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blind GT レビュー</title>
+<style>
+:root{--bg:#fafafa;--fg:#1a1a1a;--mut:#666;--line:#d0d0d0;--acc:#1b5fb4;--warn:#9a3412}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--line:#444;--acc:#6aa9ff;--warn:#fdba74}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,"Yu Gothic UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 8px}
+.bar{display:flex;justify-content:space-between;color:var(--mut);margin-bottom:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.box{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px}
+.cand{border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0;cursor:pointer}
+.cand.sel{outline:2px solid var(--acc)}
+button{font:inherit;padding:6px 12px;margin:4px 4px 4px 0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg);cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible,.cand:focus-visible{outline:3px solid var(--acc)}
+.warn{color:var(--warn)}
+.mut{color:var(--mut)}
+pre{white-space:pre-wrap;word-break:break-all;margin:2px 0}
+input,select,textarea{font:inherit;padding:4px 6px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:4px}
+.badge{font-size:12px;border:1px solid var(--line);border-radius:10px;padding:0 6px;margin-left:6px}
+</style>
+</head>
+<body>
+<main>
+<h1>Blind GT レビュー</h1>
+<div id="msg" class="warn" role="alert" aria-live="assertive"></div>
+
+<section id="start" class="box">
+  <p>開始前に確認してください。</p>
+  <p><label><input type="checkbox" id="att"> このセッションの前に、この review set に対する機械出力・本体アプリ上の照合結果・Jev の出力を見ていません。レビュー中も本体アプリのライブラリを開きません。</label></p>
+  <p><label>reviewer id <input id="rid" maxlength="64"></label></p>
+  <button id="btnStart">開始</button>
+</section>
+
+<section id="review" hidden>
+  <div class="bar"><span id="prog"></span><span><button id="btnEnd">セッション終了</button></span></div>
+  <div class="grid">
+    <div class="box"><h2 style="font-size:15px">手元の証拠</h2><div id="files"></div></div>
+    <div class="box"><h2 style="font-size:15px">表示された候補</h2>
+      <p id="nocand" class="warn" hidden>表示された候補がありません。これは「該当なし」ではありません。TMDB で検索してください。</p>
+      <div id="cands" role="radiogroup" aria-label="候補"></div></div>
+  </div>
+  <div class="box">
+    <button id="btnConfirm" disabled>確定（選んだ候補）</button>
+    <button id="btnPick" disabled>候補外を指定</button>
+    <button id="btnNone" disabled>該当なし</button>
+    <button id="btnDefer">保留</button>
+    <select id="deferReason" aria-label="保留の理由">
+      <option value="insufficient_evidence">証拠が足りない</option>
+      <option value="multiple_equally_valid_targets">同等に妥当な候補が複数</option>
+      <option value="candidate_ambiguity_tmdb">TMDB 側の重複・分割</option>
+      <option value="need_external_lookup">外部調査が必要</option>
+      <option value="other_with_note">その他（メモ必須）</option>
+    </select>
+    <input id="note" placeholder="メモ（任意）" maxlength="500" aria-label="メモ">
+  </div>
+  <div class="box"><h2 style="font-size:15px">TMDB 検索</h2>
+    <input id="q" placeholder="作品名" maxlength="200" aria-label="検索語">
+    <select id="qt" aria-label="種別"><option value="movie">映画</option><option value="tv">TV</option></select>
+    <button id="btnSearch">検索</button>
+    <span id="searchCount" class="mut"></span>
+    <div id="results"></div>
+    <p>ID で指定: <input id="pid" size="10" inputmode="numeric" aria-label="TMDB ID">
+      <select id="pt" aria-label="種別"><option value="movie">映画</option><option value="tv">TV</option></select>
+      <button id="btnPreview">存在を確認</button></p>
+    <div id="preview" class="box" hidden></div>
+  </div>
+</section>
+<section id="done" class="box" hidden>レビューする unit はもうありません。</section>
+</main>
+<script>
+"use strict";
+const token = new URLSearchParams(location.search).get("t") || "";
+let session = null, unit = null, picked = null, verified = null, searches = 0, prev = "";
+const $ = id => document.getElementById(id);
+function text(parent, tag, s, cls) { const e = document.createElement(tag); e.textContent = s; if (cls) e.className = cls; parent.appendChild(e); return e; }
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? "POST" : "GET", headers: { "X-Review-Token": token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json();
+  if (!r.ok) { $("msg").textContent = j.message || "エラー"; throw new Error(j.reason_code); }
+  $("msg").textContent = "";
+  return j;
+}
+function uid() { return (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()); }
+function refresh() {
+  $("btnConfirm").disabled = picked === null;
+  $("btnPick").disabled = verified === null;
+  $("btnNone").disabled = searches < 1;
+  $("searchCount").textContent = "検索 " + searches + " 回";
+}
+function show(u, p) {
+  unit = u; picked = null; verified = null; searches = 0; prev = u.prev_event_sha;
+  $("prog").textContent = "完了 " + p.done + " / 残り " + p.remaining + " / 保留 " + p.deferred;
+  const f = $("files"); f.replaceChildren();
+  u.files.forEach(x => { const d = text(f, "div", "", "box"); text(d, "pre", "パート " + x.part_no); text(d, "pre", x.original_file_name); text(d, "pre", x.original_rel_path, "mut"); text(d, "pre", x.container_tags_json, "mut"); text(d, "pre", x.source_media_kind, "mut"); });
+  const c = $("cands"); c.replaceChildren(); $("nocand").hidden = u.candidates.length > 0;
+  u.candidates.forEach(x => {
+    const d = text(c, "div", "", "cand"); d.tabIndex = 0; d.setAttribute("role", "radio"); d.setAttribute("aria-checked", "false");
+    text(d, "strong", x.title + (x.year ? "（" + x.year + "）" : ""));
+    if (x.original_title) text(d, "div", x.original_title, "mut");
+    if (x.overview) text(d, "div", x.overview);
+    const pick = () => { picked = x.candidate_token; [...c.children].forEach(e => { e.classList.remove("sel"); e.setAttribute("aria-checked", "false"); }); d.classList.add("sel"); d.setAttribute("aria-checked", "true"); refresh(); };
+    d.onclick = pick; d.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+  });
+  $("results").replaceChildren(); $("preview").hidden = true; $("note").value = ""; $("q").value = "";
+  refresh();
+}
+async function next() {
+  const n = await api("/api/next", { session_id: session });
+  if (n.done) { $("review").hidden = true; $("done").hidden = false; return; }
+  show(n.unit, n.progress);
+}
+async function submit(extra) {
+  const body = Object.assign({ unit: unit.review_unit_id, lease_id: unit.lease_id, submission_id: uid(), prev_event_sha: prev, decision: "", candidate_token: null, tmdb_id: null, media_type: null, defer_reason: null, note: $("note").value || null, correction_reason: null }, extra);
+  await api("/api/submit", body); await next();
+}
+$("btnStart").onclick = async () => {
+  const s = await api("/api/session/start", { reviewer_id: $("rid").value, attestation: $("att").checked });
+  session = s.session_id; $("start").hidden = true; $("review").hidden = false; await next();
+};
+$("btnEnd").onclick = async () => { await api("/api/session/end", { session_id: session }); location.reload(); };
+$("btnConfirm").onclick = () => submit({ decision: "confirm", candidate_token: picked });
+$("btnNone").onclick = () => { if (confirm("TMDB に該当が無いことを確認しました。「該当なし」で確定しますか？")) submit({ decision: "none" }); };
+$("btnDefer").onclick = () => submit({ decision: "defer", defer_reason: $("deferReason").value });
+$("btnPick").onclick = () => { if (verified && confirm("この作品で確定しますか？")) submit({ decision: "pick_other", tmdb_id: verified.tmdb_id, media_type: verified.media_type }); };
+async function preview(id, mt) {
+  verified = null; refresh();
+  const p = await api("/api/preview", { unit: unit.review_unit_id, lease_id: unit.lease_id, tmdb_id: id, media_type: mt });
+  verified = p; const b = $("preview"); b.replaceChildren(); b.hidden = false;
+  text(b, "strong", p.title + (p.year ? "（" + p.year + "）" : "")); if (p.original_title) text(b, "div", p.original_title, "mut"); if (p.overview) text(b, "div", p.overview);
+  text(b, "div", "TMDB で存在を確認しました。「候補外を指定」で確定できます。", "mut"); refresh();
+}
+$("btnPreview").onclick = () => { const id = Number($("pid").value); if (!Number.isSafeInteger(id) || id < 1) { $("msg").textContent = "ID は 1 以上の整数です。"; return; } preview(id, $("pt").value); };
+$("btnSearch").onclick = async () => {
+  const mt = $("qt").value;
+  const r = await api("/api/search", { unit: unit.review_unit_id, lease_id: unit.lease_id, query: $("q").value, media_type: mt });
+  prev = r.prev_event_sha; searches += 1; refresh();
+  const box = $("results"); box.replaceChildren();
+  r.results.forEach(x => {
+    const d = text(box, "div", "", "cand");
+    text(d, "strong", x.title + (x.year ? "（" + x.year + "）" : "")); if (x.already_shown) text(d, "span", "表示済み候補です", "badge");
+    if (x.overview) text(d, "div", x.overview);
+    if (!x.already_shown) { const b = text(d, "button", "この作品を確認"); b.onclick = () => { $("pid").value = x.tmdb_id; $("pt").value = x.media_type; preview(x.tmdb_id, x.media_type); }; }
+  });
+};
+</script>
+</body>
+</html>

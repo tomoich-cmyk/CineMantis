@@ -19,6 +19,10 @@ pub mod metadata_matcher;
 pub mod poster_store;
 pub mod prematch_inputs;
 pub mod pr4_blind_gt;
+pub mod pr4_pf0g2;
+pub mod pr4_pf0g2_server;
+#[cfg(test)]
+mod pr4_pf0g2_tests;
 pub mod pr4_diagnostics;
 /// PR4-3 の実データ検証 runner。手動専用で、製品には出ない（test ビルドのときだけ）
 #[cfg(test)]
