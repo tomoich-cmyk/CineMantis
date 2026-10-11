@@ -117,7 +117,7 @@
    "required": ["expected_membership_commitment", "expected_pf0h_final_manifest_sha256", "review_seal_sha256", "machine_freeze_anchor_commitment", "eligibility_rule_version_opaque"],
    "properties": {
     "expected_membership_commitment": { "$ref": "#/definitions/sha256", "description": "PF0H の authoritative_membership_commitment(audit anchor 側の期待値)" },
-    "expected_pf0h_final_manifest_sha256": { "$ref": "#/definitions/sha256" },
+    "expected_pf0h_final_manifest_sha256": { "$ref": "#/definitions/sha256", "description": "= canonical SHA-256 of FINAL_MEMBERSHIP_COMMITMENT.json(Human 決定)。H2_CLOSE.json の SHA は supplemental evidence で binding anchor ではない" },
     "review_seal_sha256": { "$ref": "#/definitions/sha256", "description": "seal event の event_commitment を別経路(audit anchor chain)で記録した値" },
     "machine_freeze_anchor_commitment": { "$ref": "#/definitions/sha256", "description": "pins.machine_freeze_anchor_commitment と完全一致" },
     "eligibility_rule_version_opaque": { "type": "string", "minLength": 1, "description": "membership_commitment の第 2 引数にそのまま渡す。adapter は解釈・分解・比較しない" }

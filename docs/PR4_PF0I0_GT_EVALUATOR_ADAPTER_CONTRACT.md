@@ -119,16 +119,18 @@ adapter は規則を**実装しない**。(1) `defer_final` を `Gt::Unresolved`
 - **PF0B にヘルパを足さない。** `pr4_pf0b.rs` は無変更（git diff で確認。t29 は adapter が PF0B の既存 pub API だけを使うことを固定）。
 - adapter report（count-only）: `status`・各 anchor/pin の `match|mismatch|not_checked`・`n_members / n_events / n_corrections_applied / n_confirm / n_pick_other / n_none / n_defer_final`・`refusal_codes`。REFUSED のとき件数は全て 0。
 
-## 10. 残る判断事項（Human Gate に出す）
+## 10. Human 決定（承認済み）と残る宿題
 
-| # | 内容 | 現在の扱い |
+| # | 決定 / 宿題 | 状態 |
 |---|---|---|
-| 1 | **`build_secret_commitment` の定義**: PF0G1 は pin の値を hex64 としか定義していない（導出式なし）。PF0I は `SHA256(build_secret_hex の ASCII bytes)` に固定。PF0G2 packager がこれに従う必要がある | LOW・DEFERRED（PF0G2 で整合）。違えば adapter は `build_secret_commitment_mismatch` で fail closed する（安全側） |
-| 2 | **unblind bundle の形**: PF0G1 は未定義（`unblind_allowed()` のみ）。PF0I が `pr4-pf0i-unblind-bundle-1` を定義。PF0G2 が出す | DEFERRED（PF0G2） |
-| 3 | **errata の扱い**: `errata.jsonl`（別 chain）に promotion-impacting errata が在れば evaluation = INVALIDATED（PF0G1 の `Store::evaluation_validity()`）。adapter は読まない。FINAL runner が adapt の前に `Invalidated` でないことを確認する責務 | DEFERRED（FINAL runner / PF0I2） |
-| 4 | **PF0H final manifest SHA の定義**（`FINAL_MEMBERSHIP_COMMITMENT.json` の canonical SHA か `H2_CLOSE.json` の生 SHA か）は PF0H1 側で未確定。adapter は loader の値と anchor の完全一致だけを見る | DEFERRED（PF0H schema 確定後に loader を 1 つ実装） |
-| 5 | `machine_freeze_anchor_commitment`（PF0G pin）と、PF0G manifest の `machine_freeze_commitment_sha256` は別名・別値の可能性。adapter は pin のみ anchor と照合 | LOW・DEFERRED |
-| 6 | 実 `Store` が出した ledger との E2E（PF0G1 のテストの fixture は private で再利用不可）。本 gate の fixture は PF0G1 のコードから転記した形の合成 | DEFERRED（PF0G2 の packager 完成後に 1 本） |
+| 1 | **`build_secret_commitment = SHA256(ASCII(lowercase_hex(build_secret_bytes)))`**（`0x` なし・空白なし。32 byte の secret なら 64 文字 hex）。PF0G2 packager が従う | 承認済み |
+| 2 | **unblind bundle format = `pr4-pf0i-unblind-bundle-1`** を正式な handoff format とする。PF0G2 が生成し、PF0I が strict validation | 承認済み |
+| 3 | **promotion-impacting errata の確認は FINAL runner の責務**（adapter に重複実装しない）。**adapter の評価結果だけでは promotion 不可。** FINAL runner が promotion-impacting errata なし（evaluation ≠ INVALIDATED）を確認して初めて authoritative evaluation になる | 承認済み |
+| 4 | **PF0H final manifest SHA = `FINAL_MEMBERSHIP_COMMITMENT.json` の canonical SHA-256**。binding anchors は (1) authoritative membership commitment (2) その canonical SHA (3) review seal SHA。`H2_CLOSE.json` の SHA は supplemental evidence であって binding anchor ではない | 確定（D4 クローズ）。loader の本実装は PF0H1 の commit SHA 確定後 |
+| 5 | `machine_freeze_anchor_commitment`（PF0G pin）と manifest の `machine_freeze_commitment_sha256` の関係 | LOW・DEFERRED（PF0G2） |
+| 6 | 実 `Store` ledger との E2E（fixture は PF0G1 のコードから転記した合成） | DEFERRED（実データ読込は Hard Gate） |
+
+状態は「PF0I implementation PASS（candidate）」で、PF0I FINAL FREEZE は PF0H1 の formalization 待ち。
 
 ## 11. 非目標・禁止
 

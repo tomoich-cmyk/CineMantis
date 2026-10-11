@@ -1,18 +1,18 @@
 # PR4-PF0I FREEZE CANDIDATE（evidence・provenance）
 
-判定: **freeze candidate。commit / push 未実施（Human Gate 待ち）。** branch `claude/pr4-pf0i-653127`、HEAD = `1a6266d`（0aca746 の子孫。PF0G の docs-aligned authoritative commit へ **fast-forward のみ**。履歴の書換えなし。この branch 独自の commit は無い）。
+判定: **freeze candidate。commit / push 未実施（Human Gate 待ち）。** branch `claude/pr4-pf0i-653127`、HEAD = `595cd4f453943d20cb10a6d0d2d4748bb4d90498`（candidate commit。親 `1a6266d`）。以下の SHA は **commit 595cd4f 内の blob（LF）の raw bytes** から再計算した値（0aca746 の子孫。PF0G の docs-aligned authoritative commit へ **fast-forward のみ**。履歴の書換えなし。この branch 独自の commit は無い）。
 
 ## 整合した外部の固定点
 - PF0G authoritative docs/schema: `1a6266d9869d7dc3bf8556850312c85676ebe7d3` / PF0G1 実装 freeze: `eeeb57353b0e610e0827ce4882900c4bd156a22e`
 - PF0C policy canonical SHA: `1d575b41f2fd22ebb36b8b90a7a45a8ef3e038906f3f634ecd84c472fb232ac4`（`docs/pr4_final_policy.json` を `PolicyConfig::from_frozen_json` で読み、t24 で一致を確認）
 - PF0H1: `claude/pr4-pf0h1-e60774` は未 commit の freeze candidate（READ ONLY で handoff 文書だけ参照）。loader は未実装（DEFERRED D4）
 
-## ファイル SHA-256（作業ツリー）
+## ファイル SHA-256（595cd4f の committed bytes。docs は本 follow-up で更新されたので 595cd4f 時点の値）
 | ファイル | SHA-256 |
 |---|---|
-| docs/PR4_PF0I0_GT_EVALUATOR_ADAPTER_CONTRACT.md | 715abbae35d69c003d7190112301534961db168b8cbd9c6c8db28a0298d8152d |
+| docs/PR4_PF0I0_GT_EVALUATOR_ADAPTER_CONTRACT.md（595cd4f 時点） | 715abbae35d69c003d7190112301534961db168b8cbd9c6c8db28a0298d8152d |
 | docs/pr4_pf0i0_gt_adapter_schema.json | 270f351ec463e6b02cb5cab19d9129ceab563f372c3fcf53231fb48fd723e07c |
-| apps/desktop/src-tauri/src/services/pr4_pf0i_adapter.rs（新規） | 2a0e0e7a13f07ccbc77adec76f287ed065271411b7189342de37ebc7943438ed |
+| apps/desktop/src-tauri/src/services/pr4_pf0i_adapter.rs（新規） | 1edb065146f3c57834d82365bf979abf28615358009e5e0c75bcba8128741138 |
 | apps/desktop/src-tauri/src/services/pr4_pf0i_tests.rs（新規） | 8c77e691b52eeb28ef22872c5afab515e496637b80b9044540b4d118853873ed |
 | apps/desktop/src-tauri/src/services/mod.rs（+3 行・`#[cfg(test)] pub mod pr4_pf0i_adapter;`） | 5c7880fef0a0939331030630aea33421c37bc1e6b7076c2ac5df6462458ee420 |
 | DEFERRED_FIXES.md（新規） | 2e334308f896eb76204734b9757dbe90e97c2de988b73b34840a233f4b30a305 |
@@ -26,3 +26,6 @@
 
 ## 今回触れていないもの
 実 ledger・payload・production DB・H2・H1・sealed holdout・main H2 の daily runner・主 checkout（`C:\Users\tyama\CineMantis` は `feat/awards-festivals` のまま未接触）。
+
+## 状態
+PF0I implementation PASS（candidate）。FINAL FREEZE は PF0H1 formalization 待ち。Human 決定 4 点は contract §10。adapter 結果だけでは promotion 不可（FINAL runner が errata なしを確認）。
