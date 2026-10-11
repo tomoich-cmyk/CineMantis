@@ -34,3 +34,4 @@
 ## FINAL FREEZE 前に閉じる必須項目（Human 指示で D10 / D4 から格上げ）
 - **M1**: 契約 §3.2 の seeded shuffle と実装の候補提示順（token 昇順）の不一致を解消する（実装を契約に合わせるか、契約を実装に合わせて改訂する）。
 - **M2**: `build_secret_commitment` は PF0I で `SHA256(ASCII(lowercase_hex(build_secret_bytes)))` と意味まで固定された。packager は現状 64 桁 lowercase hex の形式検査と同式での生成だけなので、PF0I の再導出検証（bundle → 全 unit / token の再計算）と同じ検査を packager 側にも入れて突合する。
+- （クローズ）PF0H final manifest SHA の対象は canonical SHA256(FINAL_MEMBERSHIP_COMMITMENT.json) で確定。

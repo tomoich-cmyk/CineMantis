@@ -42,6 +42,18 @@ pub mod pr4_pf0e;
 /// PR4-PF0I1: sealed blind GT → FINAL evaluator adapter（synthetic のみ・test ビルドだけ）。製品には出ない
 #[cfg(test)]
 pub mod pr4_pf0i_adapter;
+/// PR4-PF0H: H2 close の成果物生成（読み取り専用・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0h_close;
+/// PR4-PF0H: H2 close 成果物の独立再検証（読み取り専用・手動専用）。製品には出ない
+#[cfg(test)]
+pub mod pr4_pf0h_verify;
+/// PR4-PF0H: close / verify の synthetic test
+#[cfg(test)]
+mod pr4_pf0h_tests;
+/// PR4 統合 E2E（D8）: PF0G2 → PF0H1 → PF0I の synthetic 通し。3 branch 統合後にのみコンパイルする
+#[cfg(test)]
+mod pr4_pf0i_e2e_tests;
 pub mod prematch_snapshot;
 pub mod reading;
 pub mod rules_v1;
