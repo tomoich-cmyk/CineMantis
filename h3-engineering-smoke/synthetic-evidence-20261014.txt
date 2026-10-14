@@ -1,0 +1,7 @@
+CineMantis PR4 H3 engineering-only synthetic receipt test
+classification: SYNTHETIC_TEST_ONLY
+not_formal_commitment: true
+not_formal_seed: true
+not_GT_or_TMDb: true
+purpose: verify GitHub server-side evidence receipt and integrity
+payload: synthetic-placeholder-v1
